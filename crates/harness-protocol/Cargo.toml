@@ -1,0 +1,11 @@
+[package]
+name = "harness-protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "JSON-over-stdio protocol types shared between harness core and extensions."
+
+[lints]
+workspace = true

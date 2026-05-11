@@ -1,0 +1,15 @@
+[package]
+name = "stub-extension"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Configurable test stub for the harness ⇄ extension protocol. Behaviour driven by HARNESS_STUB_* env vars."
+
+[[bin]]
+name = "stub-extension"
+path = "src/main.rs"
+
+[lints]
+workspace = true

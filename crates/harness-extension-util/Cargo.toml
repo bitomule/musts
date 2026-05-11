@@ -1,0 +1,11 @@
+[package]
+name = "harness-extension-util"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Helpers for Rust authors of harness extensions: stdio framing, asset-kind classification, size guards."
+
+[lints]
+workspace = true

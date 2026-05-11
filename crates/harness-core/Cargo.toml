@@ -1,0 +1,11 @@
+[package]
+name = "harness-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Domain logic for the harness validation CLI: manifests, snapshots, state, extensions, evidence, reports."
+
+[lints]
+workspace = true

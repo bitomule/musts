@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/harness-protocol",
+    "crates/harness-extension-util",
+    "crates/harness-core",
+    "crates/harness",
+    "extensions/bazel-build",
+    "extensions/mav-expect",
+    "tests/fixtures/stub_extension",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.81"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bitomule/validator-claude"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
