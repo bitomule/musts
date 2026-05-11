@@ -1,7 +1,15 @@
 //! Core library for the `harness` CLI.
 //!
-//! Modules land phase by phase per `docs/PLAN.md`:
-//! - `manifest`, `snapshot`, `state` in Phase 1
-//! - `extension` in Phase 2
-//! - `validate`, `report` in Phase 3
-//! - `evidence` in Phase 4
+//! Phases land per `docs/PLAN.md`:
+//! - Phase 1 (this commit): `error`, `workspace`, `manifest`, `snapshot`, `state`.
+//! - Phase 2: `extension` (loading + IPC).
+//! - Phase 3: `validate`, `report`.
+//! - Phase 4: `evidence`.
+
+pub mod error;
+pub mod manifest;
+pub mod snapshot;
+pub mod state;
+pub mod workspace;
+
+pub use error::{Error, Result};

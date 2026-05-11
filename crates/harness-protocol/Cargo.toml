@@ -7,5 +7,12 @@ license.workspace = true
 repository.workspace = true
 description = "JSON-over-stdio protocol types shared between harness core and extensions."
 
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+
 [lints]
 workspace = true
