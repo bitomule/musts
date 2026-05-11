@@ -151,8 +151,9 @@ Persist returned tasks (state.tasks). Render report.
 Look up the task by id
         │
         ▼
-Verify the workspace snapshot still matches the task's snapshot
-    (fail with the "stale" message from §12.5 if not)
+Recompute the task_snapshot_hash from the current scope_hashes of every
+satisfied check; compare with the stored task_snapshot_hash. Mismatch =
+stale → render §12.5 message and exit 2.
         │
         ▼
 Copy assets into .harness/evidence/<task_id>/submission-NNN/
@@ -162,9 +163,15 @@ Compute mime, size, file hash
 Build submission JSON, call extension `evidence` capability
         │
         ▼
-On accept: write evidence_records row + green-mark each `satisfies` check
-            against the current scope_hash
-On reject: print the rejection message to stderr, exit non-zero
+On accept:
+  - The extension's returned `satisfies` array is authoritative.
+  - For each check it lists, write one evidence_records row keyed by
+    that check's **declaring-manifest scope_hash** (NOT the task's
+    aggregate hash). Unlisted-but-claimed satisfies remain pending so
+    the next `validate` still emits a task for them. Wrap the inserts
+    and the scope_snapshot upserts in a single SQLite transaction so a
+    crash never half-greens a multi-check task.
+On reject: print the rejection message to stderr, exit 1.
 ```
 
 ### 4.3 Module responsibilities
@@ -172,7 +179,8 @@ On reject: print the rejection message to stderr, exit non-zero
 | Module | Responsibility | Key types |
 |---|---|---|
 | `manifest::discovery` | Walk the workspace once, find every `HARNESS.yml`, watch for new/removed ones on subsequent runs using dir mtimes. | `ManifestPath`, `ManifestTree` |
-| `manifest::parser` | Validate `version: 1`, load checks, validate `with` against the relevant extension schema (deferred until extension loading). | `Manifest`, `Check`, `CheckId` |
+| `manifest::parser` | Validate `version: 1`, load checks, capture `with` opaquely. | `Manifest`, `Check`, `CheckId` |
+| `manifest::with_validation` | After extensions are loaded, validate each check's `with` against the capability's JSON schema. Schema failures surface as **manifest errors** (exit 2), not extension failures, and report the manifest path + JSON pointer to the offending field. Runs before any `resolve` call. | — |
 | `manifest::ids` | Build globally stable check IDs: `<scope_path>/<local_id>` (root scope uses `root/`). | `CheckId` |
 | `snapshot::fingerprint` | mtime+size cache, lazy blake3 rehash. | `FileFingerprint` |
 | `snapshot::scope` | Compute scope hashes; encapsulate the ignored-directories list. | `ScopeHash` |
@@ -187,26 +195,40 @@ On reject: print the rejection message to stderr, exit non-zero
 
 ### 4.4 Stable IDs
 
-- Check ID: `<scope_path>/<local_id>`. Root scope is `root`. Conflicts inside the same manifest are rejected at parse time.
-- Task ID: extension-provided. Core namespaces collisions by prepending the capability when two extensions return the same id (`bazel/build:bazel-build-login`). Logged as a warning.
-- Submission ID: `submission-001`, `-002`, … allocated per task by counting existing dirs.
+- **Check ID (global)**: `<scope_path>/<local_id>`. The root manifest's scope path is literally `root` (not `.`), so a root-declared `app-build` is `root/app-build`. The format is the single source of truth across the report, ledger, and IPC; the report always prints the global ID, never just the local one. Two manifests with the same `local_id` produce distinct globals (`root/login-build` vs `App/Login/login-build`) and are valid; the report and ledger keep them apart.
+- **Conflicts**: rejected at parse time only inside the same manifest. Cross-manifest collisions are impossible by construction because the scope path is part of the ID.
+- **Task ID**: extension-provided. If two extensions return the same task id in one resolve cycle, the core prefixes them with the capability (`bazel/build:bazel-build-login`) and logs a warning.
+- **Submission ID**: `submission-001`, `-002`, … allocated per task by counting existing dirs.
 
 ### 4.5 Snapshot model (concrete decisions)
 
 - **Hash function**: blake3, 256-bit, hex-encoded. Reason: ~10× faster than SHA-256 on Apple Silicon; large repos hit IO long before CPU.
-- **File granularity**: every file under the manifest scope, minus the ignore list. Ignored: `.git/`, `.harness/evidence/`, `.harness/cache/`, `node_modules/`, `target/`, `bazel-bin*`, `bazel-out*`, `bazel-testlogs*`, `DerivedData/`, `*.xcodeproj/xcuserdata/`. Also obeys `.gitignore` via the `ignore` crate so derived files outside Git but inside the workspace still count.
-- **Scope hash**: `blake3(sorted_join(rel_path || "\0" || file_hash) || "\0" || manifest_hash || "\0" || ext_descriptor_hash)`. Including extension descriptor hashes means changing an extension's behaviour invalidates evidence — explicit and intentional.
+- **Per-check effective scope (important)**: a check's scope hash is computed over the files in its declaring manifest's folder **minus the files under any deeper manifest that declares a check of the same capability**. Without this carve-out a root `bazel/build` check would re-fire on every edit anywhere in the repo and the loop would never converge. With it, editing a file inside `App/Login/` (which has its own `bazel/build` check) does not dirty `root/app-build`; editing a top-level `README.md` does.
+- **File granularity**: every file under the effective scope, minus the ignore list. Ignored: `.git/`, `.harness/evidence/`, `.harness/cache/`, `node_modules/`, `target/`, `bazel-bin*`, `bazel-out*`, `bazel-testlogs*`, `DerivedData/`, `*.xcodeproj/xcuserdata/`. Also obeys `.gitignore` via the `ignore` crate so derived files outside Git but inside the workspace still count.
+- **Scope hash**: `blake3(sorted_join(rel_path || "\0" || file_hash) || "\0" || manifest_hash || "\0" || ext_descriptor_hash || "\0" || sorted_join(descendant_manifest_rel_path))`. Including descendant manifest *paths* (not contents — those are hashed for their own scopes) means adding/removing a child manifest invalidates the parent's idea of "what's applicable to me." Including the extension descriptor hash means swapping or upgrading an extension invalidates evidence. Both are explicit and intentional.
+- **Per-check scope_hash provenance**: a check is always hashed against its **declaring manifest's** scope, never against the task that ends up satisfying it. A task that satisfies checks from two different manifests records two distinct ledger rows, each keyed by the corresponding declaring-manifest scope hash.
 - **Manifest hash**: blake3 of the file bytes.
 - **Cheap path**: on second+ runs, if a file's mtime+size match the cached fingerprint, reuse the stored hash. Only recompute hashes when (mtime OR size) changes.
+- **Discovery invalidation**: we do **not** rely on directory mtimes to detect new/removed manifests — APFS and some git operations leave them stale. Every run does a parallel `ignore::WalkBuilder` traversal of the workspace, which is fast enough on warm caches (low ms for >100k files) and is the only correctness-safe option. The cached `manifest_index` provides the previous state so we can detect adds/removes.
+- **Symlinks**: not followed when walking scope contents (avoids cycles and pulls of huge external trees). A symlinked `HARNESS.yml` is loaded but its target file's bytes are hashed via the link.
 
 ### 4.6 Extension IPC contract (concrete)
 
-- Binary called as: `<descriptor.command>` (split on whitespace by the descriptor). The capability and method are baked into the command line in the descriptor (e.g. `bin/bazel-extension resolve build`).
-- stdin: a single JSON object matching `ResolveRequest` or `EvidenceValidationRequest` from `harness-protocol`. EOF on the request.
-- stdout: a single JSON object matching the response type. Trailing newline allowed. Any non-JSON output triggers a rendered error.
-- stderr: free-form; captured and surfaced on non-zero exit.
-- Timeout: 30 s default, configurable via env `HARNESS_EXTENSION_TIMEOUT_SECS`. Timeout = treat as failure.
-- Working directory: workspace root, regardless of where the user invoked `harness`.
+- **Command form**: the descriptor's `resolve.command` / `evidence.command` accepts **either** an argv array (preferred):
+
+  ```yaml
+  resolve:
+    command: ["bin/bazel-extension", "resolve", "build"]
+  ```
+
+  …or a string parsed with `shell-words` rules (POSIX-ish), not naive whitespace split. Shell metacharacters (`|`, `;`, `&`, `<`, `>`, `$`, backticks) are rejected in the string form to keep the contract free of any implicit shell layer. Both forms are validated at descriptor-load time.
+- **Working directory**: workspace root, regardless of where the user invoked `harness`. Relative paths inside the descriptor (binaries, schemas) resolve against the descriptor's directory.
+- **stdin**: exactly one JSON object matching `ResolveRequest` or `EvidenceValidationRequest` from `harness-protocol`. EOF terminates the request.
+- **stdout**: exactly one JSON object matching the response type. Trailing newline allowed; any garbage **before** or **after** the JSON document is a protocol error. Extensions that need to log must write to stderr.
+- **Max response size**: 4 MiB. Responses larger than this are rejected with a clear error pointing at the extension. (Evidence-validation responses can carry diagnostics, but 4 MiB is generous and prevents pathological extensions from blowing core memory.)
+- **stderr**: free-form; captured and surfaced verbatim on non-zero exit or on protocol error.
+- **Timeout**: 30 s default, configurable via env `HARNESS_EXTENSION_TIMEOUT_SECS`. Timeout = treat as failure; the child is killed and stderr surfaced.
+- **Protocol version**: every request carries `protocol_version: 1`. Responses without it, or with a higher major version, are rejected. v2 reserves the right to break the shape.
 
 ### 4.7 SQLite schema
 
@@ -237,13 +259,14 @@ CREATE TABLE scope_snapshots (
 );
 
 CREATE TABLE tasks (
-  task_id        TEXT PRIMARY KEY,
-  capability     TEXT NOT NULL,
-  title          TEXT NOT NULL,
-  satisfies_json TEXT NOT NULL,          -- JSON array of check IDs
-  scope_hashes   TEXT NOT NULL,          -- JSON map check_id → scope_hash
-  payload_json   TEXT NOT NULL,          -- full task body for re-render
-  created_at     INTEGER NOT NULL
+  task_id             TEXT PRIMARY KEY,
+  capability          TEXT NOT NULL,
+  title               TEXT NOT NULL,
+  satisfies_json      TEXT NOT NULL,     -- JSON array of check IDs
+  scope_hashes        TEXT NOT NULL,     -- JSON map check_id → scope_hash
+  task_snapshot_hash  TEXT NOT NULL,     -- blake3 of sorted scope hashes (stale-detection key)
+  payload_json        TEXT NOT NULL,     -- full task body for re-render
+  created_at          INTEGER NOT NULL
 );
 
 CREATE TABLE evidence_records (
@@ -278,11 +301,15 @@ harness --help
 ```
 
 - `--json` on `validate`: emit the same data as the text report but in a stable JSON shape. Allows future tooling (Claude hook, etc.) to consume it. Implementing this in Phase 3 alongside the text renderer costs little.
-- Exit codes:
-  - `validate`: 0 if the report renders (even with pending tasks). 2 on configuration errors (bad manifest, missing extension). 70 on internal errors.
-  - `evidence`: 0 if accepted. 1 if rejected by the extension. 2 if the task is unknown or the snapshot is stale. 70 on internal errors.
+- **Exit codes** (designed so `harness validate && commit` is the natural agent idiom):
+  - `validate`: **0 iff the report is clean**; **1 if any validation task is pending**; 2 on configuration errors (bad manifest, missing extension, schema-invalid `with` payload); 70 on internal errors.
+  - `evidence`: 0 if accepted; 1 if rejected by the extension; 2 if the task is unknown or the snapshot is stale; 70 on internal errors.
 - All errors go to stderr; reports go to stdout.
-- Working directory: harness walks upward from `cwd` to find the nearest workspace root (defined as the directory containing a `HARNESS.yml`; ambiguity resolved by stopping at the topmost `HARNESS.yml`).
+- **Workspace root resolution** (in order):
+  1. `--workspace <path>` flag, when provided, is used verbatim.
+  2. Else: walk upward from `cwd` to the nearest ancestor containing a `.git` directory; that directory is the workspace root, regardless of where the `HARNESS.yml` files live below it.
+  3. Else (no git repo): walk upward from `cwd` to the nearest ancestor containing a `HARNESS.yml`. **Stop at the first one — do not climb across that boundary.** This prevents us from accidentally selecting `/Users/<name>/` as a workspace just because someone left a stray YAML file there.
+  4. If still not found, exit 2 with a clear error suggesting `--workspace`.
 
 Deferred commands (documented but not implemented in MVP): `harness init`, `harness doctor`, `harness list-tasks`, `harness ledger`.
 
@@ -323,15 +350,16 @@ Three layers. Each test layer is required to be green at every checkpoint.
 
 ### 7.1 Unit tests (per crate, `#[test]`)
 
-- `manifest::parser`: valid + invalid YAML; duplicate local IDs rejected; unknown `version` rejected; `with` is captured opaquely.
-- `manifest::ids`: stable IDs match snapshots; root scope spelled `root/<local>`.
+- `manifest::parser`: valid + invalid YAML; duplicate local IDs **inside the same manifest** rejected; unknown `version` rejected; `with` is captured opaquely.
+- `manifest::ids`: stable global IDs match snapshots; root scope spelled `root/<local>`; same `local_id` in two manifests produces two distinct global IDs.
+- `manifest::with_validation`: a JSON Schema violation reports the manifest path and the JSON pointer to the offending field; reports as a manifest error (not an extension failure).
 - `snapshot::fingerprint`: mtime/size cache reused; cache busted on size change.
-- `snapshot::scope`: hash determinism; changing a file flips the hash; reordering files in fs walk does not (sorted internally).
-- `state::db`: migrations idempotent; round-trip of every table.
-- `extension::descriptor`: schema validation; missing fields rejected; relative paths resolved against descriptor dir.
-- `extension::runtime`: timeout fires; non-zero exit surfaces stderr; oversized response rejected.
+- `snapshot::scope`: hash determinism; changing a file flips the hash; reordering files in fs walk does not (sorted internally); adding a descendant manifest changes the parent's scope hash; editing a file under a deeper same-capability manifest does **not** change the parent check's effective scope hash (the carve-out works).
+- `state::db`: migrations idempotent; round-trip of every table; ledger transaction is atomic (crash midway leaves no rows).
+- `extension::descriptor`: schema validation; missing fields rejected; relative paths resolved against descriptor dir; both `command` forms (array and string) work; shell metacharacters in the string form are rejected.
+- `extension::runtime`: timeout fires; non-zero exit surfaces stderr; oversized (>4 MiB) response rejected; non-JSON stdout rejected; multiple concatenated JSON documents rejected; `protocol_version` mismatch rejected.
 - `evidence::store`: asset copy preserves bytes; submission numbering monotonic.
-- `evidence::ledger`: "is green?" query honours scope_hash.
+- `evidence::ledger`: "is green?" query honours scope_hash; partial accept (extension returns subset of `satisfies`) green-marks only the listed checks.
 - `harness-protocol`: serde round-trip on every public type.
 
 ### 7.2 Integration tests (per crate `tests/`)
@@ -339,6 +367,9 @@ Three layers. Each test layer is required to be green at every checkpoint.
 - `harness-core::tests::validate_with_stub_extension`: an in-process stub registered through a dummy descriptor produces a deterministic resolve response; the orchestrator returns the expected tasks and renders the expected report.
 - `harness-core::tests::evidence_accept_reject`: stub extension accepts on second submission; ledger reflects it; later `validate` call returns clean.
 - `harness-core::tests::stale_snapshot_rejection`: modify a file between resolve and evidence; the evidence call returns the §12.5 stale message.
+- `harness-core::tests::multi_scope_task_ledger`: a single stub-returned task lists `satisfies` from two different manifest scopes; on accept, two ledger rows are written, each keyed by the **declaring manifest's** scope_hash.
+- `harness-core::tests::partial_accept_keeps_unlisted_pending`: stub task `satisfies: [a, b]`, evidence response `accepted: true, satisfies: [a]`; ledger has one row; next `validate` still emits a task for `b`.
+- `harness-core::tests::workspace_root_resolution`: `.git` anchor wins over deeper `HARNESS.yml`; no-git fallback finds the nearest `HARNESS.yml` and stops there; missing both → exit 2.
 
 These use a stub extension provided as a tiny test binary built from a `tests/fixtures/stub_extension` crate so we exercise the actual IPC path.
 
@@ -348,16 +379,18 @@ Run the real `harness` binary on a temp workspace using `assert_cmd`. Each scena
 
 Scenarios (mirror §19 success criterion and beyond):
 
-1. **`clean_repo_clean_report`** — no changes since last accepted evidence → "Harness validation clean."
-2. **`first_run_emits_tasks`** — fresh repo with the §15 manifests → two pending tasks (`bazel-build-login`, `mav-login-flow`).
+1. **`clean_repo_clean_report`** — no changes since last accepted evidence → "Harness validation clean." (exit 0)
+2. **`first_run_emits_tasks`** — fresh repo with the §15 manifests → two pending tasks (`bazel-build-login`, `mav-login-flow`). (exit 1)
 3. **`evidence_loop`** — submit valid evidence for both tasks → next `validate` is clean.
 4. **`modify_file_reopens_task`** — touch `App/Login/LoginView.swift` → previously-green checks reopen.
-5. **`stale_evidence_rejected`** — submit evidence; mutate a file before the next call; submit again with stale snapshot → rejection with the §12.5 message.
-6. **`bazel_picks_deepest_target`** — root + child build checks both apply; only the child task is emitted; root appears in `ignored_checks`.
+5. **`stale_evidence_rejected`** — submit evidence; mutate a file before the next call; submit again with stale snapshot → rejection with the §12.5 message. (exit 2)
+6. **`bazel_picks_deepest_target`** — root + child build checks both apply; only the child task is emitted; root appears in `ignored_checks`. After child evidence is accepted, root remains pending **only** until the next `validate`, where `bazel/build` transitively marks it satisfied via the evidence-accept `satisfies` list. Then a subsequent unrelated edit *outside* `App/Login/` correctly re-opens root **without** re-opening the child (validates the effective-scope carve-out in §4.5).
 7. **`mav_groups_expectations`** — two `mav/expect` checks in the same scope produce one task with merged expectations.
-8. **`bad_manifest_errors`** — invalid YAML, missing `version`, conflicting IDs → exit 2 with a pinpointed error.
-9. **`extension_failure`** — extension returns non-zero → error mentions the extension and surfaces stderr; other capabilities still run.
+8. **`bad_manifest_errors`** — invalid YAML, missing `version`, conflicting local IDs in one manifest, and a `with` payload that fails the extension's JSON Schema → exit 2 with a pinpointed manifest path + JSON pointer.
+9. **`extension_failure`** — extension returns non-zero, times out, prints garbage on stdout, or returns >4 MiB → error mentions the extension and surfaces stderr; other capabilities still run; exit 2.
 10. **`json_output`** — `--json` produces a parseable, stable shape; schema snapshot checked.
+11. **`partial_accept`** — extension's evidence accept lists only one of the task's `satisfies` entries; the listed check goes green, the unlisted one remains pending and re-appears on the next `validate` until separately satisfied.
+12. **`same_local_id_two_manifests`** — `root/login-build` and `App/Login/login-build` (same `local_id`, different scopes) appear as distinct rows in the report, the ledger keys them independently, and accepting evidence for one leaves the other pending.
 
 ### 7.4 How to run
 
@@ -431,23 +464,26 @@ Each phase ends with a runnable demo + green tests for everything implemented so
 - `validate.rs` orchestrator: dirty-scope detection, fan-out to extensions, persist tasks.
 - `report::text` renders the §11.2 output. `--json` produces a stable companion.
 - Idempotent re-runs: no extra writes if nothing changed.
-- ✅ E2E scenarios 1, 2, 6, 8, 9, 10 pass. Insta snapshots checked in.
+- Uses the **stub** extension for all tests in this phase.
+- ✅ E2E scenarios that pass with the stub: **2 (first_run_emits_tasks)**, **8 (bad_manifest_errors)**, **9 (extension_failure)**, **10 (json_output)**. Insta snapshots checked in.
 
-### Phase 4 — `harness evidence` command *(2 days)*
+### Phase 4 — `harness evidence` command + ledger semantics *(2 days)*
 - `evidence::store` copies assets, allocates submission dirs.
-- Calls extension `evidence` capability, persists ledger rows on accept.
-- Stale-snapshot detection and rendered rejection.
-- ✅ E2E scenarios 3, 4, 5 pass.
+- Calls extension `evidence` capability, persists ledger rows on accept (per the §4.2 partial-accept rule: extension's `satisfies` is authoritative).
+- Stale-snapshot detection (per-task `task_snapshot_hash`) and rendered rejection.
+- Re-running `validate` after a green ledger row is found returns clean.
+- ✅ E2E scenarios that need the ledger but can still use the stub: **1 (clean_repo_clean_report)**, **3 (evidence_loop)**, **4 (modify_file_reopens_task)**, **5 (stale_evidence_rejected)**, **11 (partial_accept)**, **12 (same_local_id_two_manifests)**.
 
 ### Phase 5 — `bazel/build` reference extension *(1 day)*
 - Implements §16.1 deepest-target policy.
 - Evidence validation: text + log asset, log non-empty.
-- ✅ E2E scenario "build only" from §15 passes against the real binary.
+- Transitive `satisfies`: when a deep target's evidence is accepted, the response may also list an ancestor `bazel/build` check as satisfied, so the noisy-root convergence path from §4.5 actually closes.
+- ✅ E2E scenario **6 (bazel_picks_deepest_target)** passes against the real binary; build half of the §15 worked example passes.
 
 ### Phase 6 — `mav/expect` reference extension *(1 day)*
 - Implements §16.2 grouping.
 - Evidence validation: kind-by-kind checks (screenshots image/*, mav-report parseable JSON, …).
-- ✅ Scenario 7 plus the full §15 worked example pass.
+- ✅ E2E scenario **7 (mav_groups_expectations)** plus the full §15 worked example pass.
 
 ### Phase 7 — Agent skill + docs *(½ day)*
 - `docs/skill.md` based on §14.1 — copy-pasteable into Claude/Codex skill folders.
@@ -465,10 +501,12 @@ Total: ~10–12 working days for a single contributor. Each phase is its own PR;
 - **Large assets**: copying a multi-GiB video into `.harness/evidence/` is wasteful. MVP behavior: copy with a warning over 100 MiB; future option to register by absolute path without copying.
 - **`.gitignore` correctness**: if the workspace is not a git repo, the `ignore` crate's `.gitignore` rules are skipped and our built-in ignore list applies alone. That's fine, but worth documenting.
 - **Extension trust**: extensions execute arbitrary code with the user's permissions. We document it; we do not sandbox. Aligns with §17.8.
-- **Manifest discovery cost on huge monorepos**: full walk on first run is `O(files)`. Subsequent runs use the manifest_index and only re-walk directories whose dir-mtime changed. We accept the first-run cost.
+- **Manifest discovery cost on huge monorepos**: full walk on every run, parallelised by the `ignore` crate. Profiling target: <500 ms on a 100k-file workspace with a warm OS cache. If we miss it, we add a watched-directory cache before Phase 4 ships.
 - **Cross-platform**: macOS is the primary target. Linux should "just work" because we avoid Apple-specific APIs. Windows is best-effort — not part of the MVP success criterion.
 - **Atomic ledger writes**: every accept call wraps `evidence_records` insert + scope-snapshot upsert in a single transaction so a crash mid-call never leaves a half-green check.
 - **Extension protocol versioning**: every request carries `protocol_version: 1`. Extensions that respond without it or with a higher major version are rejected; reserve the right to bump in v2.
+- **Transitive-satisfy contract**: the only way a check goes green is the extension listing it in an evidence-accept's `satisfies` array. We rely on `bazel/build`'s evidence handler to transitively mark ancestor build checks satisfied when a deep target's build was accepted, otherwise the loop won't converge on root-with-deeper-children layouts. This is an extension contract, not a core feature — but core's docs need to spell it out so future extension authors don't get it wrong.
+- **Branch switching mid-flight**: a `git checkout` between `validate` and `evidence` invalidates scope hashes for the changed files, so `evidence` rejects as stale. This is the correct behaviour, but the error message should mention "branch may have changed" as a hint.
 
 ---
 
