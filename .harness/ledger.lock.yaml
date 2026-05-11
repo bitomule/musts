@@ -5,8 +5,14 @@ satisfied:
 - check: extensions/cargo/contract
   scope_hash: 339a1a48957c64170aa5aebc9f5f14906b244927285ff72a6312561d36f5236b
 - check: root/clippy
+  scope_hash: 3bd355bbbb116327c7da1d01fd42c40ed6f9290b9931d2f9aba0396feb6443e7
+- check: root/clippy
   scope_hash: 3fbe0967470650c6c6c854ba42d05b8e41d21361d02825d91b2975a83c49004d
 - check: root/fmt
+  scope_hash: 3bd355bbbb116327c7da1d01fd42c40ed6f9290b9931d2f9aba0396feb6443e7
+- check: root/fmt
   scope_hash: 3fbe0967470650c6c6c854ba42d05b8e41d21361d02825d91b2975a83c49004d
+- check: root/test
+  scope_hash: 3bd355bbbb116327c7da1d01fd42c40ed6f9290b9931d2f9aba0396feb6443e7
 - check: root/test
   scope_hash: 3fbe0967470650c6c6c854ba42d05b8e41d21361d02825d91b2975a83c49004d
