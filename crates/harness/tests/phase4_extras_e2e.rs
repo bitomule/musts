@@ -1,7 +1,6 @@
 //! PLAN.md §7.3 scenarios 19, 20, 21 — extension-presence and state-dir
 //! readiness paths. Phase 4 territory (handled by core + bootstrap).
 
-#[allow(dead_code)]
 mod common;
 
 use std::fs;

@@ -24,6 +24,12 @@ Icon?
 .harness/state.sqlite-shm
 .harness/state.sqlite-wal
 .harness/evidence/
+.harness/.lock
+
+# Fixture-installed extension symlinks (created by the README walkthrough)
+fixtures/*/.harness/extensions/*/bazel-extension
+fixtures/*/.harness/extensions/*/mav-extension
+fixtures/*/.harness/extensions/*/stub-extension
 
 # Test scratch space
 /e2e-output/
