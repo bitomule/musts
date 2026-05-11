@@ -25,6 +25,11 @@ impl Db {
         &self.conn
     }
 
+    /// Mutable handle — needed for transactions.
+    pub fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+
     /// Upsert a manifest index row. `now_unix_seconds` is the wall-clock
     /// timestamp recorded as `last_seen_at`.
     pub fn upsert_manifest_index(

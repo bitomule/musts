@@ -1,17 +1,22 @@
 //! `harness` CLI entry point.
 //!
-//! Phase 1 supports just enough to drive the "discovery + state" smoke
-//! test: `harness validate` resolves the workspace, walks for manifests,
-//! and reports either a clean state (no manifests) or a deliberate
-//! Phase-1 placeholder error when manifests do exist (extension loading
-//! lands in Phase 2 per `docs/PLAN.md` §9 Phase 1).
+//! Phase 3 wires the validate orchestrator behind the `validate`
+//! subcommand. Empty workspaces (no `HARNESS.yml` anywhere) short-
+//! circuit to a clean report before any state is created. Everything
+//! else goes through the orchestrator and acquires the cross-process
+//! lock per `docs/PLAN.md` §4.5.1.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use harness_core::manifest::discover;
+use harness_core::bootstrap::StateSession;
+use harness_core::extension::runtime::RuntimeOptions;
+use harness_core::manifest::discover as discover_manifests;
+use harness_core::report::{render_json, render_text, ValidateReport};
+use harness_core::validate::{self, ValidateOptions};
 use harness_core::workspace;
+use harness_core::Error;
 
 #[derive(Debug, Parser)]
 #[command(name = "harness", version, about = "Agent-first validation loop", long_about = None)]
@@ -32,7 +37,7 @@ struct Cli {
 enum Command {
     /// Report pending validation tasks for the current workspace state.
     Validate {
-        /// Emit a machine-readable JSON report (shape stable from first ship).
+        /// Emit a machine-readable JSON report (shape frozen at first ship).
         #[arg(long)]
         json: bool,
     },
@@ -46,8 +51,6 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
-            // anyhow swallows the source chain into the formatted error;
-            // exit 70 is the catch-all for internal errors per PLAN.md §5.
             ExitCode::from(70)
         }
     }
@@ -66,52 +69,60 @@ fn validate_command(
     let cwd = std::env::current_dir()?;
     let root = match workspace::resolve(explicit_workspace, &cwd) {
         Ok(root) => root,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return Ok(ExitCode::from(err.exit_code() as u8));
-        }
+        Err(err) => return Ok(report_error(err)),
     };
 
-    let manifests = match discover(&root) {
+    // Short-circuit on empty workspace before creating any state.
+    let manifests = match discover_manifests(&root) {
         Ok(m) => m,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return Ok(ExitCode::from(err.exit_code() as u8));
-        }
+        Err(err) => return Ok(report_error(err)),
     };
-
-    // Phase 1: empty workspace = clean; manifests present = Phase-1
-    // placeholder error (the orchestrator is wired up in Phase 3).
     if manifests.is_empty() {
+        let report = ValidateReport {
+            workspace_root: root.display().to_string(),
+            tasks: vec![],
+            ignored_checks: vec![],
+            notes: vec![],
+        };
         if json {
-            print_json_clean(&root);
+            println!("{}", serde_json::to_string_pretty(&render_json(&report))?);
         } else {
             println!("Harness validation clean. No HARNESS.yml files found.");
         }
         return Ok(ExitCode::from(0));
     }
 
-    let message = format!(
-        "Phase 1 only — extension loading lands in Phase 2.\n\
-         Discovered {} HARNESS.yml file(s) but cannot resolve checks yet.",
-        manifests.len()
-    );
-    eprintln!("error: {message}");
-    Ok(ExitCode::from(2))
+    let mut session = match StateSession::acquire(&root) {
+        Ok(s) => s,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let options = ValidateOptions {
+        workspace_root: root.clone(),
+        runtime_options: RuntimeOptions::from_env(root.clone()),
+    };
+    let report = match validate::run(&mut session, &options) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&render_json(&report))?);
+    } else {
+        print!("{}", render_text(&report));
+    }
+
+    // Exit code per PLAN.md §5: 0 when clean, 1 when pending.
+    if report.is_clean() {
+        Ok(ExitCode::from(0))
+    } else {
+        Ok(ExitCode::from(1))
+    }
 }
 
-fn print_json_clean(workspace_root: &std::path::Path) {
-    // Stable shape per PLAN.md §5 (--json contract). Clean = empty arrays
-    // for tasks/ignored_checks/notes; no synthetic entries.
-    let doc = serde_json::json!({
-        "protocol_version": 1,
-        "status": "clean",
-        "workspace_root": workspace_root.display().to_string(),
-        "tasks": [],
-        "ignored_checks": [],
-        "notes": []
-    });
-    println!("{}", serde_json::to_string_pretty(&doc).unwrap());
+fn report_error(err: Error) -> ExitCode {
+    let exit = err.exit_code();
+    eprintln!("error: {err}");
+    ExitCode::from(exit as u8)
 }
 
 fn init_logging(filter: Option<&str>) {

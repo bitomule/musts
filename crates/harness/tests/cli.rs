@@ -50,9 +50,11 @@ fn json_clean_shape_matches_contract() {
 }
 
 #[test]
-fn manifests_without_extensions_phase_1_placeholder() {
-    // Until Phase 2 wires extensions, encountering a manifest is a
-    // deliberate exit-2 placeholder so the gap is visible.
+fn missing_extension_capability_reports_clearly() {
+    // Scenario 18 (missing_extension_capability): a manifest declares a
+    // capability with no installed extension. PLAN.md §9 Phase 1 says
+    // "no extension implements capability X" with the manifest path
+    // and offending check id.
     let dir = TempDir::new().unwrap();
     std::fs::write(
         dir.path().join("HARNESS.yml"),
@@ -67,8 +69,11 @@ fn manifests_without_extensions_phase_1_placeholder() {
         .assert()
         .failure()
         .code(2)
-        .stderr(predicate::str::contains("Phase 1 only"))
-        .stderr(predicate::str::contains("Discovered 1 HARNESS.yml file(s)"));
+        .stderr(predicate::str::contains(
+            "no extension implements capability `bazel/build`",
+        ))
+        .stderr(predicate::str::contains("root/app-build"))
+        .stderr(predicate::str::contains("HARNESS.yml"));
 }
 
 #[test]
