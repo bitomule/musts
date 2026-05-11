@@ -1,0 +1,18 @@
+version: 1
+
+checks:
+  login-build:
+    uses: bazel/build
+    with:
+      target: //App/Login:Login
+
+  login-flow:
+    uses: mav/expect
+    with:
+      expectations:
+        - Login works with multiple valid emails.
+        - Invalid email text shows an error when used as email.
+      evidence:
+        - screenshot
+        - video
+        - mav-report

@@ -1,0 +1,7 @@
+version: 1
+
+checks:
+  app-build:
+    uses: bazel/build
+    with:
+      target: //App:App

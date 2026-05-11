@@ -1,0 +1,11 @@
+name: mav
+version: 0.1.0
+
+capabilities:
+  expect:
+    uses: mav/expect
+    schema: schemas/expect.schema.json
+    resolve:
+      command: ["mav-extension", "resolve"]
+    evidence:
+      command: ["mav-extension", "evidence"]

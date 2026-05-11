@@ -1,0 +1,11 @@
+name: bazel
+version: 0.1.0
+
+capabilities:
+  build:
+    uses: bazel/build
+    schema: schemas/build.schema.json
+    resolve:
+      command: ["bazel-extension", "resolve"]
+    evidence:
+      command: ["bazel-extension", "evidence"]
