@@ -1,0 +1,10 @@
+name: eslint
+version: 0.1.0
+
+capabilities:
+  check:
+    uses: eslint/check
+    resolve:
+      command: ["./eslint-check.sh", "resolve"]
+    evidence:
+      command: ["./eslint-check.sh", "evidence"]

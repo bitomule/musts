@@ -87,14 +87,24 @@ pub fn submit(
         });
     }
 
-    // 4. Locate the extension implementing the task's capability.
+    // 4. Locate the implementor. Built-in capabilities are checked
+    //    after external descriptors so a workspace can override (or
+    //    just shadow) a built-in by shipping its own extension. Either
+    //    path produces an `EvidenceValidationResponse`.
     let descriptors = discover_descriptors(workspace_root)?;
-    let (descriptor, cap) =
-        find_capability(&descriptors, &capability).ok_or(Error::MissingExtension {
+    let external = find_capability(&descriptors, &capability);
+    let builtin = if external.is_none() {
+        crate::builtin::lookup(&capability)
+    } else {
+        None
+    };
+    if external.is_none() && builtin.is_none() {
+        return Err(Error::MissingExtension {
             manifest_path: std::path::PathBuf::from("(persisted task)"),
             check_id: inputs.task_id.to_string(),
             capability: capability.clone(),
-        })?;
+        });
+    }
 
     // 5. Build the IPC request and call the validator.
     let submission = EvidenceSubmission {
@@ -116,12 +126,16 @@ pub fn submit(
             dirty_scopes: Vec::new(),
         },
     };
-    let runner = ExtensionRunner {
-        capability: capability.clone(),
-        descriptor_root: &descriptor.root,
-        options: runtime_options.clone(),
+    let response = if let Some((descriptor, cap)) = external {
+        let runner = ExtensionRunner {
+            capability: capability.clone(),
+            descriptor_root: &descriptor.root,
+            options: runtime_options.clone(),
+        };
+        runner.evidence(&cap.evidence, &request)?
+    } else {
+        (builtin.expect("checked above").evidence)(&request)?
     };
-    let response = runner.evidence(&cap.evidence, &request)?;
 
     // 6. Reject when the extension says so. The CLI surfaces both the
     //    extension's freeform `message` and the structured `missing`

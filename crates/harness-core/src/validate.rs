@@ -18,6 +18,7 @@ use harness_protocol::{
 use rusqlite::params;
 
 use crate::bootstrap::StateSession;
+use crate::builtin;
 use crate::error::{Error, Result};
 use crate::extension::descriptor::{discover_descriptors, Capability, ExtensionDescriptor};
 use crate::extension::runtime::{ExtensionRunner, RuntimeOptions};
@@ -171,22 +172,26 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     let cap_index = build_capability_index(&descriptors);
 
     // 3. Schema-validate every `with` payload (manifest-error path).
+    //    Built-in capabilities (registered in `crate::builtin`) win
+    //    when no external descriptor provides the capability; if neither
+    //    has it we surface MissingExtension.
     for m in &manifests {
         for (local_id, check) in &m.parsed.checks {
             let scope = scope_path_for(&m.entry.rel_path);
             let cid = check_id(&scope, local_id);
-            let cap = lookup_capability(&cap_index, &check.uses).map_err(|_| {
-                Error::MissingExtension {
+            if !capability_implemented(&cap_index, &check.uses) {
+                return Err(Error::MissingExtension {
                     manifest_path: m.entry.rel_path.clone(),
                     check_id: cid.clone(),
                     capability: check.uses.clone(),
-                }
-            })?;
+                });
+            }
+            let schema = capability_schema(&cap_index, &check.uses);
             validate_with_payload(
                 &m.entry.rel_path,
                 &cid,
                 &check.uses,
-                cap.schema.as_ref(),
+                schema,
                 &check.with_payload,
             )?;
         }
@@ -266,18 +271,23 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     let mut first_error: Option<Error> = None;
 
     for (capability, checks_for_cap) in &by_capability {
-        let cap = lookup_capability(&cap_index, capability).expect("validated above");
-        let descriptor = cap_index
-            .get(capability.as_str())
-            .map(|(d, _)| *d)
-            .expect("validated above");
         let request = build_resolve_request(workspace_root, capability, &per_check, checks_for_cap);
-        let runner = ExtensionRunner {
-            capability: capability.clone(),
-            descriptor_root: &descriptor.root,
-            options: opts.runtime_options.clone(),
-        };
-        match runner.resolve(&cap.resolve, &request) {
+        let outcome: Result<harness_protocol::ResolveResponse> =
+            if let Some(builtin) = builtin::lookup(capability) {
+                (builtin.resolve)(&request)
+            } else {
+                let (descriptor, cap) = cap_index
+                    .get(capability.as_str())
+                    .copied()
+                    .expect("validated above");
+                let runner = ExtensionRunner {
+                    capability: capability.clone(),
+                    descriptor_root: &descriptor.root,
+                    options: opts.runtime_options.clone(),
+                };
+                runner.resolve(&cap.resolve, &request)
+            };
+        match outcome {
             Ok(response) => {
                 ingest_resolve_response(
                     response,
@@ -408,11 +418,24 @@ fn build_capability_index(descriptors: &[ExtensionDescriptor]) -> CapabilityInde
     idx
 }
 
-fn lookup_capability<'a>(
+/// True when `uses` is implemented either by an installed external
+/// extension or by a [`crate::builtin`] capability.
+fn capability_implemented(index: &CapabilityIndex<'_>, uses: &str) -> bool {
+    index.contains_key(uses) || builtin::lookup(uses).is_some()
+}
+
+/// Resolve the JSON Schema for a capability. External descriptors win
+/// when present (so a workspace can override a built-in by shipping
+/// its own extension); built-ins are consulted on miss. Returns `None`
+/// when the capability provides no schema at all.
+fn capability_schema<'a>(
     index: &'a CapabilityIndex<'_>,
     uses: &str,
-) -> std::result::Result<&'a Capability, ()> {
-    index.get(uses).map(|(_, c)| *c).ok_or(())
+) -> Option<&'a serde_json::Value> {
+    if let Some((_, cap)) = index.get(uses) {
+        return cap.schema.as_ref();
+    }
+    builtin::lookup(uses).map(|b| (b.schema)())
 }
 
 /// Map of `workspace-relative rel_path → content_hash` for every file in

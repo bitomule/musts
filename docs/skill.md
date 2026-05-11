@@ -40,6 +40,11 @@ The single hard rule of the harness:
 - **Do not silence the loop.** If a task feels redundant or already-satisfied, that's the extension's call, not yours: every task in the report is dirty per the ledger. Submit evidence or fix the underlying issue.
 - **Snapshot assets outside the workspace** when you can, especially logs you produce while running the task. Writing them inside the workspace mutates the scope hash and can stale the task you're about to submit evidence for.
 
+## Capabilities at a glance
+
+- **`agent`** is built into the harness binary. Manifests using `uses: agent` need no installed extension; the task tells you which facts to verify and asks for a text summary plus whatever assets you captured.
+- **`bazel/build`, `mav/expect`, and any third-party `uses: ...`** are installed as extensions under `<workspace>/.harness/extensions/<name>/`. They can be Rust binaries, bash scripts, Python — anything that speaks the JSON protocol.
+
 ## Quick reference
 
 ```bash

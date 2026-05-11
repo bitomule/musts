@@ -447,11 +447,66 @@ Deferred commands (documented but not implemented in MVP): `harness init`, `harn
 
 ---
 
-## 6. Reference extensions
+## 6. Capabilities
 
-Both extensions are Rust binaries built in the same workspace under `extensions/`. They depend on `harness-protocol` for IPC types. They are wired up by an `extension.yml` template that the E2E test harness materialises into a tmp workspace's `.harness/extensions/<name>/extension.yml`.
+### 6.0 Built-in: `agent`
 
-### 6.1 `bazel/build`
+A single capability ships **inside the core** and requires no extension
+descriptor — manifests can use it on any workspace with no
+`.harness/extensions/` setup. Purpose: the agent verifies facts
+directly with whatever judgement and tooling it has on hand (no MAV /
+Bazel / Playwright delegation), and submits a text summary plus
+optional supporting assets.
+
+Manifest:
+
+```yaml
+checks:
+  login-form-visual:
+    uses: agent
+    with:
+      facts:
+        - "El formulario muestra error si el email está vacío."
+        - "El campo de contraseña está enmascarado."
+```
+
+Schema (enforced by `manifest::with_validation` against the core-supplied
+schema in `crate::builtin::agent::schema()`):
+
+```json
+{ "type":"object", "required":["facts"],
+  "properties":{"facts":{"type":"array","items":{"type":"string"},"minItems":1}},
+  "additionalProperties":false }
+```
+
+Resolve policy: bucket dirty checks by `scope_path`; emit one task per
+scope (`agent-<scope-slug>`) listing every fact in the bucket.
+
+Evidence contract: `text` required, `assets` are optional and may be of
+any kind (MIME-classified into screenshot/video/json/log/asset for the
+ledger). Evidence validator: non-empty text → accept; empty text →
+reject with `missing: [{ kind: "text" }]`.
+
+Where it lives in the orchestrator: `crate::builtin::lookup(uses)` is
+consulted as a fallback when `cap_index` (descriptor-backed
+extensions) misses, both for schema validation and for the resolve /
+evidence fan-out. External descriptors can shadow a built-in by
+implementing the same `uses` value — the descriptor wins.
+
+The built-in's behaviour is baked into the harness binary, so it is
+NOT folded into `ext_descriptor_hash`. Bumping the harness version
+without changing any extension keeps existing evidence valid (the
+trade-off is documented in §10 Risks; revisiting if the built-in's
+shape changes is straightforward).
+
+### 6.1 Reference extension — `bazel/build`
+
+Both reference extensions ship under `extensions/` of this repo as
+Rust binaries, but **that's a testability convenience, not a
+requirement**: an extension is any executable that speaks the JSON
+protocol (PLAN.md §4.6) — a 30-line shell script is just as valid.
+The reference Rust scaffold (`harness-extension-util`) is documented
+in `docs/extensions.md`.
 
 - Schema: `{ "target": string }`.
 - Resolve policy:
@@ -462,7 +517,7 @@ Both extensions are Rust binaries built in the same workspace under `extensions/
 - Task instructions: `"Run \`bazel build <target>\`. Capture stdout/stderr as a log asset."`.
 - Evidence contract: text required; one asset of kind `log` required (we don't try to enforce log format yet — just non-empty and < 50 MiB).
 
-### 6.2 `mav/expect`
+### 6.2 Reference extension — `mav/expect`
 
 - Schema: `{ "expectations": string[], "evidence": (screenshot|video|mav-report|accessibility-tree|logs)[] }`.
 - Resolve policy:

@@ -7,6 +7,7 @@
 //! - Phase 4 (this commit): `evidence`.
 
 pub mod bootstrap;
+pub mod builtin;
 pub mod error;
 pub mod evidence;
 pub mod extension;

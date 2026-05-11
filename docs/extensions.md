@@ -1,6 +1,74 @@
 # Writing a harness extension
 
-A harness extension is **any executable** that speaks the JSON-over-stdio protocol described here and in [`PLAN.md`](PLAN.md) §4.6 + §9–§10 of the spec. The reference extensions are Rust binaries that link against `harness-extension-util`, but the contract is language-agnostic.
+A harness extension is **any executable** that speaks the JSON-over-stdio protocol described here and in [`PLAN.md`](PLAN.md) §4.6 + §9–§10 of the spec. The reference extensions in this repo are Rust binaries because they ride along the test suite, but the protocol is language-agnostic — a 30-line shell script is just as valid.
+
+## TL;DR — a real extension in 30 lines of bash
+
+The canonical "your first extension" is checked in at [`docs/examples/eslint-check/`](examples/eslint-check/) — a complete `eslint/check` implementation: `eslint-check.sh` (a small `bash` + `jq` script) plus the `extension.yml` next to it.
+
+```yaml
+# .harness/extensions/eslint/extension.yml
+name: eslint
+version: 0.1.0
+capabilities:
+  check:
+    uses: eslint/check
+    resolve:
+      command: ["./eslint-check.sh", "resolve"]
+    evidence:
+      command: ["./eslint-check.sh", "evidence"]
+```
+
+The script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+mode="${1:-}"
+request=$(cat)
+
+case "$mode" in
+  resolve)
+    jq -n --argjson req "$request" '{
+      protocol_version: 1,
+      tasks: [{
+        id: "eslint-root", extension: $req.capability,
+        title: "Run eslint over changed files",
+        satisfies: [$req.checks[].id],
+        parallelizable: false,
+        instructions: ["Run `npx eslint .`", "Submit a one-line summary + the full log."],
+        evidence_contract: {
+          text:   { required: true },
+          assets: [{ kind: "log", required: true }]
+        }
+      }],
+      ignored_checks: [], notes: []
+    }';;
+  evidence) … ;;   # see the file
+esac
+```
+
+That's it. No Rust toolchain, no harness-only library, no extension protocol crate. It works because the protocol IS just JSON-in / JSON-out. A Python or Node version is equally short. The full file (with the evidence path written out) is `docs/examples/eslint-check/eslint-check.sh` and is exercised end to end by `crates/harness/tests/shell_extension_e2e.rs`.
+
+## Core capabilities (no extension needed)
+
+The core ships **one built-in capability** so a fresh workspace can use the validation loop with zero setup:
+
+- **`agent`** — the agent itself verifies facts. Manifest:
+  ```yaml
+  checks:
+    login-form-visual:
+      uses: agent
+      with:
+        facts:
+          - "Login form rejects empty email."
+          - "Password is masked."
+  ```
+  No `evidence: [...]` field. Core supplies a text-required-assets-optional contract and accepts any evidence the agent attaches. See [`PLAN.md`](PLAN.md) §6.0 for the schema and policy.
+
+When `uses: agent` is encountered, no `.harness/extensions/` directory is consulted. If you want to **override** the built-in (e.g. add MIME-specific evidence requirements), ship an extension whose `extension.yml` declares `uses: agent` — descriptor-backed extensions win over built-ins.
+
+Everything else is an extension.
 
 ## What a workspace expects
 
@@ -12,7 +80,7 @@ A harness extension is **any executable** that speaks the JSON-over-stdio protoc
         └── <name>/
             ├── extension.yml       # this is what core loads
             ├── schemas/...         # optional JSON Schemas for `with` payloads
-            └── bin/...             # your binary, or wherever you point `command` at
+            └── …                   # binaries, scripts, schemas — anything `command` points at
 ```
 
 A single `extension.yml` can declare multiple capabilities (e.g. `bazel.build` and `bazel.test`).
@@ -166,9 +234,9 @@ For each call, core spawns the binary, writes one JSON document to stdin, closes
 - Asset paths exist on disk before your binary is invoked; core copies them into `.harness/evidence/<task>/submission-NNN/` first. You can read, hash, parse, or inspect them however you like.
 - The `evidence.json` marker file is written by core **after** your accept returns and the ledger commit succeeds. You never write it.
 
-## Reference Rust scaffold
+## If you prefer Rust
 
-Using `harness-extension-util`, a complete extension is roughly 30 lines plus your business logic:
+The shell-script flow above is the default recommendation. If you would rather write the extension in Rust (e.g. because it needs to do non-trivial parsing, or you want compile-time enforcement of the wire shapes), the workspace ships a `harness-extension-util` crate. A complete extension is roughly 30 lines plus your business logic:
 
 ```rust
 use harness_extension_util::ipc_main;
