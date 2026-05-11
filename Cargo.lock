@@ -123,6 +123,12 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 [[package]]
 name = "bazel-build-extension"
 version = "0.1.0"
+dependencies = [
+ "harness-extension-util",
+ "harness-protocol",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "bit-set"
@@ -621,6 +627,11 @@ dependencies = [
 [[package]]
 name = "harness-extension-util"
 version = "0.1.0"
+dependencies = [
+ "harness-protocol",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "harness-protocol"

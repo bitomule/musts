@@ -123,13 +123,22 @@ pub fn submit(
     };
     let response = runner.evidence(&cap.evidence, &request)?;
 
-    // 6. Reject when the extension says so.
+    // 6. Reject when the extension says so. The CLI surfaces both the
+    //    extension's freeform `message` and the structured `missing`
+    //    list so the agent can act on either.
     if !response.accepted {
-        let message = response
-            .message
-            .clone()
-            .or_else(|| Some(missing_evidence_message(&response.missing)))
-            .unwrap_or_else(|| "rejected by extension".into());
+        let mut parts = Vec::new();
+        if let Some(m) = response.message.clone() {
+            parts.push(m);
+        }
+        if !response.missing.is_empty() {
+            parts.push(missing_evidence_message(&response.missing));
+        }
+        let message = if parts.is_empty() {
+            "rejected by extension".to_string()
+        } else {
+            parts.join(" — ")
+        };
         return Err(Error::EvidenceRejected {
             task_id: inputs.task_id.to_string(),
             capability: capability.clone(),
