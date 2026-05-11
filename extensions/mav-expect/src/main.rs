@@ -519,7 +519,10 @@ mod tests {
         ))
         .unwrap();
         assert!(!resp.accepted);
-        assert!(resp.missing.iter().any(|m| m.message.contains("not parseable JSON")));
+        assert!(resp
+            .missing
+            .iter()
+            .any(|m| m.message.contains("not parseable JSON")));
     }
 
     #[test]

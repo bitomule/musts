@@ -110,8 +110,14 @@ checks:
         .iter()
         .map(|x| x.as_str().unwrap().to_string())
         .collect();
-    assert!(satisfies.contains(&"App/Login/login-build".to_string()), "{satisfies:?}");
-    assert!(satisfies.contains(&"root/app-build".to_string()), "{satisfies:?}");
+    assert!(
+        satisfies.contains(&"App/Login/login-build".to_string()),
+        "{satisfies:?}"
+    );
+    assert!(
+        satisfies.contains(&"root/app-build".to_string()),
+        "{satisfies:?}"
+    );
     let ignored = v["ignored_checks"].as_array().unwrap();
     assert_eq!(ignored.len(), 1);
     assert_eq!(ignored[0]["id"], "root/app-build");
