@@ -191,6 +191,17 @@ satisfied check; compare with the stored task_snapshot_hash. Mismatch =
 stale → render §12.5 message and exit 2. **Only files inside a satisfied
 check's effective scope contribute to staleness; edits anywhere else
 (including under unrelated manifests) leave the evidence valid.**
+```
+
+**Re-validate semantics (resolution of the "which task is current?" question).** The `tasks` table is replaced wholesale by every `validate` (§4.1). A task id is therefore always "the most recent `validate`'s row for that id". If the agent runs `validate` twice without recording evidence in between:
+
+- If the resolver returned the same id both times **and no files changed in between**, the second `task_snapshot_hash` equals the first, and the agent's queued evidence is still valid.
+- If the resolver returned the same id but files changed in between, the second `task_snapshot_hash` differs — the queued evidence is now stale and `harness evidence` rejects it.
+- If the resolver no longer returns the id (the relevant check went green via earlier evidence, or the resolver changed its mind), the row is gone and `harness evidence` returns "task no longer applies."
+
+In short: re-running `validate` is equivalent to issuing a fresh task list. The agent skill (§14, Phase 7) tells agents to record evidence before re-running `validate`; the core mechanic that makes that rule load-bearing lives here.
+
+```text
         │
         ▼
 Copy assets into .harness/evidence/<task_id>/submission-NNN/
@@ -274,15 +285,21 @@ On reject: print the rejection message to stderr, exit 1.
 
 The GC is best-effort; failures are logged at warn level and never abort the run.
 
-### 4.5.1 Cross-process locking
+### 4.5.1 Cross-process locking & first-run bootstrap
 
 Two `harness` invocations on the same workspace must not corrupt the ledger or persist inconsistent task rows. SQLite's WAL prevents bytes-level corruption but not logical races (two `validate`s computing different `tasks` rows simultaneously, or `evidence` racing a `validate` truncate).
 
-- Acquire an **advisory file lock** on `.harness/.lock` (using `fs2`'s `FileExt::try_lock_exclusive`) at the start of any command that writes state.
-- `validate` holds the lock from "begin transaction" through "commit replaced tasks table".
-- `evidence` holds the lock from "stale check" through "ledger commit".
-- If the lock is busy, exit 2 with `"another harness process is running — retry shortly"`. We do not block-wait in v1; the agent loop can retry trivially.
-- Read-only paths (`--help`, future `harness list-tasks`) never take the lock.
+The bootstrap sequence for any state-writing command, in order:
+
+1. **Ensure `.harness/` exists.** `fs::create_dir_all(".harness")`. If it exists but is not writable → exit 2 with the scenario-21 message. Concurrent first runs both `mkdir -p` idempotently; no race.
+2. **Open the lock file** with `OpenOptions::new().create(true).write(true).open(".harness/.lock")`. The file is *always* created if missing; multiple callers calling `create(true)` simultaneously is safe (POSIX guarantees one inode). Do **not** use `create_new` — that would turn a benign existing file into a hard error.
+3. **Acquire the lock** with `fs2`'s `FileExt::try_lock_exclusive` on the opened handle. On `WouldBlock`, exit 2 with `"another harness process is running — retry shortly"`. We do not block-wait in v1; the agent loop can retry trivially.
+4. **Open and migrate `state.sqlite`.** Migrations are idempotent (§7.1 test).
+5. Do the work. Drop the handle on exit — `fs2` releases the lock; the lock file itself persists, which is fine.
+
+- `validate` holds the lock from step 3 through "commit replaced tasks table".
+- `evidence` holds the lock from step 3 through "ledger commit + write `evidence.json`".
+- Read-only paths (`--help`, `--version`, future `harness list-tasks`) skip the entire bootstrap.
 
 ### 4.6 Extension IPC contract (concrete)
 
@@ -386,7 +403,34 @@ harness --version
 harness --help
 ```
 
-- `--json` on `validate`: emit the same data as the text report but in a stable JSON shape. Allows future tooling (Claude hook, etc.) to consume it. Implementing this in Phase 3 alongside the text renderer costs little.
+- `--json` on `validate`: emit the same data as the text report but in a stable JSON shape. The shape is **frozen at first ship** and `insta`-snapshotted; future fields are added with care. Exit codes are unchanged under `--json` (0 = clean, 1 = pending). The contract:
+
+  ```json
+  {
+    "protocol_version": 1,
+    "status": "clean" | "pending",
+    "workspace_root": "/abs/path",
+    "tasks": [
+      {
+        "id": "bazel-build-login",
+        "capability": "bazel/build",
+        "title": "Build Login module",
+        "satisfies": ["App/Login/login-build"],
+        "parallelizable": true,
+        "instructions": ["…"],
+        "evidence_contract": { "text": { "required": true }, "assets": [ { "kind": "log", "required": true } ] }
+      }
+    ],
+    "ignored_checks": [
+      { "id": "root/app-build", "capability": "bazel/build", "reason": "A deeper bazel/build target covers the changed scope." }
+    ],
+    "notes": [
+      { "capability": "bazel/build", "note": "bazel/build selected the deepest applicable target." }
+    ]
+  }
+  ```
+
+  The per-task fields mirror spec §9.4's `ResolveResponse.tasks[]` verbatim — `--json` is "the merged resolve responses with status + workspace_root added", not a new shape. When clean, `tasks` and `ignored_checks` are empty arrays (never absent); `notes` may be empty.
 - **Exit codes** (designed so `harness validate && commit` is the natural agent idiom):
   - `validate`: **0 iff the report is clean**; **1 if any validation task is pending**; 2 on configuration errors (bad manifest, missing extension, schema-invalid `with` payload); 70 on internal errors.
   - `evidence`: 0 if accepted; 1 if rejected by the extension; 2 if the task is unknown or the snapshot is stale; 70 on internal errors.
@@ -397,6 +441,7 @@ harness --help
   3. Else (no git repo): walk upward from canonicalised `cwd` to the nearest ancestor containing a `HARNESS.yml`. **Stop at the first one — do not climb across that boundary.** This prevents us from accidentally selecting `/Users/<name>/` as a workspace just because someone left a stray YAML file there.
   4. If still not found, exit 2 with a clear error suggesting `--workspace`.
 - The `workspace_root` passed to extensions in the resolve/evidence requests is always the canonical absolute path.
+- **Canonicalisation failures**: `std::fs::canonicalize` returns `Err` for broken symlinks, missing components, or unreadable ancestors. We translate any such error into exit 2 with the message `"could not canonicalise workspace path: <error>; pass --workspace <path>"` — never a raw `Os` error. The implementation tries `canonicalize` first; on failure with `--workspace` provided it falls back to a *logical* (non-resolved) absolute path with a `warn!` log, so users with intentionally non-canonical workspace paths can still proceed.
 
 Deferred commands (documented but not implemented in MVP): `harness init`, `harness doctor`, `harness list-tasks`, `harness ledger`.
 
@@ -506,6 +551,8 @@ Scenarios (mirror §19 success criterion and beyond):
 19. **`missing_extension_binary`** — descriptor present but `bin/<binary>` is missing or not executable → exit 2 naming the descriptor path and the resolved binary path.
 20. **`empty_extensions_dir`** — `.harness/extensions/` exists but is empty; any manifest with checks fails the same way as scenario 18 (capability has no implementor) — one shared error message format.
 21. **`readonly_state_dir`** — `.harness/` is read-only → exit 2 with `".harness/ is not writable; harness needs to create state.sqlite"` instead of a panic.
+22. **`empty_workspace_no_manifests`** — `.git` exists, zero `HARNESS.yml` files → exit 0 with "Harness validation clean. No HARNESS.yml files found." Distinguishes "nothing to validate" from "everything passed."
+23. **`broken_cwd_canonicalisation`** — `cwd` resolves through a broken symlink or non-existent path → exit 2 with `"could not canonicalise workspace path: <error>; pass --workspace <path>"`, not a raw OS error.
 
 ### 7.4 How to run
 
@@ -565,8 +612,8 @@ Each phase ends with a runnable demo + green tests for everything implemented so
 - `manifest::discovery`, `manifest::parser`, `manifest::ids`.
 - `state::db` with the schema in §4.7 and migrations.
 - `snapshot::fingerprint`, `snapshot::scope`.
-- `harness validate` walks a workspace and prints "No extensions configured." for every applicable check it found, just to prove discovery works.
-- ✅ Unit tests for every module + one integration test on a two-manifest fixture.
+- `harness validate` walks a workspace and exits 0 without error when there are no manifests (a workspace with `.git` but no `HARNESS.yml` is trivially clean — printed as "Harness validation clean. No HARNESS.yml files found."). When manifests exist but the extension loader is not wired yet, fail with a clearly-labelled "Phase 1 only — extension loading lands in Phase 2" error to make the placeholder visible. The Phase 2 wiring then replaces this with the scenario-20 behaviour (exit 2, capability has no implementor) — no contradiction remains by end of Phase 2.
+- ✅ Unit tests for every module + one integration test on a two-manifest fixture; one E2E test for the no-HARNESS.yml empty-workspace path.
 
 ### Phase 2 — Extension loading + IPC *(2 days)*
 - `extension::descriptor` loads `.harness/extensions/*/extension.yml`.
