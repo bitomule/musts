@@ -44,8 +44,9 @@ fn json_clean_shape_matches_contract() {
     assert_eq!(parsed["status"], "clean");
     assert!(parsed["tasks"].as_array().unwrap().is_empty());
     assert!(parsed["ignored_checks"].as_array().unwrap().is_empty());
-    assert_eq!(parsed["notes"][0]["capability"], "harness");
-    assert_eq!(parsed["notes"][0]["note"], "no_manifests");
+    // notes is always present as an array; empty when clean (no synthetic
+    // entries — the shape mirrors a real clean resolve result).
+    assert!(parsed["notes"].as_array().unwrap().is_empty());
 }
 
 #[test]

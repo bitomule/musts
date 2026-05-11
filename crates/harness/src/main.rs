@@ -84,7 +84,7 @@ fn validate_command(
     // placeholder error (the orchestrator is wired up in Phase 3).
     if manifests.is_empty() {
         if json {
-            print_json_clean(&root, "no_manifests");
+            print_json_clean(&root);
         } else {
             println!("Harness validation clean. No HARNESS.yml files found.");
         }
@@ -100,21 +100,16 @@ fn validate_command(
     Ok(ExitCode::from(2))
 }
 
-fn print_json_clean(workspace_root: &std::path::Path, status_reason: &str) {
-    // Stable shape per PLAN.md §5 (--json contract). On a clean empty
-    // workspace we emit the same shape as a real clean run, with empty
-    // arrays for tasks/ignored_checks/notes. `status_reason` is folded
-    // into `notes` so the agent can tell empty-workspace from
-    // everything-passed without parsing the human string.
+fn print_json_clean(workspace_root: &std::path::Path) {
+    // Stable shape per PLAN.md §5 (--json contract). Clean = empty arrays
+    // for tasks/ignored_checks/notes; no synthetic entries.
     let doc = serde_json::json!({
         "protocol_version": 1,
         "status": "clean",
         "workspace_root": workspace_root.display().to_string(),
         "tasks": [],
         "ignored_checks": [],
-        "notes": [
-            { "capability": "harness", "note": status_reason }
-        ]
+        "notes": []
     });
     println!("{}", serde_json::to_string_pretty(&doc).unwrap());
 }

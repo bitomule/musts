@@ -56,22 +56,20 @@ pub fn discover(workspace_root: &Path) -> Result<Vec<ManifestEntry>> {
 
 /// Built-in ignore predicate. These directories never contain manifests we
 /// care about, and walking into them on huge monorepos is wasteful.
+///
+/// `bazel-*` is a prefix match per `docs/PLAN.md` §4.5 — Bazel creates
+/// workspace-named convenience symlinks (`bazel-<workspace>`,
+/// `bazel-bin`, `bazel-out`, `bazel-testlogs`), and any of them under the
+/// workspace root must be skipped.
 fn skip_built_in_ignores(entry: &ignore::DirEntry) -> bool {
     let Some(name) = entry.file_name().to_str() else {
         return true;
     };
-    !matches!(
+    let exact = matches!(
         name,
-        ".git"
-            | ".harness"
-            | "node_modules"
-            | "target"
-            | "bazel-bin"
-            | "bazel-out"
-            | "bazel-testlogs"
-            | "DerivedData"
-            | "xcuserdata"
-    )
+        ".git" | ".harness" | "node_modules" | "target" | "DerivedData" | "xcuserdata"
+    );
+    !(exact || name.starts_with("bazel-"))
 }
 
 #[cfg(test)]
@@ -132,8 +130,22 @@ mod tests {
             "version: 1\nchecks: {}\n",
         );
         write(&root.join("target/HARNESS.yml"), "version: 1\nchecks: {}\n");
+        // Every `bazel-*` directory (PLAN.md §4.5 prefix rule) — the
+        // workspace-named convenience symlinks are the load-bearing case.
         write(
             &root.join("bazel-bin/HARNESS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        write(
+            &root.join("bazel-out/HARNESS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        write(
+            &root.join("bazel-testlogs/HARNESS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        write(
+            &root.join("bazel-myrepo/HARNESS.yml"),
             "version: 1\nchecks: {}\n",
         );
         write(
