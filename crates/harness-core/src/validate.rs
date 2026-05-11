@@ -272,20 +272,23 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
 
     for (capability, checks_for_cap) in &by_capability {
         let request = build_resolve_request(workspace_root, capability, &per_check, checks_for_cap);
+        // External descriptors win over built-ins (mirrors
+        // `capability_schema` and `evidence::submit`): a workspace can
+        // override or replace a built-in capability by shipping its
+        // own `.harness/extensions/<name>/extension.yml`. Only when no
+        // external implementor is installed do we fall back to the
+        // built-in registry.
         let outcome: Result<harness_protocol::ResolveResponse> =
-            if let Some(builtin) = builtin::lookup(capability) {
-                (builtin.resolve)(&request)
-            } else {
-                let (descriptor, cap) = cap_index
-                    .get(capability.as_str())
-                    .copied()
-                    .expect("validated above");
+            if let Some((descriptor, cap)) = cap_index.get(capability.as_str()).copied() {
                 let runner = ExtensionRunner {
                     capability: capability.clone(),
                     descriptor_root: &descriptor.root,
                     options: opts.runtime_options.clone(),
                 };
                 runner.resolve(&cap.resolve, &request)
+            } else {
+                let builtin = builtin::lookup(capability).expect("validated above");
+                (builtin.resolve)(&request)
             };
         match outcome {
             Ok(response) => {

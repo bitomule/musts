@@ -187,6 +187,76 @@ checks:
 
 #[test]
 #[serial]
+fn external_descriptor_shadows_builtin_agent() {
+    // A workspace can override the built-in `agent` by shipping an
+    // extension that also declares `uses: agent`. The descriptor's
+    // resolve must be invoked instead of the built-in's, producing a
+    // distinctive task_id we can assert on.
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        &dir.path().join("HARNESS.yml"),
+        r#"version: 1
+checks:
+  c:
+    uses: agent
+    with:
+      facts: ["F"]
+"#,
+    );
+
+    // Point the descriptor at the stub-extension binary which emits
+    // a task id of "stub-task" (built-in would emit "agent-root").
+    let test_bin = std::env::current_exe().unwrap();
+    let profile = test_bin.parent().unwrap().parent().unwrap();
+    let stub = profile.join("stub-extension");
+    if !stub.exists() {
+        // Build it on demand for clean-tree runs.
+        let status = std::process::Command::new(env!("CARGO"))
+            .args(["build", "-p", "stub-extension", "--bin", "stub-extension"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    let ext = dir.path().join(".harness/extensions/agent");
+    fs::create_dir_all(&ext).unwrap();
+    fs::write(
+        ext.join("extension.yml"),
+        format!(
+            r#"name: agent
+version: 0.1.0
+capabilities:
+  agent:
+    uses: agent
+    resolve:
+      command: [{bin:?}, "resolve"]
+    evidence:
+      command: [{bin:?}, "evidence"]
+"#,
+            bin = stub.display().to_string(),
+        ),
+    )
+    .unwrap();
+
+    let out = bin()
+        .env_remove("HARNESS_STUB_RESOLVE_MODE")
+        .env_remove("HARNESS_STUB_RESOLVE_SHAPE")
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .arg("--json")
+        .assert()
+        .failure()
+        .code(1);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let id = v["tasks"][0]["id"].as_str().unwrap();
+    assert_eq!(
+        id, "stub-task",
+        "external descriptor must shadow the built-in (got: {id})"
+    );
+}
+
+#[test]
+#[serial]
 fn agent_groups_two_checks_in_same_scope() {
     let dir = TempDir::new().unwrap();
     write_manifest(
