@@ -27,7 +27,8 @@ pub fn read_request<T: DeserializeOwned>() -> Result<T, String> {
 
 /// Serialise `response` to a single JSON document on stdout.
 pub fn write_response<T: Serialize>(response: &T) -> Result<(), String> {
-    let bytes = serde_json::to_vec(response).map_err(|err| format!("could not serialise response: {err}"))?;
+    let bytes = serde_json::to_vec(response)
+        .map_err(|err| format!("could not serialise response: {err}"))?;
     std::io::stdout()
         .write_all(&bytes)
         .map_err(|err| format!("could not write stdout: {err}"))?;
@@ -59,7 +60,9 @@ where
             write_response(&resp)
         }),
         "" => Err("missing subcommand (expected `resolve` or `evidence`)".into()),
-        other => Err(format!("unknown subcommand `{other}` (expected `resolve` or `evidence`)")),
+        other => Err(format!(
+            "unknown subcommand `{other}` (expected `resolve` or `evidence`)"
+        )),
     };
     match outcome {
         Ok(()) => ExitCode::from(0),
@@ -119,7 +122,9 @@ mod tests {
         assert!(!asset_kind::is_video(&asset("audio/mp3")));
 
         assert!(asset_kind::is_log_or_text(&asset("text/plain")));
-        assert!(asset_kind::is_log_or_text(&asset("application/octet-stream")));
+        assert!(asset_kind::is_log_or_text(&asset(
+            "application/octet-stream"
+        )));
         assert!(!asset_kind::is_log_or_text(&asset("image/png")));
 
         assert!(asset_kind::is_json(&asset("application/json")));

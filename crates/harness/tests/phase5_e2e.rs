@@ -99,7 +99,10 @@ checks:
     // Exactly one task: the deepest target. Root is ignored.
     assert_eq!(v["tasks"].as_array().unwrap().len(), 1);
     let task = &v["tasks"][0];
-    assert!(task["title"].as_str().unwrap().contains("//App/Login:Login"));
+    assert!(task["title"]
+        .as_str()
+        .unwrap()
+        .contains("//App/Login:Login"));
     assert_eq!(task["satisfies"][0], "App/Login/login-build");
     let ignored = v["ignored_checks"].as_array().unwrap();
     assert_eq!(ignored.len(), 1);

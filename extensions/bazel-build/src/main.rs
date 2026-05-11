@@ -88,7 +88,8 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
             instructions: vec![
                 format!("Run `bazel build {target}`."),
                 "Capture stdout/stderr as a log asset.".into(),
-                "Record the result with `harness evidence <task-id> --text \"…\" --asset <log>`.".into(),
+                "Record the result with `harness evidence <task-id> --text \"…\" --asset <log>`."
+                    .into(),
             ],
             evidence_contract: EvidenceContract {
                 text: TextContract {
@@ -141,9 +142,7 @@ fn task_slug(scope: &str) -> String {
 // Evidence
 // ---------------------------------------------------------------------------
 
-fn evidence(
-    request: EvidenceValidationRequest,
-) -> Result<EvidenceValidationResponse, String> {
+fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResponse, String> {
     let text = request.submission.text.as_deref().unwrap_or("");
     let log_assets: Vec<&_> = request
         .submission
@@ -155,7 +154,8 @@ fn evidence(
     if text.trim().is_empty() {
         missing.push(MissingEvidence {
             kind: "text".into(),
-            message: "Provide a text summary stating the build command and whether it succeeded.".into(),
+            message: "Provide a text summary stating the build command and whether it succeeded."
+                .into(),
         });
     }
     if log_assets.is_empty() {
@@ -236,7 +236,11 @@ mod tests {
             },
             local_id: local.into(),
             manifest_path: "HARNESS.yml".into(),
-            scope_path: if scope.is_empty() { "root".into() } else { scope.into() },
+            scope_path: if scope.is_empty() {
+                "root".into()
+            } else {
+                scope.into()
+            },
             depth,
             with_payload: serde_json::json!({ "target": target }),
         }
@@ -284,12 +288,13 @@ mod tests {
         let response = resolve(req(vec![c])).unwrap();
         assert!(response.tasks.is_empty());
         assert_eq!(response.ignored_checks.len(), 1);
-        assert!(response.ignored_checks[0]
-            .reason
-            .contains("does not match"));
+        assert!(response.ignored_checks[0].reason.contains("does not match"));
     }
 
-    fn evidence_req(text: Option<&str>, assets: Vec<harness_protocol::EvidenceAsset>) -> EvidenceValidationRequest {
+    fn evidence_req(
+        text: Option<&str>,
+        assets: Vec<harness_protocol::EvidenceAsset>,
+    ) -> EvidenceValidationRequest {
         use harness_protocol::{EvidenceSubmission, EvidenceTaskRef};
         EvidenceValidationRequest {
             protocol_version: PROTOCOL_VERSION,
@@ -299,20 +304,34 @@ mod tests {
                 extension: "bazel/build".into(),
                 satisfies: vec!["root/app-build".into()],
                 evidence_contract: EvidenceContract {
-                    text: TextContract { required: true, description: None },
-                    assets: vec![AssetContract { kind: "log".into(), required: true, description: None }],
+                    text: TextContract {
+                        required: true,
+                        description: None,
+                    },
+                    assets: vec![AssetContract {
+                        kind: "log".into(),
+                        required: true,
+                        description: None,
+                    }],
                 },
             },
             submission: EvidenceSubmission {
                 text: text.map(|s| s.to_string()),
                 assets,
             },
-            snapshot: SnapshotHandle { handle: "h".into(), dirty_scopes: Vec::new() },
+            snapshot: SnapshotHandle {
+                handle: "h".into(),
+                dirty_scopes: Vec::new(),
+            },
         }
     }
 
     fn asset(path: &str, mime: &str, size: u64) -> harness_protocol::EvidenceAsset {
-        harness_protocol::EvidenceAsset { path: path.into(), mime: mime.into(), size }
+        harness_protocol::EvidenceAsset {
+            path: path.into(),
+            mime: mime.into(),
+            size,
+        }
     }
 
     #[test]
