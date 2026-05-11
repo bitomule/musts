@@ -1,0 +1,36 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.zed/
+
+# Harness runtime artifacts (when the tool is used inside this repo)
+.harness/cache/
+.harness/state.sqlite
+.harness/state.sqlite-shm
+.harness/state.sqlite-wal
+.harness/evidence/
+
+# Test scratch space
+/e2e-output/
+/tmp/
+*.log
+
+# Coverage
+*.profraw
+*.profdata
+tarpaulin-report.html
