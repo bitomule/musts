@@ -39,6 +39,17 @@ The single hard rule of the harness:
 - **Record evidence for every task from the current `harness validate` output before re-running `harness validate`.** Re-running `validate` replaces the previous task table — un-recorded task ids from the prior run will be rejected with "no longer applies" (PLAN.md §4.2). This is the single most common agent-loop bug.
 - **Do not silence the loop.** If a task feels redundant or already-satisfied, that's the extension's call, not yours: every task in the report is dirty per the ledger. Submit evidence or fix the underlying issue.
 - **Snapshot assets outside the workspace** when you can, especially logs you produce while running the task. Writing them inside the workspace mutates the scope hash and can stale the task you're about to submit evidence for.
+- **Run the validation loop after your last edit, before you commit.** Any change to any file in a scope — including a comment, whitespace, or a `.gitignore` rule that doesn't actually move files in or out — re-hashes that scope and invalidates the matching entries in `.harness/ledger.lock.yaml`. Order: **edit → validate → submit → commit**. "Submit → edit → commit" looks fine locally (the SQLite ledger still has the old `scope_hash`) but ships a stale lock to every clone.
+
+## The committed ledger lock
+
+`.harness/ledger.lock.yaml` is the portable record of what's been validated. Every accepted `harness evidence` appends a `(check_id, scope_hash)` entry to it; `scope_hash` is a content-hash fingerprint of the files in the check's effective scope. The file lives next to the rest of the workspace (it is **committed**, unlike `state.sqlite` which is per-machine) and `harness validate` consults it alongside the local SQLite ledger when answering "is this check green?". A clone that pulls the lock inherits the team's validated state immediately — the agent only sees tasks for scopes its own changes invalidated.
+
+What this means for your workflow:
+
+- **A scope's hash changes any time any file inside it changes.** Comments, doc tweaks, `.gitignore` edits, reordering imports — none of them change the underlying tool's behaviour, but all of them re-hash the scope and detach it from the prior `(check_id, scope_hash)` entries. The harness chooses conservative invalidation over guessing what's "semantic" vs "cosmetic"; it has no way to tell the difference. If you must edit late in the cycle, run the loop again before you commit.
+- **The lock is a union, not a snapshot.** Multiple `(check, scope_hash)` entries can accumulate per check as the codebase evolves. That's by design — a clone is green if its current scope hash matches *any* of them. Don't hand-prune the file; the harness writes it monotonically and a future cleanup pass will retire dead entries.
+- **Sub-workspaces (fixtures, demos, examples) often gitignore their own lock** so the canonical walkthrough starts with nothing validated. If you're working on one of those and `validate` keeps reporting pending tasks despite a clean run, check the project's `.gitignore` before assuming the harness is broken.
 
 ## Capabilities at a glance
 
