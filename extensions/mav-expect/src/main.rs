@@ -81,9 +81,7 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
             continue;
         }
 
-        let entry = by_scope
-            .entry(check.scope_path.clone())
-            .or_insert_with(BucketAccum::default);
+        let entry = by_scope.entry(check.scope_path.clone()).or_default();
         entry.satisfies.push(check.id.clone());
         for e in payload.expectations {
             entry.expectations.insert(e);
@@ -199,11 +197,7 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
                 if let Some(asset) = list.iter().find(|a| a.size == 0) {
                     missing.push(MissingEvidence {
                         kind: kind.clone(),
-                        message: format!(
-                            "{} asset `{}` is empty.",
-                            human_kind(kind),
-                            asset.path
-                        ),
+                        message: format!("{} asset `{}` is empty.", human_kind(kind), asset.path),
                     });
                 }
                 if kind == "mav-report" || kind == "accessibility-tree" {
@@ -245,7 +239,11 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
         summary: Some(format!(
             "MAV evidence accepted ({} asset{}).",
             normalized_assets.len(),
-            if normalized_assets.len() == 1 { "" } else { "s" },
+            if normalized_assets.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
         )),
         normalized_assets,
         missing: Vec::new(),
