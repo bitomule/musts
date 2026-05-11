@@ -1,0 +1,36 @@
+{
+  "extension_result": {
+    "accepted": true,
+    "missing": [],
+    "normalized_assets": [
+      {
+        "kind": "log",
+        "path": ".harness/evidence/bazel-build-app-login/submission-001/build.log"
+      }
+    ],
+    "protocol_version": 1,
+    "satisfies": [
+      "App/Login/login-build",
+      "root/app-build"
+    ],
+    "summary": "Build evidence accepted (1 log asset)."
+  },
+  "satisfies": [
+    "App/Login/login-build",
+    "root/app-build"
+  ],
+  "submission": {
+    "assets": [
+      {
+        "mime": "text/plain",
+        "path": ".harness/evidence/bazel-build-app-login/submission-001/build.log",
+        "size": 65
+      }
+    ],
+    "text": "bazel build //App/Login:Login succeeded"
+  },
+  "submission_id": "submission-001",
+  "submitted_at": 1778503814,
+  "summary": "Build evidence accepted (1 log asset).",
+  "task_id": "bazel-build-app-login"
+}

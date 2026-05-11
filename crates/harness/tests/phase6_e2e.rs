@@ -1,6 +1,8 @@
 //! Phase 6 end-to-end scenarios per `docs/PLAN.md` §7.3 and §9 Phase 6:
 //! scenario 7 (`mav_groups_expectations`) and the full §15 worked example.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,9 +16,13 @@ fn bin() -> Command {
 }
 
 fn extension_binary(name: &str) -> PathBuf {
-    let test_bin = std::env::current_exe().unwrap();
-    let profile = test_bin.parent().unwrap().parent().unwrap();
-    profile.join(name)
+    let package = match name {
+        "bazel-extension" => "bazel-build-extension",
+        "mav-extension" => "mav-expect-extension",
+        "stub-extension" => "stub-extension",
+        other => panic!("unknown extension binary `{other}`"),
+    };
+    common::workspace_binary(package, name)
 }
 
 fn project_root() -> PathBuf {

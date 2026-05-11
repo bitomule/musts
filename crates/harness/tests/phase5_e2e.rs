@@ -1,6 +1,8 @@
 //! Phase 5 end-to-end scenarios per `docs/PLAN.md` §7.3 and §9 Phase 5:
 //! scenario 6 (`bazel_picks_deepest_target`) and the build half of §15.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,9 +16,7 @@ fn bin() -> Command {
 }
 
 fn bazel_binary() -> PathBuf {
-    let test_bin = std::env::current_exe().unwrap();
-    let profile = test_bin.parent().unwrap().parent().unwrap();
-    profile.join("bazel-extension")
+    common::workspace_binary("bazel-build-extension", "bazel-extension")
 }
 
 fn project_root() -> PathBuf {

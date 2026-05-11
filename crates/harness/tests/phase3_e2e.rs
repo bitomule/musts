@@ -4,6 +4,8 @@
 //! and a stub-extension descriptor, then drives the real `harness`
 //! binary.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,12 +18,10 @@ fn bin() -> Command {
     Command::cargo_bin("harness").expect("harness binary not built")
 }
 
-/// Path to the stub-extension binary in the target dir.
+/// Path to the stub-extension binary. Built on demand if missing so
+/// `cargo test --workspace` works on a fresh checkout.
 fn stub_binary() -> PathBuf {
-    // `cargo test` produces sibling target binaries under the same profile.
-    let test_bin = std::env::current_exe().unwrap();
-    let profile = test_bin.parent().unwrap().parent().unwrap();
-    profile.join("stub-extension")
+    common::workspace_binary("stub-extension", "stub-extension")
 }
 
 /// Install a stub-extension descriptor that claims the given fully

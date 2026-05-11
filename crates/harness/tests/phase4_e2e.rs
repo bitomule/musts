@@ -1,5 +1,7 @@
 //! Phase 4 end-to-end scenarios per `docs/PLAN.md` §7.3 and §9 Phase 4.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,9 +15,7 @@ fn bin() -> Command {
 }
 
 fn stub_binary() -> PathBuf {
-    let test_bin = std::env::current_exe().unwrap();
-    let profile = test_bin.parent().unwrap().parent().unwrap();
-    profile.join("stub-extension")
+    common::workspace_binary("stub-extension", "stub-extension")
 }
 
 fn install_stub_descriptor(workspace: &Path, capability_uses: &str) {

@@ -17,41 +17,49 @@ fixtures/login-app/
 
 ## Walking the success criterion by hand
 
-Both extensions need to be on `PATH`. Either `cargo install` them or use the absolute paths:
+Extension descriptors resolve relative `command` paths against the descriptor directory (PLAN.md §4.6), so the binaries live next to `extension.yml`. The fixture ships **no binaries** — you symlink them in once after a `cargo build`:
 
 ```bash
 cd fixtures/login-app
 
-# Use the workspace binaries directly:
-export PATH="$(pwd)/../../target/debug:$PATH"
-cargo build --workspace                # populates the target/ binaries
+# 0. Build the workspace once.
+cargo build --workspace --manifest-path ../../Cargo.toml
 
-# 1. Edit the source file to trigger a dirty scope.
+# 1. Link the freshly-built binaries into the descriptors. The
+#    descriptor's `command: ["bazel-extension", "resolve"]` will then
+#    find them at .harness/extensions/bazel/bazel-extension.
+ln -sf "$(pwd)/../../target/debug/bazel-extension" .harness/extensions/bazel/bazel-extension
+ln -sf "$(pwd)/../../target/debug/mav-extension"   .harness/extensions/mav/mav-extension
+
+# 2. Use the harness binary directly (no install required).
+HARNESS=../../target/debug/harness
+
+# 3. Edit the source file to trigger a dirty scope.
 echo "// edit" >> App/Login/LoginView.swift
 
-# 2. Validate — should emit one bazel task (subsumes root) + one mav task.
-harness --workspace . validate
+# 4. Validate — should emit one bazel task (subsumes root) + one mav task.
+$HARNESS --workspace . validate
 
-# 3. Record evidence — assets staged OUTSIDE the workspace so they
+# 5. Record evidence — assets staged OUTSIDE the workspace so they
 #    don't mutate scope hashes.
 mkdir -p /tmp/login-evidence
-echo "bazel build //App/Login:Login\nINFO: Build completed successfully\n" > /tmp/login-evidence/build.log
-printf '\x89PNG' > /tmp/login-evidence/login.png
-printf '' > /tmp/login-evidence/login.mp4
+printf 'bazel build //App/Login:Login\nINFO: Build completed successfully\n' > /tmp/login-evidence/build.log
+printf '\x89PNG\r\n\x1a\n' > /tmp/login-evidence/login.png
+dd if=/dev/zero of=/tmp/login-evidence/login.mp4 bs=1 count=64 2>/dev/null
 echo '{"summary":"ok"}' > /tmp/login-evidence/mav-report.json
 
-harness --workspace . evidence bazel-build-app-login \
+$HARNESS --workspace . evidence bazel-build-app-login \
   --text "bazel build //App/Login:Login succeeded" \
   --asset /tmp/login-evidence/build.log
 
-harness --workspace . evidence mav-expect-app-login \
+$HARNESS --workspace . evidence mav-expect-app-login \
   --text "MAV: validated both expectations" \
   --asset /tmp/login-evidence/login.png \
   --asset /tmp/login-evidence/login.mp4 \
   --asset /tmp/login-evidence/mav-report.json
 
-# 4. Re-validate — should be clean.
-harness --workspace . validate
+# 6. Re-validate — should be clean.
+$HARNESS --workspace . validate
 ```
 
 After the second validate you should see:
@@ -66,5 +74,8 @@ The same flow is checked-in as `phase6_e2e::full_section_15_worked_example` and 
 ## Resetting between runs
 
 ```bash
-rm -rf .harness/state.sqlite* .harness/evidence
+rm -rf .harness/state.sqlite* .harness/evidence .harness/.lock
 ```
+
+The symlinks under `.harness/extensions/<name>/` are intentionally not
+checked in; they're produced by step 1 above and survive between runs.
