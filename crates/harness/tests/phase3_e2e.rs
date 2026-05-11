@@ -312,11 +312,11 @@ fn scenario_15_concurrent_validate_locks() {
 #[serial]
 fn scenario_16_unicode_path_stability() {
     // Two side-by-side workspaces. One contains a file at `é/x.txt`
-    // (NFC), the other at the same logical path written using
-    // U+0065 + combining U+0301 (NFD). Both run with identical
-    // manifests; their report task ids must match (the JSON output
-    // does not surface raw scope hashes but the deterministic stub
-    // task id is enough to confirm the scope hash converged).
+    // (NFC), the other at the same logical path written with U+0065 +
+    // combining U+0301 (NFD). After a successful `validate`, the
+    // per-check scope_hash row in `state.sqlite` must be byte-equal
+    // across both — that is the load-bearing property of
+    // `snapshot::paths::normalise_rel_path`.
     fn build(ws: &Path, name: &str) {
         write_manifest(
             &ws.join("HARNESS.yml"),
@@ -333,30 +333,30 @@ fn scenario_16_unicode_path_stability() {
     build(a.path(), "é"); // NFC
     build(b.path(), "e\u{0301}"); // NFD
 
-    let out_a = bin()
-        .arg("--workspace")
-        .arg(a.path())
-        .arg("validate")
-        .arg("--json")
-        .assert()
-        .failure()
-        .code(1);
-    let out_b = bin()
-        .arg("--workspace")
-        .arg(b.path())
-        .arg("validate")
-        .arg("--json")
-        .assert()
-        .failure()
-        .code(1);
-    let a_json: serde_json::Value = serde_json::from_slice(&out_a.get_output().stdout).unwrap();
-    let b_json: serde_json::Value = serde_json::from_slice(&out_b.get_output().stdout).unwrap();
-    // workspace_root differs by path but the resolved tasks shape is
-    // deterministic.
-    assert_eq!(a_json["tasks"][0]["id"], b_json["tasks"][0]["id"]);
+    for ws in [a.path(), b.path()] {
+        bin()
+            .arg("--workspace")
+            .arg(ws)
+            .arg("validate")
+            .assert()
+            .failure()
+            .code(1);
+    }
+
+    fn read_scope_hash(workspace: &Path) -> String {
+        use rusqlite::Connection;
+        let conn = Connection::open(workspace.join(".harness/state.sqlite")).unwrap();
+        conn.query_row(
+            "SELECT scope_hash FROM scope_snapshots WHERE scope_path = ?1",
+            ["root/c"],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap()
+    }
     assert_eq!(
-        a_json["tasks"][0]["satisfies"],
-        b_json["tasks"][0]["satisfies"]
+        read_scope_hash(a.path()),
+        read_scope_hash(b.path()),
+        "NFC and NFD workspaces must produce the same scope_hash"
     );
 }
 

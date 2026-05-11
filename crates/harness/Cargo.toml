@@ -25,6 +25,7 @@ predicates = { workspace = true }
 tempfile = { workspace = true }
 serial_test = { workspace = true }
 fs2 = { workspace = true }
+rusqlite = { workspace = true }
 
 [lints]
 workspace = true

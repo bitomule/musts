@@ -584,6 +584,7 @@ dependencies = [
  "fs2",
  "harness-core",
  "predicates",
+ "rusqlite",
  "serde_json",
  "serial_test",
  "tempfile",

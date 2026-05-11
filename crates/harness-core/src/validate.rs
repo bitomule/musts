@@ -103,6 +103,8 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 &m.scope_prefix,
                 &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
             );
+            let effective_file_paths: Vec<String> =
+                effective_files.iter().map(|(p, _)| p.clone()).collect();
             let scope_hash = compute_scope_hash(&ScopeInput {
                 files: effective_files,
                 manifest_hash: manifest_hash.clone(),
@@ -121,6 +123,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 with_payload: check.with_payload.clone(),
                 scope_hash,
                 dirty: !already_green,
+                effective_files: effective_file_paths,
             });
         }
     }
@@ -140,6 +143,11 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     let mut ignored_checks = Vec::new();
     let mut notes = Vec::new();
     let mut tasks_to_persist = Vec::new();
+    // Per PLAN.md §7.3 scenario 9: a failing capability does not abort
+    // the rest. We collect failures, surface the first one after every
+    // capability has been attempted, and keep the partial report
+    // observable via the persisted tasks for the surviving ones.
+    let mut first_error: Option<Error> = None;
 
     for (capability, checks_for_cap) in &by_capability {
         let cap = lookup_capability(&cap_index, capability).expect("validated above");
@@ -153,19 +161,32 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
             descriptor_root: &descriptor.root,
             options: opts.runtime_options.clone(),
         };
-        let response = runner.resolve(&cap.resolve, &request)?;
-        ingest_resolve_response(
-            response,
-            capability,
-            checks_for_cap,
-            &mut tasks,
-            &mut ignored_checks,
-            &mut notes,
-            &mut tasks_to_persist,
-        );
+        match runner.resolve(&cap.resolve, &request) {
+            Ok(response) => {
+                ingest_resolve_response(
+                    response,
+                    capability,
+                    checks_for_cap,
+                    &mut tasks,
+                    &mut ignored_checks,
+                    &mut notes,
+                    &mut tasks_to_persist,
+                );
+            }
+            Err(err) => {
+                tracing::warn!(capability = %capability, error = %err, "extension resolve failed; continuing with other capabilities");
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+            }
+        }
     }
 
     persist_tasks(&mut session.db, &tasks_to_persist, &notes, now_unix)?;
+
+    if let Some(err) = first_error {
+        return Err(err);
+    }
 
     Ok(ValidateReport {
         workspace_root: workspace_root.display().to_string(),
@@ -198,6 +219,10 @@ struct PreparedCheck {
     with_payload: serde_json::Value,
     scope_hash: String,
     dirty: bool,
+    /// Normalised relative paths of every file in this check's effective
+    /// scope. Populated when the check is prepared; surfaced verbatim
+    /// in the resolve request's `changed_files` field.
+    effective_files: Vec<String>,
 }
 
 fn load_manifests(workspace_root: &Path, entries: &[ManifestEntry]) -> Result<Vec<LoadedManifest>> {
@@ -377,6 +402,23 @@ fn skip_built_in_ignores(entry: &ignore::DirEntry) -> bool {
     !(exact || name.starts_with("bazel-"))
 }
 
+/// Is `child` strictly nested inside the directory denoted by `parent`?
+/// Both arguments are workspace-relative path prefixes joined by `/`,
+/// using `""` for the root scope. The comparison is segment-aware so
+/// `App/LoginExtra` is **not** considered a child of `App/Login`.
+fn prefix_is_strict_ancestor(parent: &str, child: &str) -> bool {
+    if child == parent {
+        return false;
+    }
+    if parent.is_empty() {
+        // Any non-empty child is nested inside the root.
+        return !child.is_empty();
+    }
+    child.len() > parent.len()
+        && child.starts_with(parent)
+        && child.as_bytes().get(parent.len()) == Some(&b'/')
+}
+
 /// Compute the relative-path *prefixes* of every deeper manifest that
 /// declares a check of the same `capability` as the current one. Used
 /// to subtract files from the parent's effective scope.
@@ -391,23 +433,20 @@ fn descendant_prefixes(
         if other.entry.rel_path == current.entry.rel_path {
             continue;
         }
-        let is_deeper = other.scope_prefix.len() > current.scope_prefix.len()
-            && (current.scope_prefix.is_empty()
-                || other.scope_prefix.starts_with(&current.scope_prefix));
-        if !is_deeper {
+        if !prefix_is_strict_ancestor(&current.scope_prefix, &other.scope_prefix) {
             continue;
         }
-        let same_capability = other.parsed.checks.values().any(|c| c.uses == capability);
-        if same_capability {
+        if other.parsed.checks.values().any(|c| c.uses == capability) {
             out.push(other.scope_prefix.clone());
         }
     }
     out
 }
 
-/// Workspace-relative paths of every deeper manifest (any capability) —
-/// used as `descendant_manifest_paths` in the scope hash so adding or
-/// removing a child manifest invalidates the parent's hash.
+/// Workspace-relative paths of every deeper manifest that declares a
+/// check of the same capability — used as `descendant_manifest_paths`
+/// in the scope hash so adding/removing a same-capability child
+/// manifest invalidates the parent's hash.
 fn descendant_same_capability_manifest_paths(
     manifests: &[LoadedManifest],
     current: &LoadedManifest,
@@ -418,14 +457,10 @@ fn descendant_same_capability_manifest_paths(
         if other.entry.rel_path == current.entry.rel_path {
             continue;
         }
-        let is_deeper = other.scope_prefix.len() > current.scope_prefix.len()
-            && (current.scope_prefix.is_empty()
-                || other.scope_prefix.starts_with(&current.scope_prefix));
-        if !is_deeper {
+        if !prefix_is_strict_ancestor(&current.scope_prefix, &other.scope_prefix) {
             continue;
         }
-        let same_capability = other.parsed.checks.values().any(|c| c.uses == capability);
-        if same_capability {
+        if other.parsed.checks.values().any(|c| c.uses == capability) {
             out.push(
                 other
                     .entry
@@ -499,28 +534,19 @@ fn check_has_green_evidence(db: &crate::state::Db, cid: &str, scope_hash: &str) 
 fn build_resolve_request(
     workspace_root: &Path,
     capability: &str,
-    all_checks: &[PreparedCheck],
+    _all_checks: &[PreparedCheck],
     dirty: &[&PreparedCheck],
 ) -> ResolveRequest {
     let dirty_scopes: BTreeSet<String> = dirty.iter().map(|c| c.scope_path.clone()).collect();
-    // Phase 3: `changed_files` lists every file inside any dirty scope's
-    // effective scope. We approximate by emitting all files from dirty
-    // checks' scope inputs — the orchestrator will refine this when the
-    // ledger lands in Phase 4.
+    // `changed_files` is the deduplicated, sorted union of every file
+    // in each dirty check's effective scope. Phase 4 will narrow this
+    // to files whose fingerprint actually changed when a ledger row
+    // already exists, but the wire shape is the same.
     let mut changed_files: BTreeSet<String> = BTreeSet::new();
     for c in dirty {
-        for other in all_checks {
-            if other.scope_path == c.scope_path && other.capability == c.capability {
-                let _ = other; // placeholder — keeps the closure shape stable
-            }
+        for file in &c.effective_files {
+            changed_files.insert(file.clone());
         }
-        // For now we leave changed_files conservative — the contract
-        // says "no prior fingerprint = treat all in-scope files as
-        // changed" but the per-scope file list lives only inside
-        // compute_scope_file_inputs's locals. Phase 4 will plumb the
-        // exact list through; the response shape stays correct because
-        // extensions consume `changed_files` opportunistically.
-        let _ = changed_files.insert(c.scope_path.clone());
     }
     let checks: Vec<ResolveCheck> = dirty
         .iter()
