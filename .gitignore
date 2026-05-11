@@ -18,18 +18,24 @@ Icon?
 *~
 .zed/
 
-# Harness runtime artifacts (when the tool is used inside this repo)
-.harness/cache/
-.harness/state.sqlite
-.harness/state.sqlite-shm
-.harness/state.sqlite-wal
-.harness/evidence/
-.harness/.lock
+# Harness runtime artifacts (anywhere a `.harness/` workspace lives —
+# the repo root, the fixture, future sub-workspaces).
+**/.harness/cache/
+**/.harness/state.sqlite
+**/.harness/state.sqlite-shm
+**/.harness/state.sqlite-wal
+**/.harness/evidence/
+**/.harness/.lock
 
 # Fixture-installed extension symlinks (created by the README walkthrough)
 fixtures/*/.harness/extensions/*/bazel-extension
 fixtures/*/.harness/extensions/*/mav-extension
 fixtures/*/.harness/extensions/*/stub-extension
+
+# The root `ledger.lock.yaml` is committed (it carries the team's
+# validated state across clones). The fixture's lock is not — the
+# canonical walkthrough must start with nothing validated.
+fixtures/*/.harness/ledger.lock.yaml
 
 # Test scratch space
 /e2e-output/

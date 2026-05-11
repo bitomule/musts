@@ -162,6 +162,11 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     //    earlier evidence calls (PLAN.md §4.4.1).
     gc_orphan_submissions(session);
 
+    // 0b. Load the portable, repo-committed ledger lock. Empty when the
+    //    file doesn't exist (fresh workspace) — the local
+    //    `evidence_records` table still answers in that case.
+    let ledger_lock = crate::state::lock::load(&session.harness_dir)?;
+
     // 1. Discover manifests and parse each one.
     let manifest_entries = discover_manifests(workspace_root)?;
     let manifests = load_manifests(workspace_root, &manifest_entries)?;
@@ -233,7 +238,8 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 descendant_manifest_paths: descendant_paths,
             });
             persist_scope_snapshot(&mut session.db, &cid, &scope_hash, now_unix)?;
-            let already_green = check_has_green_evidence(&session.db, &cid, &scope_hash)?;
+            let already_green = check_has_green_evidence(&session.db, &cid, &scope_hash)?
+                || ledger_lock.contains(&cid, &scope_hash);
             per_check.push(PreparedCheck {
                 check_id: cid,
                 local_id: local_id.clone(),

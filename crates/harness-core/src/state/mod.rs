@@ -9,6 +9,8 @@
 //! schema bump.
 
 pub mod db;
+pub mod lock;
 pub mod schema;
 
 pub use db::{open, Db};
+pub use lock::{LedgerLock, SatisfiedEntry};

@@ -68,6 +68,14 @@ Atomic: every accept is one SQLite transaction. The `evidence.json` marker file 
 - Scope hash = `blake3(sorted_files ++ manifest_hash ++ ext_descriptor_hash ++ sorted_descendant_manifest_paths)`. Including descendant paths means adding or removing a child manifest invalidates the parent.
 - Paths are NFC-normalised before hashing; on case-insensitive filesystems we lowercase them too. The check's `state.sqlite` row is therefore stable across NFC ↔ NFD checkouts and case variations.
 
+## Portable validated state — `ledger.lock.yaml`
+
+`.harness/state.sqlite` is machine-local: a fresh `git clone` starts with no `evidence_records` rows, so without help every check would be re-emitted as dirty. The lock file at `.harness/ledger.lock.yaml` is the portable companion: a deterministic, sorted YAML list of `(check_id, scope_hash)` tuples that have been accepted somewhere. `validate`'s "is this green?" lookup unions the local SQLite query with the lock's `contains` check; `evidence`'s accept path appends the new tuple and rewrites the file.
+
+What this buys: the team commits the lock alongside the manifests; a clone runs `harness validate` and only sees tasks for scopes its own changes have invalidated (the blake3 scope hashes match the lock for everything else). `state.sqlite` and `evidence/` stay gitignored — they are a perf cache and an asset payload, not the source of truth.
+
+What this does not buy: merge conflict resolution between branches that each accepted evidence at different scope hashes. The format is intentionally simple — a YAML list — so `git merge` with line-based conflict markers gives a usable starting point.
+
 ## Cross-process locking
 
 Every state-writing command acquires an advisory file lock on `.harness/.lock` (`fs2::FileExt::try_lock_exclusive`). On contention we exit 2 with `"another harness process is running"`; we never block. The lock is held through the SQLite transaction that mutates `tasks` (validate) or `evidence_records` (evidence). Read-only paths (`--help`, `--version`) skip bootstrap entirely.
@@ -79,7 +87,7 @@ Detailed in `PLAN.md` §4.5. The short version: a check goes green only when an 
 ## Where to look
 
 - Manifest parsing edge cases → `crates/harness-core/src/manifest/parser.rs`.
-- Why a check is or isn't dirty → `crates/harness-core/src/validate.rs::run` + `evidence::ledger::is_green`.
+- Why a check is or isn't dirty → `crates/harness-core/src/validate.rs::run` + `evidence::ledger::is_green` + `state::lock::LedgerLock::contains`.
 - Why an extension returned what it did → run the extension manually with the captured request JSON on stdin (the IPC contract is documented in `PLAN.md` §4.6).
 - Why a workspace path didn't resolve → `crates/harness-core/src/workspace.rs`.
 - What the JSON report looks like → `crates/harness-core/src/report.rs` + the §5 example in `PLAN.md`.

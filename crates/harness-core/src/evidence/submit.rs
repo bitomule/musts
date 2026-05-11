@@ -207,6 +207,23 @@ pub fn submit(
         .collect();
     insert_atomic(&mut session.db, &rows)?;
 
+    // 8b. Append the newly-green `(check_id, scope_hash)` pairs to the
+    //     portable ledger lock so a fresh clone inherits them. Reading
+    //     and writing the full lock each time is self-healing: a missed
+    //     write recovers on the next accepted submission of any check.
+    {
+        let mut lock = crate::state::lock::load(&session.harness_dir)?;
+        let mut changed = false;
+        for (cid, scope_hash) in accepted_now.iter().zip(resolved_hashes.iter()) {
+            if lock.record(cid, scope_hash) {
+                changed = true;
+            }
+        }
+        if changed {
+            crate::state::lock::save(&session.harness_dir, &lock)?;
+        }
+    }
+
     // 9. Write evidence.json LAST so a crashed submit leaves
     //    identifiable garbage (cleaned up by validate's orphan GC).
     let marker = serde_json::json!({

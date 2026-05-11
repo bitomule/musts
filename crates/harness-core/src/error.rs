@@ -114,6 +114,9 @@ pub enum Error {
 
     #[error("another harness process is running — retry shortly")]
     LockBusy,
+
+    #[error("ledger lock at {path}: {message}")]
+    LedgerLock { path: PathBuf, message: String },
 }
 
 impl Error {
@@ -133,7 +136,8 @@ impl Error {
             | Error::LockBusy
             | Error::TaskNotFound { .. }
             | Error::EvidenceStale { .. }
-            | Error::EvidenceOverclaim { .. } => 2,
+            | Error::EvidenceOverclaim { .. }
+            | Error::LedgerLock { .. } => 2,
             Error::EvidenceRejected { .. } => 1,
             Error::Io { .. } | Error::Db { .. } => 70,
         }
