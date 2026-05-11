@@ -187,6 +187,12 @@ fn resolve_timeout_is_rejected() {
         "expected timeout, got: {err}"
     );
     assert_eq!(err.exit_code(), 2);
+    // PLAN.md §4.6: stderr surfaced on timeout too.
+    let display = format!("{err}");
+    assert!(
+        display.contains("stub-extension: resolve timeout mode"),
+        "stderr not surfaced on timeout: {display}"
+    );
 }
 
 #[test]
@@ -207,6 +213,10 @@ fn resolve_garbage_stdout_is_rejected() {
         message.contains("not valid JSON") || message.contains("data after"),
         "unexpected: {message}"
     );
+    assert!(
+        message.contains("stub-extension: resolve garbage mode"),
+        "stderr not surfaced on garbage path: {message}"
+    );
 }
 
 #[test]
@@ -224,6 +234,10 @@ fn resolve_oversized_response_is_rejected() {
     std::env::remove_var("HARNESS_STUB_RESOLVE_MODE");
     let message = format!("{err}");
     assert!(message.contains("exceeds"), "unexpected: {message}");
+    assert!(
+        message.contains("stub-extension: resolve oversized mode"),
+        "stderr not surfaced on oversized path: {message}"
+    );
 }
 
 #[test]
@@ -263,6 +277,10 @@ fn resolve_bad_protocol_version_is_rejected() {
     assert!(
         message.contains("protocol_version"),
         "unexpected: {message}"
+    );
+    assert!(
+        message.contains("stub-extension: resolve bad_protocol_version"),
+        "stderr not surfaced on protocol-version mismatch: {message}"
     );
 }
 
@@ -354,6 +372,11 @@ fn evidence_timeout_is_rejected() {
         .unwrap_err();
     std::env::remove_var("HARNESS_STUB_EVIDENCE_MODE");
     assert!(matches!(err, Error::ExtensionTimeout { .. }));
+    let display = format!("{err}");
+    assert!(
+        display.contains("stub-extension: evidence timeout mode"),
+        "stderr not surfaced on evidence timeout: {display}"
+    );
 }
 
 #[test]
@@ -373,6 +396,10 @@ fn evidence_bad_protocol_version_is_rejected() {
     assert!(
         message.contains("protocol_version"),
         "unexpected: {message}"
+    );
+    assert!(
+        message.contains("stub-extension: evidence bad_protocol_version"),
+        "stderr not surfaced on evidence protocol-version mismatch: {message}"
     );
 }
 

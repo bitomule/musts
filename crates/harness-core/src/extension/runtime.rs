@@ -149,17 +149,19 @@ impl<'a> ExtensionRunner<'a> {
 
         // Poll for completion with timeout.
         let deadline = Instant::now() + self.options.timeout;
+        let timed_out;
         let exit_status = loop {
             match child.try_wait() {
-                Ok(Some(status)) => break status,
+                Ok(Some(status)) => {
+                    timed_out = false;
+                    break Some(status);
+                }
                 Ok(None) => {
                     if Instant::now() >= deadline {
                         let _ = child.kill();
                         let _ = child.wait();
-                        return Err(Error::ExtensionTimeout {
-                            capability: self.capability.clone(),
-                            timeout_seconds: self.options.timeout.as_secs(),
-                        });
+                        timed_out = true;
+                        break None;
                     }
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -172,14 +174,34 @@ impl<'a> ExtensionRunner<'a> {
             }
         };
 
+        // Drain output channels once — every failure branch below folds
+        // `stderr` into the surfaced error so PLAN.md §4.6 ("stderr
+        // captured and surfaced verbatim on non-zero exit or on
+        // protocol error") and §7.3 scenario 9 are honoured uniformly.
         let (stdout_buf, stdout_res) = stdout_rx.recv().unwrap_or_else(|_| (Vec::new(), Ok(0)));
+        let stderr_buf = stderr_rx.recv().unwrap_or_default();
+        let stderr_text = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+        let stderr_suffix = if stderr_text.is_empty() {
+            String::new()
+        } else {
+            format!(" — stderr: {stderr_text}")
+        };
+
+        if timed_out {
+            return Err(Error::ExtensionTimeout {
+                capability: self.capability.clone(),
+                timeout_seconds: self.options.timeout.as_secs(),
+                stderr: stderr_text.clone(),
+            });
+        }
+        let exit_status = exit_status.expect("non-timeout path sets a status");
+
         if let Err(err) = stdout_res {
             return Err(Error::ExtensionFailure {
                 capability: self.capability.clone(),
-                message: format!("reading stdout failed: {err}"),
+                message: format!("reading stdout failed: {err}{stderr_suffix}"),
             });
         }
-        let stderr_buf = stderr_rx.recv().unwrap_or_default();
 
         // Check the size cap **before** the exit status: an oversized
         // response will eventually SIGPIPE the child (because we stop
@@ -190,7 +212,7 @@ impl<'a> ExtensionRunner<'a> {
             return Err(Error::ExtensionFailure {
                 capability: self.capability.clone(),
                 message: format!(
-                    "response exceeds {max}-byte cap (got at least {} bytes)",
+                    "response exceeds {max}-byte cap (got at least {} bytes){stderr_suffix}",
                     stdout_buf.len()
                 ),
             });
@@ -199,20 +221,17 @@ impl<'a> ExtensionRunner<'a> {
         if !exit_status.success() {
             return Err(Error::ExtensionFailure {
                 capability: self.capability.clone(),
-                message: format!(
-                    "exited with status {} — stderr: {}",
-                    exit_status,
-                    String::from_utf8_lossy(&stderr_buf).trim()
-                ),
+                message: format!("exited with status {exit_status}{stderr_suffix}"),
             });
         }
 
-        let response = parse_single_json::<Resp>(&self.capability, &stdout_buf)?;
+        let response = parse_single_json::<Resp>(&self.capability, &stdout_buf)
+            .map_err(|err| with_stderr_suffix(err, &stderr_suffix))?;
         if response.protocol_version() != PROTOCOL_VERSION {
             return Err(Error::ExtensionFailure {
                 capability: self.capability.clone(),
                 message: format!(
-                    "response declares protocol_version {} but core requires {}",
+                    "response declares protocol_version {} but core requires {}{stderr_suffix}",
                     response.protocol_version(),
                     PROTOCOL_VERSION
                 ),
@@ -243,6 +262,25 @@ pub fn run_evidence(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Fold a captured stderr suffix into an [`Error::ExtensionFailure`] so
+/// every IPC failure path surfaces the child's stderr verbatim per
+/// `docs/PLAN.md` §4.6.
+fn with_stderr_suffix(err: Error, suffix: &str) -> Error {
+    if suffix.is_empty() {
+        return err;
+    }
+    match err {
+        Error::ExtensionFailure {
+            capability,
+            message,
+        } => Error::ExtensionFailure {
+            capability,
+            message: format!("{message}{suffix}"),
+        },
+        other => other,
+    }
+}
 
 trait HasProtocolVersion {
     fn protocol_version(&self) -> u32;

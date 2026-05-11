@@ -47,10 +47,14 @@ pub enum Error {
     #[error("extension `{capability}` failed: {message}")]
     ExtensionFailure { capability: String, message: String },
 
-    #[error("extension `{capability}` timed out after {timeout_seconds}s")]
+    #[error("extension `{capability}` timed out after {timeout_seconds}s{stderr}",
+        stderr = if stderr.is_empty() { String::new() } else { format!(" — stderr: {stderr}") })]
     ExtensionTimeout {
         capability: String,
         timeout_seconds: u64,
+        /// Trimmed contents of the child's stderr stream when the
+        /// timeout fired. Empty when the child wrote nothing.
+        stderr: String,
     },
 
     #[error("no extension implements capability `{capability}` referenced by check `{check_id}` in {manifest_path}")]

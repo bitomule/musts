@@ -47,21 +47,29 @@ fn handle_resolve(input: &[u8]) -> ExitCode {
     match mode.as_str() {
         "ok" => emit_resolve_ok(input),
         "timeout" => {
-            // Sleep longer than any reasonable test timeout.
+            // Diagnostic on stderr so a hung extension still surfaces a
+            // hint when core surfaces stderr per PLAN.md §4.6.
+            eprintln!("stub-extension: resolve timeout mode — sleeping until killed");
             thread::sleep(Duration::from_secs(300));
             ExitCode::from(0)
         }
         "garbage" => {
-            // Non-JSON output before any valid document.
+            eprintln!("stub-extension: resolve garbage mode — emitting non-JSON stdout");
             let _ = std::io::stdout().write_all(b"this is not JSON at all\n");
             ExitCode::from(0)
         }
-        "oversized" => emit_padded_resolve(input),
+        "oversized" => {
+            eprintln!("stub-extension: resolve oversized mode — emitting >cap payload");
+            emit_padded_resolve(input)
+        }
         "nonzero_exit" => {
             eprintln!("stub-extension: simulated failure");
             ExitCode::from(7)
         }
-        "bad_protocol_version" => emit_resolve_with_version(input, 9999),
+        "bad_protocol_version" => {
+            eprintln!("stub-extension: resolve bad_protocol_version mode");
+            emit_resolve_with_version(input, 9999)
+        }
         other => {
             eprintln!("stub-extension: unknown HARNESS_STUB_RESOLVE_MODE `{other}`");
             ExitCode::from(2)
@@ -74,19 +82,27 @@ fn handle_evidence(input: &[u8]) -> ExitCode {
     match mode.as_str() {
         "ok" => emit_evidence_ok(input),
         "timeout" => {
+            eprintln!("stub-extension: evidence timeout mode — sleeping until killed");
             thread::sleep(Duration::from_secs(300));
             ExitCode::from(0)
         }
         "garbage" => {
+            eprintln!("stub-extension: evidence garbage mode — emitting non-JSON stdout");
             let _ = std::io::stdout().write_all(b"not json\n");
             ExitCode::from(0)
         }
-        "oversized" => emit_padded_evidence(input),
+        "oversized" => {
+            eprintln!("stub-extension: evidence oversized mode — emitting >cap payload");
+            emit_padded_evidence(input)
+        }
         "nonzero_exit" => {
             eprintln!("stub-extension: simulated evidence failure");
             ExitCode::from(11)
         }
-        "bad_protocol_version" => emit_evidence_with_version(input, 9999),
+        "bad_protocol_version" => {
+            eprintln!("stub-extension: evidence bad_protocol_version mode");
+            emit_evidence_with_version(input, 9999)
+        }
         other => {
             eprintln!("stub-extension: unknown HARNESS_STUB_EVIDENCE_MODE `{other}`");
             ExitCode::from(2)
