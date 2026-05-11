@@ -20,6 +20,7 @@ fs2 = { workspace = true }
 unicode-normalization = { workspace = true }
 shell-words = { workspace = true }
 jsonschema = { workspace = true }
+mime_guess = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }

@@ -38,12 +38,128 @@ pub struct ValidateOptions {
     pub runtime_options: RuntimeOptions,
 }
 
+/// Compute the current `scope_hash` for every applicable check in the
+/// workspace. Used by `harness evidence` to detect drift between when a
+/// task was issued and when evidence is recorded (the `task_snapshot_hash`
+/// staleness check in PLAN.md §4.2).
+///
+/// Side-effects: refreshes the file fingerprint cache, just like
+/// [`run`]. Does **not** call extensions or write tasks/notes.
+pub fn compute_current_scope_hashes(
+    session: &mut StateSession,
+    workspace_root: &Path,
+) -> Result<BTreeMap<String, String>> {
+    let now_unix = unix_seconds_now();
+    let case_insensitive = is_case_insensitive_fs(&session.harness_dir);
+
+    let manifest_entries = discover_manifests(workspace_root)?;
+    let manifests = load_manifests(workspace_root, &manifest_entries)?;
+    let descriptors = discover_descriptors(workspace_root)?;
+    let ext_descriptor_hash = aggregate_descriptor_hash(&descriptors);
+    let scope_files = compute_scope_file_inputs(
+        workspace_root,
+        &manifests,
+        session,
+        case_insensitive,
+        now_unix,
+    )?;
+    let mut out = BTreeMap::new();
+    for m in &manifests {
+        let scope = scope_path_for(&m.entry.rel_path);
+        let manifest_bytes = std::fs::read(&m.entry.abs_path).map_err(|source| Error::Io {
+            path: m.entry.abs_path.clone(),
+            source,
+        })?;
+        let manifest_hash = hash_bytes(&manifest_bytes);
+        for (local_id, check) in &m.parsed.checks {
+            let cid = check_id(&scope, local_id);
+            let descendant_paths =
+                descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
+            let effective_files = effective_files_for(
+                &scope_files,
+                &normalise_prefix(&m.scope_prefix, case_insensitive),
+                &descendant_prefixes(workspace_root, &manifests, m, &check.uses, case_insensitive),
+            );
+            let scope_hash = compute_scope_hash(&ScopeInput {
+                files: effective_files,
+                manifest_hash: manifest_hash.clone(),
+                ext_descriptor_hash: ext_descriptor_hash.clone(),
+                descendant_manifest_paths: descendant_paths,
+            });
+            out.insert(cid, scope_hash);
+        }
+    }
+    Ok(out)
+}
+
+/// Best-effort GC of `.harness/evidence/<task>/submission-NNN/` directories
+/// per `docs/PLAN.md` §4.4.1:
+///
+/// - missing `evidence.json` → aborted submission, delete.
+/// - present `evidence.json` but no matching `evidence_records` row → the
+///   ledger transaction never committed, delete.
+///
+/// Submissions whose ledger row exists are kept as history.
+fn gc_orphan_submissions(session: &StateSession) {
+    let evidence_root = session.harness_dir.join("evidence");
+    let Ok(read) = std::fs::read_dir(&evidence_root) else {
+        return;
+    };
+    for task_entry in read.flatten() {
+        if !task_entry.path().is_dir() {
+            continue;
+        }
+        let Ok(submissions) = std::fs::read_dir(task_entry.path()) else {
+            continue;
+        };
+        for sub in submissions.flatten() {
+            let sub_path = sub.path();
+            if !sub_path.is_dir() {
+                continue;
+            }
+            let evidence_json = sub_path.join("evidence.json");
+            let task_id = task_entry.file_name().to_string_lossy().to_string();
+            let submission_id = sub_path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let keep = if evidence_json.is_file() {
+                ledger_has_submission(&session.db, &task_id, &submission_id).unwrap_or(false)
+            } else {
+                false
+            };
+            if !keep {
+                if let Err(err) = std::fs::remove_dir_all(&sub_path) {
+                    tracing::warn!(path = ?sub_path, %err, "could not GC orphan submission");
+                }
+            }
+        }
+    }
+}
+
+fn ledger_has_submission(
+    db: &crate::state::Db,
+    task_id: &str,
+    submission_id: &str,
+) -> Result<bool> {
+    let mut stmt = db.conn().prepare(
+        "SELECT 1 FROM evidence_records WHERE task_id = ?1 AND submission_id = ?2 LIMIT 1",
+    )?;
+    let exists = stmt.exists(params![task_id, submission_id])?;
+    Ok(exists)
+}
+
 /// Run the orchestrator and return the rendered report. Persists tasks
 /// + notes into the state DB held by `session`.
 pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<ValidateReport> {
     let workspace_root = &opts.workspace_root;
     let now_unix = unix_seconds_now();
     let case_insensitive = is_case_insensitive_fs(&session.harness_dir);
+
+    // 0. Best-effort cleanup of orphan submission dirs from interrupted
+    //    earlier evidence calls (PLAN.md §4.4.1).
+    gc_orphan_submissions(session);
 
     // 1. Discover manifests and parse each one.
     let manifest_entries = discover_manifests(workspace_root)?;
@@ -100,8 +216,8 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
             let effective_files = effective_files_for(
                 &scope_files,
-                &m.scope_prefix,
-                &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
+                &normalise_prefix(&m.scope_prefix, case_insensitive),
+                &descendant_prefixes(workspace_root, &manifests, m, &check.uses, case_insensitive),
             );
             let effective_file_paths: Vec<String> =
                 effective_files.iter().map(|(p, _)| p.clone()).collect();
@@ -422,11 +538,17 @@ fn prefix_is_strict_ancestor(parent: &str, child: &str) -> bool {
 /// Compute the relative-path *prefixes* of every deeper manifest that
 /// declares a check of the same `capability` as the current one. Used
 /// to subtract files from the parent's effective scope.
+///
+/// The returned prefixes are normalised the **same way** the keys in
+/// `scope_files` are (NFC + optional lowercase) so a case-insensitive
+/// filesystem doesn't accidentally desync the comparison and break the
+/// carve-out.
 fn descendant_prefixes(
     _workspace_root: &Path,
     manifests: &[LoadedManifest],
     current: &LoadedManifest,
     capability: &str,
+    case_insensitive: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
     for other in manifests {
@@ -437,10 +559,19 @@ fn descendant_prefixes(
             continue;
         }
         if other.parsed.checks.values().any(|c| c.uses == capability) {
-            out.push(other.scope_prefix.clone());
+            out.push(normalise_prefix(&other.scope_prefix, case_insensitive));
         }
     }
     out
+}
+
+fn normalise_prefix(prefix: &str, case_insensitive: bool) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let mut s = prefix.nfc().collect::<String>();
+    if case_insensitive {
+        s = s.to_lowercase();
+    }
+    s
 }
 
 /// Workspace-relative paths of every deeper manifest that declares a

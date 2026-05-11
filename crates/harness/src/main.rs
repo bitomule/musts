@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use harness_core::bootstrap::StateSession;
+use harness_core::evidence::{submit, EvidenceSubmissionResult};
 use harness_core::extension::runtime::RuntimeOptions;
 use harness_core::manifest::discover as discover_manifests;
 use harness_core::report::{render_json, render_text, ValidateReport};
@@ -41,6 +42,17 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Record evidence for a task issued by the most recent `harness validate`.
+    Evidence {
+        /// Task id from the validate report.
+        task_id: String,
+        /// Freeform summary of the validation result.
+        #[arg(long)]
+        text: Option<String>,
+        /// Asset file path. Repeat for multiple assets.
+        #[arg(long = "asset", value_name = "PATH")]
+        assets: Vec<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -59,6 +71,11 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     match &cli.command {
         Command::Validate { json } => validate_command(cli.workspace.as_deref(), *json),
+        Command::Evidence {
+            task_id,
+            text,
+            assets,
+        } => evidence_command(cli.workspace.as_deref(), task_id, text.as_deref(), assets),
     }
 }
 
@@ -117,6 +134,54 @@ fn validate_command(
     } else {
         Ok(ExitCode::from(1))
     }
+}
+
+fn evidence_command(
+    explicit_workspace: Option<&std::path::Path>,
+    task_id: &str,
+    text: Option<&str>,
+    assets: &[PathBuf],
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let mut session = match StateSession::acquire(&root) {
+        Ok(s) => s,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let runtime_options = RuntimeOptions::from_env(root.clone());
+    let asset_refs: Vec<&std::path::Path> = assets.iter().map(|p| p.as_path()).collect();
+    let inputs = harness_core::evidence::submit::SubmissionInputs {
+        task_id,
+        text,
+        asset_paths: &asset_refs,
+    };
+    match submit(&mut session, &root, &runtime_options, &inputs) {
+        Ok(result) => {
+            print_evidence_result(&result);
+            Ok(ExitCode::from(0))
+        }
+        Err(err) => Ok(report_error(err)),
+    }
+}
+
+fn print_evidence_result(result: &EvidenceSubmissionResult) {
+    println!(
+        "Evidence accepted for `{}` (submission {}).",
+        result.task_id, result.submission_id
+    );
+    if !result.satisfied.is_empty() {
+        println!("Satisfied:");
+        for s in &result.satisfied {
+            println!("  - {s}");
+        }
+    }
+    if let Some(summary) = &result.summary {
+        println!("Summary: {summary}");
+    }
+    println!("\nRun `harness validate` again to confirm the report is now clean.");
 }
 
 fn report_error(err: Error) -> ExitCode {

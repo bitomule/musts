@@ -68,6 +68,35 @@ pub enum Error {
     StateDirReadOnly,
 
     // -----------------------------------------------------------------------
+    // Evidence errors (exit code 2 for stale/unknown, 1 for extension reject)
+    // -----------------------------------------------------------------------
+    #[error("task `{task_id}` no longer applies — run `harness validate`")]
+    TaskNotFound { task_id: String },
+
+    #[error(
+        "evidence for task `{task_id}` is stale: files covered by this task changed after the task was issued — run `harness validate` again and follow the new task list"
+    )]
+    EvidenceStale { task_id: String },
+
+    #[error(
+        "extension `{capability}` over-claimed satisfies for task `{task_id}`: unexpected check_id(s) {unexpected:?}"
+    )]
+    EvidenceOverclaim {
+        task_id: String,
+        capability: String,
+        unexpected: Vec<String>,
+    },
+
+    /// Returned when the extension's evidence response is `accepted: false`.
+    /// The CLI maps this to exit code 1 (vs. 2 for stale/configuration).
+    #[error("evidence for task `{task_id}` was rejected by `{capability}`: {message}")]
+    EvidenceRejected {
+        task_id: String,
+        capability: String,
+        message: String,
+    },
+
+    // -----------------------------------------------------------------------
     // Internal / I/O errors (exit code 70)
     // -----------------------------------------------------------------------
     #[error("I/O error at {path}: {source}")]
@@ -101,7 +130,11 @@ impl Error {
             | Error::ExtensionTimeout { .. }
             | Error::MissingExtension { .. }
             | Error::StateDirReadOnly
-            | Error::LockBusy => 2,
+            | Error::LockBusy
+            | Error::TaskNotFound { .. }
+            | Error::EvidenceStale { .. }
+            | Error::EvidenceOverclaim { .. } => 2,
+            Error::EvidenceRejected { .. } => 1,
             Error::Io { .. } | Error::Db { .. } => 70,
         }
     }
