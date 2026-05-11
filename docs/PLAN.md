@@ -600,12 +600,33 @@ Toolchain pinned in `rust-toolchain.toml` to `1.81` (stable as of writing — bu
 
 ## 9. Phase plan and checkpoints
 
-Each phase ends with a runnable demo + green tests for everything implemented so far.
+Each phase ends with a runnable demo + green tests for everything implemented so far, **followed by the per-phase review loop in §9.0**. Do not start the next phase until the current one exits the loop clean.
+
+### 9.0 Per-phase review loop (mandatory)
+
+After every phase's `✅` checkpoint is green, run this loop before moving on:
+
+1. **Commit the phase's work** so the reviewer reads a stable snapshot.
+2. **Spawn a fresh `general-purpose` subagent** (a new one each round — no shared context with prior reviewers) with this brief:
+   - Read `docs/harness-validation-plan.md` (spec) and `docs/PLAN.md` (this plan).
+   - Read the code landed in this phase only (the diff against the previous phase's tip, plus any files it materially depends on).
+   - Hunt for **substantive** issues: spec/plan deviations, contract bugs, unhandled failure modes, missing tests for behaviour the phase claims to deliver, internal contradictions between code and PLAN.md. Skip nitpicks.
+   - Return a numbered list (max 8) — each entry: one-line headline, 2–3 sentences of explanation citing file:line, a concrete fix. If clean, the reviewer responds exactly `No blocking issues found. Phase N is ready to land.`
+3. **Apply the feedback** as one or more follow-up commits. If a fix changes the contract documented in PLAN.md, update PLAN.md in the same commit so docs and code never drift.
+4. **Re-run the phase's tests** (`make test` + `make e2e` scoped to the phase's scenarios). If green, **spawn another fresh subagent** for round 2.
+5. **Stop when a fresh subagent returns `No blocking issues found.`** That phase is done.
+
+Rules of the loop:
+- Always a **new** subagent per round; never reuse one mid-loop. Reuse causes the reviewer to defer to its earlier opinions.
+- Cap at **5 review rounds per phase**. If a phase needs more, the implementation has diverged from PLAN.md — stop, update PLAN.md to reflect what was actually built (or rip it out and try again), and restart.
+- The reviewer never writes code. It only finds issues. The main agent applies the fixes.
+- A `No blocking issues found.` from one reviewer is enough — we do not require two consecutive clean rounds. The 5-round audit of PLAN.md itself was sufficient prior art that the bar "one fresh reviewer says it's clean" reliably catches the real bugs.
 
 ### Phase 0 — Workspace skeleton *(½ day)*
 - Create the Cargo workspace, four crates (`harness-protocol`, `harness-extension-util`, `harness-core`, `harness`), two extension binaries with `main()` returning `Ok(())`, and the stub test extension binary under `tests/fixtures/stub_extension/`.
 - `Makefile`, `rust-toolchain.toml`, `.gitignore`, `docs/architecture.md` placeholder.
 - ✅ `cargo test --workspace` runs (no tests yet) and `cargo build --workspace` succeeds.
+- 🔁 Run §9.0 review loop until clean before starting Phase 1.
 
 ### Phase 1 — Manifest model + state ground work *(2 days)*
 - `harness-protocol` types defined and snapshot-serded.
@@ -614,6 +635,7 @@ Each phase ends with a runnable demo + green tests for everything implemented so
 - `snapshot::fingerprint`, `snapshot::scope`.
 - `harness validate` walks a workspace and exits 0 without error when there are no manifests (a workspace with `.git` but no `HARNESS.yml` is trivially clean — printed as "Harness validation clean. No HARNESS.yml files found."). When manifests exist but the extension loader is not wired yet, fail with a clearly-labelled "Phase 1 only — extension loading lands in Phase 2" error to make the placeholder visible. The Phase 2 wiring then replaces this with the scenario-20 behaviour (exit 2, capability has no implementor) — no contradiction remains by end of Phase 2.
 - ✅ Unit tests for every module + one integration test on a two-manifest fixture; one E2E test for the no-HARNESS.yml empty-workspace path.
+- 🔁 Run §9.0 review loop until clean before starting Phase 2.
 
 ### Phase 2 — Extension loading + IPC *(2 days)*
 - `extension::descriptor` loads `.harness/extensions/*/extension.yml`.
@@ -621,6 +643,7 @@ Each phase ends with a runnable demo + green tests for everything implemented so
 - Schema validation of `with` payloads against extension-declared schemas.
 - Stub extension binary used by tests.
 - ✅ Integration test: round-trip with stub extension; bad schema rejected; timeout exercised.
+- 🔁 Run §9.0 review loop until clean before starting Phase 3.
 
 ### Phase 3 — `harness validate` report *(2 days)*
 - `validate.rs` orchestrator: dirty-scope detection, fan-out to extensions, persist tasks.
@@ -628,6 +651,7 @@ Each phase ends with a runnable demo + green tests for everything implemented so
 - Idempotent re-runs: no extra writes if nothing changed.
 - Uses the **stub** extension for all tests in this phase (modes per §7.2.1).
 - ✅ E2E scenarios passing with the stub at the resolve layer only: **2 (first_run_emits_tasks)**, **8 (bad_manifest_errors)**, **9a (resolve-side `extension_failure` — every `HARNESS_STUB_RESOLVE_MODE`)**, **10 (json_output)**, **15 (concurrent_validate_locks)**, **16 (unicode_path_stability)**, **17 (submodule_workspace_root)**. Insta snapshots checked in.
+- 🔁 Run §9.0 review loop until clean before starting Phase 4.
 
 ### Phase 4 — `harness evidence` command + ledger semantics *(2 days)*
 - `evidence::store` copies assets, allocates submission dirs.
@@ -635,25 +659,29 @@ Each phase ends with a runnable demo + green tests for everything implemented so
 - Stale-snapshot detection (per-task `task_snapshot_hash`) and rendered rejection.
 - Re-running `validate` after a green ledger row is found returns clean.
 - ✅ E2E scenarios that need the ledger but can still use the stub: **1 (clean_repo_clean_report)**, **3 (evidence_loop)**, **4 (modify_file_reopens_task)**, **5 (stale_evidence_rejected)**, **9b (evidence-side `extension_failure` — every `HARNESS_STUB_EVIDENCE_MODE`)**, **11 (partial_accept)**, **12 (same_local_id_two_manifests)**, **13 (unrelated_edit_does_not_stale)**, **14 (stale_task_id_rejected)**.
+- 🔁 Run §9.0 review loop until clean before starting Phase 5.
 
 ### Phase 5 — `bazel/build` reference extension + shared util *(1.5 days)*
 - Land `harness-extension-util` first (stdio framing helpers, asset-kind classification by MIME, response-size guard). Phase 6 reuses it; doing it now avoids a retroactive refactor.
 - Implements §16.1 deepest-target policy. No transitive-satisfy in MVP — the §4.5 carve-out plus the convergence model in §4.5 keep the loop closed.
 - Evidence validation: text + log asset, log non-empty.
 - ✅ E2E scenario **6 (bazel_picks_deepest_target)** passes against the real binary; build half of the §15 worked example passes.
+- 🔁 Run §9.0 review loop until clean before starting Phase 6.
 
 ### Phase 6 — `mav/expect` reference extension *(1 day)*
 - Implements §16.2 grouping.
 - Evidence validation: kind-by-kind checks (screenshots image/*, mav-report parseable JSON, …).
 - ✅ E2E scenario **7 (mav_groups_expectations)** plus the full §15 worked example pass.
+- 🔁 Run §9.0 review loop until clean before starting Phase 7.
 
 ### Phase 7 — Agent skill + docs *(½ day)*
 - `docs/skill.md` based on spec §14.1 — copy-pasteable into Claude/Codex skill folders. **Must include the "record evidence for every task from the current `harness validate` output before re-running `harness validate`" rule**: re-running `validate` truncates the previous run's tasks table (§4.1), so any un-recorded task ids from that run will be rejected with "task no longer applies." This is the single most likely agent-loop bug; the skill addresses it explicitly.
 - `docs/architecture.md` filled in.
 - `docs/extensions.md` describes the JSON contract for third-party extension authors.
 - ✅ The §19 success criterion runs end-to-end on `fixtures/login-app/`.
+- 🔁 Run §9.0 review loop a final time over the MVP as a whole before declaring §11 (Definition of Done) met.
 
-Total: ~10–12 working days for a single contributor. Each phase is its own PR; the repo stays buildable and tested at the tip of every PR.
+Total: ~10–12 working days of net implementation, plus 1–3 review-loop rounds per phase. Each phase is its own PR; the repo stays buildable and tested at the tip of every PR.
 
 ---
 
