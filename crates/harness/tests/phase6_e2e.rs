@@ -157,6 +157,58 @@ checks:
 
 #[test]
 #[serial]
+fn mav_rejects_non_json_mav_report() {
+    // PLAN.md §6.2 mandates mav-report must be parseable JSON. Submit
+    // garbage with `application/json` MIME and confirm rejection.
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        &dir.path().join("HARNESS.yml"),
+        r#"version: 1
+checks:
+  flow:
+    uses: mav/expect
+    with:
+      expectations:
+        - E
+      evidence:
+        - mav-report
+"#,
+    );
+    install_mav_descriptor(dir.path());
+
+    let out = bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .arg("--json")
+        .assert()
+        .failure()
+        .code(1);
+    let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let task_id = v["tasks"][0]["id"].as_str().unwrap().to_string();
+
+    // Garbage bytes, but the file ends in .json so MIME detection
+    // returns application/json, classifying it as mav-report.
+    let assets = TempDir::new().unwrap();
+    let report = assets.path().join("report.json");
+    fs::write(&report, b"this is not valid JSON at all").unwrap();
+    bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("evidence")
+        .arg(&task_id)
+        .arg("--text")
+        .arg("ok")
+        .arg("--asset")
+        .arg(&report)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("not parseable JSON"));
+}
+
+#[test]
+#[serial]
 fn full_section_15_worked_example() {
     // Mirrors spec §15: root bazel/build, App/Login bazel/build +
     // mav/expect. Modifying App/Login/LoginView.swift dirties both

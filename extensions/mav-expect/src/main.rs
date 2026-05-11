@@ -14,6 +14,7 @@
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::process::ExitCode;
 
 use harness_extension_util::{asset_kind, ipc_main};
@@ -186,6 +187,7 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
         }
     }
 
+    let workspace_root = Path::new(&request.workspace_root);
     for kind in &required_kinds {
         let entries = classified.get(kind);
         match entries {
@@ -199,12 +201,42 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
                         kind: kind.clone(),
                         message: format!("{} asset `{}` is empty.", human_kind(kind), asset.path),
                     });
+                    continue;
                 }
                 if kind == "mav-report" || kind == "accessibility-tree" {
-                    // The byte-level check is left to the harness core
-                    // (we already know the asset is JSON-typed); we
-                    // assume the file exists on disk in the workspace.
-                    // A future version could parse the file.
+                    // PLAN.md §6.2: mav-report / accessibility-tree must
+                    // be parseable JSON. We read the file off disk
+                    // (workspace-relative path emitted by core's
+                    // evidence::store) and try a Value parse.
+                    for asset in list {
+                        let abs = workspace_root.join(&asset.path);
+                        match std::fs::read(&abs) {
+                            Ok(bytes) => {
+                                if let Err(err) =
+                                    serde_json::from_slice::<serde_json::Value>(&bytes)
+                                {
+                                    missing.push(MissingEvidence {
+                                        kind: kind.clone(),
+                                        message: format!(
+                                            "{} asset `{}` is not parseable JSON: {err}",
+                                            human_kind(kind),
+                                            asset.path
+                                        ),
+                                    });
+                                }
+                            }
+                            Err(err) => {
+                                missing.push(MissingEvidence {
+                                    kind: kind.clone(),
+                                    message: format!(
+                                        "could not read {} asset `{}`: {err}",
+                                        human_kind(kind),
+                                        asset.path
+                                    ),
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -403,9 +435,18 @@ mod tests {
         assets: Vec<EvidenceAsset>,
         required_kinds: Vec<&str>,
     ) -> EvidenceValidationRequest {
+        evidence_req_with_root(text, assets, required_kinds, "/repo")
+    }
+
+    fn evidence_req_with_root(
+        text: Option<&str>,
+        assets: Vec<EvidenceAsset>,
+        required_kinds: Vec<&str>,
+        workspace_root: &str,
+    ) -> EvidenceValidationRequest {
         EvidenceValidationRequest {
             protocol_version: PROTOCOL_VERSION,
-            workspace_root: "/repo".into(),
+            workspace_root: workspace_root.into(),
             task: EvidenceTaskRef {
                 id: "mav-expect-root".into(),
                 extension: "mav/expect".into(),
@@ -446,17 +487,39 @@ mod tests {
 
     #[test]
     fn evidence_accepts_all_required_kinds() {
-        let resp = evidence(evidence_req(
+        // mav-report path needs a real file we can parse, so build a
+        // temp workspace and use workspace-relative asset paths.
+        let workspace = tempfile::tempdir().unwrap();
+        let report = workspace.path().join("c.json");
+        std::fs::write(&report, br#"{"summary":"ok"}"#).unwrap();
+        let resp = evidence(evidence_req_with_root(
             Some("ok"),
             vec![
                 asset("a.png", "image/png", 100),
                 asset("b.mp4", "video/mp4", 100),
-                asset("c.json", "application/json", 100),
+                asset("c.json", "application/json", 16),
             ],
             vec!["screenshot", "video", "mav-report"],
+            workspace.path().to_str().unwrap(),
         ))
         .unwrap();
-        assert!(resp.accepted);
+        assert!(resp.accepted, "missing: {:?}", resp.missing);
+    }
+
+    #[test]
+    fn evidence_rejects_invalid_mav_report_json() {
+        let workspace = tempfile::tempdir().unwrap();
+        let report = workspace.path().join("report.json");
+        std::fs::write(&report, b"not valid json").unwrap();
+        let resp = evidence(evidence_req_with_root(
+            Some("ok"),
+            vec![asset("report.json", "application/json", 14)],
+            vec!["mav-report"],
+            workspace.path().to_str().unwrap(),
+        ))
+        .unwrap();
+        assert!(!resp.accepted);
+        assert!(resp.missing.iter().any(|m| m.message.contains("not parseable JSON")));
     }
 
     #[test]

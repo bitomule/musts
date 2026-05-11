@@ -96,14 +96,22 @@ checks:
         .failure()
         .code(1);
     let v: serde_json::Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
-    // Exactly one task: the deepest target. Root is ignored.
+    // Exactly one task: the deepest target. The task subsumes both
+    // check_ids so a single evidence submission converges the loop.
     assert_eq!(v["tasks"].as_array().unwrap().len(), 1);
     let task = &v["tasks"][0];
     assert!(task["title"]
         .as_str()
         .unwrap()
         .contains("//App/Login:Login"));
-    assert_eq!(task["satisfies"][0], "App/Login/login-build");
+    let satisfies: Vec<String> = task["satisfies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap().to_string())
+        .collect();
+    assert!(satisfies.contains(&"App/Login/login-build".to_string()), "{satisfies:?}");
+    assert!(satisfies.contains(&"root/app-build".to_string()), "{satisfies:?}");
     let ignored = v["ignored_checks"].as_array().unwrap();
     assert_eq!(ignored.len(), 1);
     assert_eq!(ignored[0]["id"], "root/app-build");
