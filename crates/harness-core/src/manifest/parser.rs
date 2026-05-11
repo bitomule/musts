@@ -54,8 +54,16 @@ struct ManifestFile {
 #[derive(Debug, Deserialize)]
 struct RawCheck {
     uses: String,
-    #[serde(default)]
+    #[serde(default = "default_with")]
     with: serde_yaml::Value,
+}
+
+/// Absent `with:` defaults to an empty mapping rather than `null`. This
+/// lets extensions that take no parameters declare a strict schema
+/// (`{"type":"object","additionalProperties":false}`) without also
+/// having to allow `null`.
+fn default_with() -> serde_yaml::Value {
+    serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
 }
 
 /// Parse a `HARNESS.yml` file from bytes. `path` is used for error messages
@@ -266,9 +274,11 @@ checks:
     }
 
     #[test]
-    fn with_can_be_absent() {
-        // The core deliberately accepts absent `with` and passes Null to
-        // the extension; schema validation lives in Phase 2.
+    fn absent_with_defaults_to_empty_object() {
+        // Extensions that take no `with` parameters should be able to
+        // declare a strict schema (`{"type":"object",
+        // "additionalProperties":false}`); defaulting absent `with` to
+        // `{}` instead of `null` lets that schema match.
         let yaml = br#"
 version: 1
 checks:
@@ -276,8 +286,23 @@ checks:
     uses: custom/noop
 "#;
         let manifest = parse(&p(), yaml).unwrap();
+        assert_eq!(manifest.checks["free"].with_payload, serde_json::json!({}));
+    }
+
+    #[test]
+    fn explicit_null_with_is_preserved() {
+        // `with: null` written by hand stays null — the default only
+        // applies to a fully-absent field.
+        let yaml = br#"
+version: 1
+checks:
+  explicit:
+    uses: custom/noop
+    with: null
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
         assert_eq!(
-            manifest.checks["free"].with_payload,
+            manifest.checks["explicit"].with_payload,
             serde_json::Value::Null
         );
     }
