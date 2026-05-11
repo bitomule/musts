@@ -18,6 +18,8 @@ ignore = { workspace = true }
 walkdir = { workspace = true }
 fs2 = { workspace = true }
 unicode-normalization = { workspace = true }
+shell-words = { workspace = true }
+jsonschema = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 time = { workspace = true }
@@ -26,6 +28,7 @@ time = { workspace = true }
 tempfile = { workspace = true }
 insta = { workspace = true }
 rstest = { workspace = true }
+serial_test = { workspace = true }
 
 [lints]
 workspace = true

@@ -11,5 +11,10 @@ description = "Configurable test stub for the harness ⇄ extension protocol. Be
 name = "stub-extension"
 path = "src/main.rs"
 
+[dependencies]
+harness-protocol = { path = "../../../crates/harness-protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

@@ -32,6 +32,34 @@ pub enum Error {
         source: serde_yaml::Error,
     },
 
+    #[error("manifest {manifest_path}: check `{check_id}` `with` payload violates {capability} schema at `{pointer}`: {message}")]
+    WithSchema {
+        manifest_path: PathBuf,
+        check_id: String,
+        capability: String,
+        pointer: String,
+        message: String,
+    },
+
+    #[error("extension descriptor at {path}: {message}")]
+    ExtensionDescriptor { path: PathBuf, message: String },
+
+    #[error("extension `{capability}` failed: {message}")]
+    ExtensionFailure { capability: String, message: String },
+
+    #[error("extension `{capability}` timed out after {timeout_seconds}s")]
+    ExtensionTimeout {
+        capability: String,
+        timeout_seconds: u64,
+    },
+
+    #[error("no extension implements capability `{capability}` referenced by check `{check_id}` in {manifest_path}")]
+    MissingExtension {
+        manifest_path: PathBuf,
+        check_id: String,
+        capability: String,
+    },
+
     #[error(".harness/ is not writable; harness needs to create state.sqlite")]
     StateDirReadOnly,
 
@@ -63,6 +91,11 @@ impl Error {
             | Error::WorkspaceCanonicalisation { .. }
             | Error::Manifest { .. }
             | Error::ManifestYaml { .. }
+            | Error::WithSchema { .. }
+            | Error::ExtensionDescriptor { .. }
+            | Error::ExtensionFailure { .. }
+            | Error::ExtensionTimeout { .. }
+            | Error::MissingExtension { .. }
             | Error::StateDirReadOnly
             | Error::LockBusy => 2,
             Error::Io { .. } | Error::Db { .. } => 70,
