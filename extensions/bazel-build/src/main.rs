@@ -60,22 +60,37 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
         }
     }
 
-    // Now apply deepest-target policy: for every scope, ignore it if a
-    // strictly deeper scope is also present (handled by the same
-    // resolve cycle).
+    // Now apply deepest-target policy: every scope owns a task, except
+    // when a *deeper* same-capability scope exists in the same run — in
+    // that case the deeper scope's task subsumes the ancestor. The
+    // ancestor's check_ids are appended to the deeper task's
+    // `satisfies` so that recording evidence once converges both
+    // checks (PLAN.md §4.2 partial-accept rule: extension's satisfies
+    // is authoritative).
     let scopes: Vec<String> = by_scope.keys().cloned().collect();
     let mut ignored = Vec::new();
     let mut tasks = Vec::new();
-    for (scope, (target, satisfies, depth)) in &by_scope {
+    for (scope, (target, satisfies, _depth)) in &by_scope {
         let has_deeper = scopes.iter().any(|other| is_deeper(other, scope));
         if has_deeper {
             for id in satisfies {
                 ignored.push(IgnoredCheck {
                     id: id.clone(),
-                    reason: "a deeper bazel/build target covers the changed scope".into(),
+                    reason: "subsumed by a deeper bazel/build target in the same run".into(),
                 });
             }
             continue;
+        }
+        // Pull every strictly-ancestor scope's checks into this task's
+        // satisfies. They are still listed in ignored_checks above; the
+        // ledger writes one row per accepted check.
+        let mut merged_satisfies = satisfies.clone();
+        for (other_scope, (_t, other_satisfies, _d)) in &by_scope {
+            if is_deeper(scope, other_scope) {
+                for id in other_satisfies {
+                    merged_satisfies.push(id.clone());
+                }
+            }
         }
         let task_id = format!("bazel-build-{}", task_slug(scope));
         let title = format!("Build {}", target);
@@ -83,7 +98,7 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
             id: task_id,
             extension: "bazel/build".into(),
             title,
-            satisfies: satisfies.clone(),
+            satisfies: merged_satisfies,
             parallelizable: true,
             instructions: vec![
                 format!("Run `bazel build {target}`."),
@@ -105,7 +120,6 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
                 }],
             },
         });
-        let _ = depth;
     }
     for id in malformed {
         ignored.push(IgnoredCheck {
@@ -247,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn deepest_target_wins_when_both_root_and_child_present() {
+    fn deepest_target_subsumes_ancestor_check_into_one_task() {
         let response = resolve(req(vec![
             check("root", "app-build", "//App:App", 0),
             check("App/Login", "login-build", "//App/Login:Login", 2),
@@ -255,10 +269,14 @@ mod tests {
         .unwrap();
         assert_eq!(response.tasks.len(), 1);
         assert!(response.tasks[0].title.contains("//App/Login:Login"));
-        assert_eq!(
-            response.tasks[0].satisfies,
-            vec!["App/Login/login-build".to_string()]
-        );
+        // The task subsumes both the deep check and the ancestor.
+        assert!(response.tasks[0]
+            .satisfies
+            .contains(&"App/Login/login-build".to_string()));
+        assert!(response.tasks[0]
+            .satisfies
+            .contains(&"root/app-build".to_string()));
+        // Ancestor still appears in ignored_checks as diagnostic info.
         assert_eq!(response.ignored_checks.len(), 1);
         assert_eq!(response.ignored_checks[0].id, "root/app-build");
     }

@@ -110,7 +110,7 @@ checks:
     assert!(ignored[0]["reason"]
         .as_str()
         .unwrap()
-        .contains("deeper bazel/build target covers"));
+        .contains("subsumed by a deeper bazel/build target"));
 }
 
 #[test]

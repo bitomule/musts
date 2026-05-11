@@ -960,6 +960,12 @@ dependencies = [
 [[package]]
 name = "mav-expect-extension"
 version = "0.1.0"
+dependencies = [
+ "harness-extension-util",
+ "harness-protocol",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "memchr"

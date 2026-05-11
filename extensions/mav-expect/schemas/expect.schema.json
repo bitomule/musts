@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["expectations", "evidence"],
+  "properties": {
+    "expectations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "screenshot",
+          "video",
+          "mav-report",
+          "accessibility-tree",
+          "logs"
+        ]
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
+}

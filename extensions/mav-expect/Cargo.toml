@@ -11,5 +11,11 @@ description = "Reference mav/expect extension for the harness validation CLI."
 name = "mav-extension"
 path = "src/main.rs"
 
+[dependencies]
+harness-protocol = { path = "../../crates/harness-protocol" }
+harness-extension-util = { path = "../../crates/harness-extension-util" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

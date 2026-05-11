@@ -26,12 +26,21 @@ pub fn read_request<T: DeserializeOwned>() -> Result<T, String> {
 }
 
 /// Serialise `response` to a single JSON document on stdout.
+///
+/// **Flushes stdout** before returning so the parent reliably sees the
+/// payload even when the process exits via `ExitCode`. (Rust's stdout
+/// is fully buffered when connected to a pipe — without an explicit
+/// flush, the bytes can be discarded at exit.)
 pub fn write_response<T: Serialize>(response: &T) -> Result<(), String> {
     let bytes = serde_json::to_vec(response)
         .map_err(|err| format!("could not serialise response: {err}"))?;
-    std::io::stdout()
+    let mut handle = std::io::stdout().lock();
+    handle
         .write_all(&bytes)
         .map_err(|err| format!("could not write stdout: {err}"))?;
+    handle
+        .flush()
+        .map_err(|err| format!("could not flush stdout: {err}"))?;
     Ok(())
 }
 
