@@ -7,6 +7,7 @@ members = [
     "crates/harness",
     "extensions/bazel-build",
     "extensions/mav-expect",
+    "extensions/cargo",
     "tests/fixtures/stub_extension",
 ]
 

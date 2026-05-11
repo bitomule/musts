@@ -252,6 +252,12 @@ fn evidence(req: EvidenceValidationRequest) -> Result<EvidenceValidationResponse
 
 The helper closes stdin before reading stdout (so your `serde_json::from_reader` won't deadlock), flushes stdout on response, surfaces any returned `String` error on stderr, and exits with code 2 on failure. Read [`crates/harness-extension-util/src/lib.rs`](../crates/harness-extension-util/src/lib.rs).
 
+Three Rust reference extensions are shipped:
+
+- [`extensions/bazel-build`](../extensions/bazel-build/) — `bazel/build`, demonstrating the deepest-target subsumption policy across nested scopes.
+- [`extensions/mav-expect`](../extensions/mav-expect/) — `mav/expect`, demonstrating MIME-driven asset classification (screenshots, videos, JSON reports).
+- [`extensions/cargo`](../extensions/cargo/) — `cargo/{fmt,clippy,test}`, demonstrating capability-dispatched log-content heuristics (the same binary serves three capabilities). The repo uses it to validate itself; see the "Self-validation" section of the top-level README.
+
 ## Failure-injection matrix (stub-extension)
 
 The test stub at [`tests/fixtures/stub_extension/`](../tests/fixtures/stub_extension/) implements every PLAN.md §7.2.1 mode and is a useful template for testing core changes that need a misbehaving extension. The env-var matrix:

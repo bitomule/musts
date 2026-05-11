@@ -43,6 +43,53 @@ make lint       # cargo fmt --check && cargo clippy --workspace --all-targets --
 make all        # lint + test + e2e
 ```
 
+## Self-validation
+
+The repository validates itself with its own CLI. Three `cargo` capabilities (`cargo/fmt`, `cargo/clippy`, `cargo/test`) live in [`extensions/cargo`](extensions/cargo/) and validate evidence the agent collects; two scopes (`crates/harness-protocol/` and `extensions/cargo/`) carry `uses: agent` contracts that pin their responsibility as a checklist of facts.
+
+Walk the loop end-to-end:
+
+```bash
+cargo build --release
+ln -sf "$(pwd)/target/release/cargo-extension" \
+       .harness/extensions/cargo/cargo-extension
+
+# Touch something to dirty a scope
+echo "// touch" >> crates/harness-protocol/src/lib.rs
+
+# Pending: 3 cargo-* tasks + 1 agent-* contract task
+./target/release/harness validate
+
+# Capture real cargo output
+mkdir -p /tmp/harness-self-evidence
+{ echo "+ cargo fmt --check"; cargo fmt --check 2>&1; echo "exit=$?"; } \
+  > /tmp/harness-self-evidence/fmt.log
+{ echo "+ cargo clippy --workspace --all-targets -- -D warnings"; \
+  cargo clippy --workspace --all-targets -- -D warnings 2>&1; \
+  echo "exit=$?"; } > /tmp/harness-self-evidence/clippy.log
+cargo test --workspace 2>&1 | tee /tmp/harness-self-evidence/test.log >/dev/null
+
+# Submit evidence
+./target/release/harness evidence cargo-fmt-root \
+  --text "cargo fmt --check exited 0 with no diffs" \
+  --asset /tmp/harness-self-evidence/fmt.log
+./target/release/harness evidence cargo-clippy-root \
+  --text "cargo clippy clean under -D warnings" \
+  --asset /tmp/harness-self-evidence/clippy.log
+./target/release/harness evidence cargo-test-root \
+  --text "cargo test --workspace all green" \
+  --asset /tmp/harness-self-evidence/test.log
+
+# Agent contract: answer each fact in your --text
+./target/release/harness evidence agent-crates-harness-protocol \
+  --text "Fact 1: …  Fact 2: …  Fact 3: …  Fact 4: …"
+
+# Converged
+./target/release/harness validate ; echo "exit=$?"   # → 0
+```
+
+The contract task lists its facts under `Instructions:` in the `validate` output — your evidence text should address each one. Empty text is rejected (`agent_builtin_e2e::text_required`).
+
 ## Docs
 
 - [`docs/harness-validation-plan.md`](docs/harness-validation-plan.md) — the v0.2 design spec.

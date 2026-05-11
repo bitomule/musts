@@ -32,10 +32,21 @@ fixtures/*/.harness/extensions/*/bazel-extension
 fixtures/*/.harness/extensions/*/mav-extension
 fixtures/*/.harness/extensions/*/stub-extension
 
+# Self-validation extension symlinks at the repo root
+.harness/extensions/cargo/cargo-extension
+
 # The root `ledger.lock.yaml` is committed (it carries the team's
 # validated state across clones). The fixture's lock is not — the
 # canonical walkthrough must start with nothing validated.
 fixtures/*/.harness/ledger.lock.yaml
+
+# The fixture is a self-contained harness workspace (it has its own
+# .harness/extensions/ for bazel/build + mav/expect). Hide its
+# HARNESS.yml files from the parent walker so root-level
+# `harness validate` doesn't try to resolve them with the parent's
+# extension index.
+fixtures/*/HARNESS.yml
+fixtures/*/**/HARNESS.yml
 
 # Test scratch space
 /e2e-output/

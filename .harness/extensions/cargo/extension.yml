@@ -1,0 +1,25 @@
+name: cargo
+version: 0.1.0
+
+capabilities:
+  fmt:
+    uses: cargo/fmt
+    schema: schemas/fmt.schema.json
+    resolve:
+      command: ["cargo-extension", "resolve"]
+    evidence:
+      command: ["cargo-extension", "evidence"]
+  clippy:
+    uses: cargo/clippy
+    schema: schemas/clippy.schema.json
+    resolve:
+      command: ["cargo-extension", "resolve"]
+    evidence:
+      command: ["cargo-extension", "evidence"]
+  test:
+    uses: cargo/test
+    schema: schemas/test.schema.json
+    resolve:
+      command: ["cargo-extension", "resolve"]
+    evidence:
+      command: ["cargo-extension", "evidence"]

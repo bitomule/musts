@@ -1,0 +1,9 @@
+version: 1
+
+checks:
+  fmt:
+    uses: cargo/fmt
+  clippy:
+    uses: cargo/clippy
+  test:
+    uses: cargo/test
