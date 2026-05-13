@@ -479,6 +479,11 @@ fn compute_scope_file_inputs(
             .git_ignore(true)
             .git_exclude(true)
             .require_git(false)
+            // `.mustsignore` keeps matched files out of the scope hash so
+            // edits to local logs / scratch artefacts don't re-invalidate
+            // checks. Same syntax + precedence as `.gitignore`. See
+            // discovery::discover for the matching wiring on manifest walk.
+            .add_custom_ignore_filename(".mustsignore")
             .hidden(false)
             .follow_links(false)
             .filter_entry(skip_built_in_ignores)

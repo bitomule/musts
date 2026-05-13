@@ -1,6 +1,6 @@
 ---
 name: musts
-description: Use the `musts` CLI to validate that your changes are done. Run `musts validate` to get the validation todo list, dispatch independent tasks to parallel subagents, record evidence with `musts evidence`, then re-run `musts validate` until it is empty. Use after any code change in a repo that has a `MUSTS.yml`.
+description: Use the `musts` CLI to validate that your changes are done. Run `musts validate` to get the validation todo list, dispatch independent tasks to parallel subagents, record evidence with `musts evidence`, then re-run `musts validate` until it is empty. Use after any code change in a repo that has a `MUSTS.yml`. Also covers adding a `.mustsignore` (gitignore-style file) when local artefacts are making the validation loop noisier than it should be.
 ---
 
 # Musts
@@ -91,6 +91,45 @@ musts evidence <task-id> \
   issue.
 - Don't hand-edit `.musts/ledger.lock.yaml`. `musts evidence` is the only
   writer.
+
+## Adding a `.mustsignore`
+
+`.mustsignore` is `.gitignore` for musts: files it matches are excluded
+from the walker that builds each check's scope hash, so editing them
+never re-invalidates the ledger.
+
+Reach for it when a file is making the loop noisier than it should:
+
+- canonical fixtures the user wants committed but doesn't want gating
+  validation;
+- local artefacts that aren't gitignored (logs in a vendored sub-repo,
+  IDE state outside the standard ignore list);
+- generated files that change far more often than the underlying source.
+
+Don't reach for it to silence a failing check — that's the extension's
+call, not yours.
+
+```bash
+# at the workspace root (or any subdirectory — applies to that subtree,
+# same as nested .gitignore):
+cat > .mustsignore <<'EOF'
+*.log
+scratch/
+!scratch/keep-this.log    # negation works on file patterns
+EOF
+git add .mustsignore
+```
+
+**Commit `.mustsignore`.** If it isn't committed, two clones produce
+different scope hashes for the same code and the lock stops
+reproducing. After adding patterns, run `musts validate` once: any
+check whose scope contents change re-opens, so submit evidence for
+those tasks, then commit the refreshed `.musts/ledger.lock.yaml`.
+
+Gotcha: standard gitignore rule. If you ignore a directory (`fixtures/`),
+you cannot re-include children with `!fixtures/keep`. Use a file-pattern
+(`*.junk` / `!keep.junk`) or ignore the directory's *contents*
+(`fixtures/*` / `!fixtures/keep`).
 
 ## Installing the skill
 
