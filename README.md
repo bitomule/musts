@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="musts logo" width="240">
+</p>
+
 # musts
 
 An agent-first validation loop for code repositories.
