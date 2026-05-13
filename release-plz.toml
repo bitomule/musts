@@ -1,0 +1,66 @@
+[workspace]
+# Group commits by Conventional Commits type in the generated changelog.
+changelog_update = true
+# Don't auto-bump pre-1.0 majors based on breaking changes — solo maintainer
+# decides when to ship a breaking minor.
+semver_check = false
+# Push the tag + create the GitHub Release as part of `release-plz release`.
+git_release_enable = true
+git_tag_enable = true
+# Crates are published in dependency order automatically.
+publish = true
+
+# Workspace members that are not crates.io artifacts. Demo extensions ship
+# inside the musts binary release; the test stub never leaves the repo.
+[[package]]
+name = "cargo-extension"
+release = false
+
+[[package]]
+name = "bazel-build-extension"
+release = false
+
+[[package]]
+name = "mav-expect-extension"
+release = false
+
+[[package]]
+name = "stub-extension"
+release = false
+
+[changelog]
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+> **Pre-1.0:** minor versions may include breaking changes. Patch versions are
+> bug-fix only.
+
+"""
+
+body = """
+## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}{% if commit.breaking %} **(breaking)**{% endif %}
+{%- endfor %}
+{% endfor %}
+"""
+
+commit_parsers = [
+  { message = "^feat", group = "added" },
+  { message = "^fix", group = "fixed" },
+  { message = "^perf", group = "changed" },
+  { message = "^refactor", group = "changed" },
+  { message = "^docs", group = "internal" },
+  { message = "^test", group = "internal" },
+  { message = "^chore", group = "internal" },
+  { message = "^ci", group = "internal" },
+  { message = "^build", group = "internal" },
+]
+
+protect_breaking_commits = true

@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "JSON-over-stdio protocol types shared between musts core and extensions."
+keywords = ["musts", "validation", "agents", "protocol"]
+categories = ["development-tools"]
 
 [dependencies]
 serde = { workspace = true }

@@ -6,9 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Domain logic for the musts validation CLI: manifests, snapshots, state, extensions, evidence, reports."
+keywords = ["musts", "validation", "agents", "cli"]
+categories = ["development-tools"]
 
 [dependencies]
-musts-protocol = { path = "../musts-protocol" }
+musts-protocol = { path = "../musts-protocol", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

@@ -1,0 +1,194 @@
+name: Release
+
+# This workflow is the cargo-dist release pipeline. It is structurally the
+# output of `cargo dist init --yes` against the `[workspace.metadata.dist]`
+# block in the root `Cargo.toml`. Run `cargo dist init --yes` locally and
+# commit the regenerated file whenever the dist config changes, to keep this
+# file in sync with the cargo-dist version pin.
+
+permissions:
+  contents: write
+
+on:
+  pull_request:
+  push:
+    tags:
+      - "**[0-9]+.[0-9]+.[0-9]+*"
+
+env:
+  CARGO_TERM_COLOR: always
+  DIST_VERSION: "0.27.0"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      val: ${{ steps.plan.outputs.manifest }}
+      tag: ${{ !github.event.pull_request && github.ref_name || '' }}
+      tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
+      publishing: ${{ !github.event.pull_request }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install cargo-dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - id: plan
+        run: |
+          cargo dist plan ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }} \
+            --output-format=json > plan-dist-manifest.json
+          echo "manifest=$(cat plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-plan-dist-manifest
+          path: plan-dist-manifest.json
+
+  build-local-artifacts:
+    name: Build (${{ matrix.target }})
+    needs: plan
+    if: ${{ fromJson(needs.plan.outputs.val).releases != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      BUILD_MANIFEST_NAME: target/distrib/${{ matrix.target }}-dist-manifest.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install cargo-dist (unix)
+        if: runner.os != 'Windows'
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - name: Install cargo-dist (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          irm "https://github.com/axodotdev/cargo-dist/releases/download/v$env:DIST_VERSION/cargo-dist-installer.ps1" | iex
+      - name: Install cross-compile toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build
+        run: |
+          cargo dist build ${{ needs.plan.outputs.tag-flag }} \
+            --target=${{ matrix.target }} \
+            --output-format=json > dist-manifest.json
+          cp dist-manifest.json "${BUILD_MANIFEST_NAME}"
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-build-local-${{ matrix.target }}
+          path: |
+            target/distrib/*.tar.xz
+            target/distrib/*.tar.gz
+            target/distrib/*.zip
+            target/distrib/*.sha256
+            ${{ env.BUILD_MANIFEST_NAME }}
+
+  build-global-artifacts:
+    name: Build global artifacts
+    needs: [plan, build-local-artifacts]
+    runs-on: ubuntu-latest
+    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+      - name: Install cargo-dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - name: Build global artifacts (installers, homebrew formula)
+        run: |
+          cargo dist build ${{ needs.plan.outputs.tag-flag }} \
+            --artifacts=global --output-format=json > dist-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-build-global
+          path: |
+            target/distrib/*-installer.sh
+            target/distrib/*-installer.ps1
+            target/distrib/*.rb
+            dist-manifest.json
+
+  host:
+    name: Upload artifacts to release
+    needs: [plan, build-local-artifacts, build-global-artifacts]
+    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+      - name: Install cargo-dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
+      - name: Upload + publish to GitHub
+        run: |
+          cargo dist host ${{ needs.plan.outputs.tag-flag }} \
+            --steps=upload --steps=release \
+            --output-format=json > dist-manifest.json
+
+  publish-homebrew-formula:
+    name: Publish Homebrew formula
+    needs: [plan, host]
+    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAP_REPO: bitomule/homebrew-tap
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - uses: actions/download-artifact@v4
+        with:
+          name: artifacts-build-global
+          path: ./formula
+      - name: Commit formula to tap
+        run: |
+          set -euxo pipefail
+          mkdir -p tap/Formula
+          cp formula/*.rb tap/Formula/
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/
+          if git diff --staged --quiet; then
+            echo "Homebrew formula unchanged; nothing to commit."
+            exit 0
+          fi
+          git commit -m "musts ${{ needs.plan.outputs.tag }}"
+          git push

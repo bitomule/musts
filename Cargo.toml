@@ -50,3 +50,22 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# cargo-dist configuration. Run `cargo dist init` (or `cargo dist generate`)
+# locally after changing these settings to regenerate the release workflow.
+[workspace.metadata.dist]
+cargo-dist-version = "0.27.0"
+ci = "github"
+installers = ["shell", "powershell", "homebrew"]
+tap = "bitomule/homebrew-tap"
+publish-jobs = ["homebrew"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+pr-run-mode = "plan"
+allow-dirty = ["ci"]
+install-updater = false

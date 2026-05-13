@@ -36,21 +36,36 @@ Exit codes:
 - `validate`: 0 clean, 1 pending tasks, 2 configuration / stale / lock error, 70 internal error.
 - `evidence`: 0 accepted, 1 rejected by extension, 2 unknown task / stale snapshot / over-claim, 70 internal error.
 
-## Build
+## Install
+
+```bash
+# Homebrew (macOS / Linux)
+brew install bitomule/tap/musts
+
+# Cargo (from crates.io)
+cargo install musts --locked
+
+# Precompiled binaries
+cargo binstall musts        # or download directly from GitHub Releases
+```
+
+### From source (contributors only)
 
 ```bash
 cargo build --release
 ./target/release/musts validate
 ```
 
-Tests:
+Test suite:
 
 ```bash
 make test       # cargo test --workspace
-make e2e        # cargo test --workspace --release --test '*e2e*'
+make e2e        # cargo test --workspace --release --test '*'
 make lint       # cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
 make all        # lint + test + e2e
 ```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor guide.
 
 ## Self-validation
 
