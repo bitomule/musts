@@ -65,7 +65,7 @@ $MUSTS --workspace . validate
 After the second validate you should see:
 
 ```text
-Harness validation clean.
+Musts validation clean.
 No pending validation tasks for the current workspace snapshot.
 ```
 

@@ -1,4 +1,4 @@
-# Harness Validation Manifest
+# Musts Validation Manifest
 
 Implementation specification, v0.2.
 
@@ -10,11 +10,11 @@ The tool tells an agent what must be validated after a change, how to produce ev
 
 ## 1. One-Line Design
 
-Put local validation manifests next to code. When files change, `harness validate` deterministically reports the validation tasks that are pending. The agent executes those tasks, records text and assets with `harness evidence`, and repeats until no validation tasks remain.
+Put local validation manifests next to code. When files change, `musts validate` deterministically reports the validation tasks that are pending. The agent executes those tasks, records text and assets with `musts evidence`, and repeats until no validation tasks remain.
 
 The completion rule:
 
-> The agent is not done until `harness validate` returns an empty task list for the current workspace state.
+> The agent is not done until `musts validate` returns an empty task list for the current workspace state.
 
 The core idea is deliberately narrow:
 
@@ -42,9 +42,9 @@ It does not:
 - manage Claude hooks
 - manage Codex configuration
 - replace `AGENTS.md` or `CLAUDE.md`
-- model all harness context
+- model all musts context
 - manage semantic facts
-- implement a full harness graph
+- implement a full musts graph
 
 It only answers:
 
@@ -52,7 +52,7 @@ It only answers:
 
 ### 2.2 Agent-First CLI
 
-`harness validate` is a report, not a runner.
+`musts validate` is a report, not a runner.
 
 It does not execute:
 
@@ -72,7 +72,7 @@ The agent executes the tasks.
 The agent records task results with:
 
 ```bash
-harness evidence <task-id> --text "<summary>" --asset <path> --asset <path>
+musts evidence <task-id> --text "<summary>" --asset <path> --asset <path>
 ```
 
 The CLI:
@@ -158,7 +158,7 @@ Therefore, evidence validity is based on content fingerprints and internal snaps
 
 Claude hooks may later enforce:
 
-- run `harness validate` before completion
+- run `musts validate` before completion
 - block "done" if validation tasks remain
 - inject validation context after edits
 
@@ -184,7 +184,7 @@ The mental model is:
 
 ```text
 CI validates repository integration.
-Harness validation validates agent completion.
+Musts validation validates agent completion.
 ```
 
 ### 3.2 Not Another Facts System
@@ -196,7 +196,7 @@ Login rejects invalid email text.
 Discounts apply in deterministic priority order.
 ```
 
-Harness validation captures obligations:
+Musts validation captures obligations:
 
 ```text
 If this area changed, produce evidence that the relevant checks still hold.
@@ -229,7 +229,7 @@ Its prompts are task-specific validation instructions.
 
 ## 4. Core Concepts
 
-### 4.1 `HARNESS.yml`
+### 4.1 `MUSTS.yml`
 
 A scoped validation manifest living in the repository.
 
@@ -239,20 +239,20 @@ Example:
 
 ```text
 repo/
-  HARNESS.yml
+  MUSTS.yml
   App/
-    HARNESS.yml
+    MUSTS.yml
     Login/
-      HARNESS.yml
+      MUSTS.yml
       LoginView.swift
 ```
 
 If `App/Login/LoginView.swift` changes, the applicable manifests are:
 
 ```text
-repo/HARNESS.yml
-repo/App/HARNESS.yml
-repo/App/Login/HARNESS.yml
+repo/MUSTS.yml
+repo/App/MUSTS.yml
+repo/App/Login/MUSTS.yml
 ```
 
 The core collects checks from all applicable manifests and gives them to the relevant extensions.
@@ -261,7 +261,7 @@ The core collects checks from all applicable manifests and gives them to the rel
 
 A check is a declared validation obligation.
 
-Checks live in `HARNESS.yml`.
+Checks live in `MUSTS.yml`.
 
 Each check has:
 
@@ -378,15 +378,15 @@ Recommended initial convention:
 
 ```text
 repo/
-  HARNESS.yml
+  MUSTS.yml
   App/
-    HARNESS.yml
+    MUSTS.yml
     Login/
-      HARNESS.yml
+      MUSTS.yml
       LoginView.swift
       LoginViewModel.swift
     Checkout/
-      HARNESS.yml
+      MUSTS.yml
       DiscountEngine.swift
 ```
 
@@ -478,7 +478,7 @@ Extensions should be repo-local for reproducibility.
 Recommended layout:
 
 ```text
-.harness/
+.musts/
   extensions/
     bazel/
       extension.yml
@@ -495,7 +495,7 @@ Recommended layout:
         mav-extension
 ```
 
-The CLI loads `.harness/extensions/*/extension.yml`.
+The CLI loads `.musts/extensions/*/extension.yml`.
 
 Global extensions can come later.
 
@@ -505,7 +505,7 @@ Global extensions can come later.
 
 ### 7.1 Bazel Extension Descriptor
 
-Example: `.harness/extensions/bazel/extension.yml`
+Example: `.musts/extensions/bazel/extension.yml`
 
 ```yaml
 name: bazel
@@ -531,7 +531,7 @@ capabilities:
 
 ### 7.2 MAV Extension Descriptor
 
-Example: `.harness/extensions/mav/extension.yml`
+Example: `.musts/extensions/mav/extension.yml`
 
 ```yaml
 name: mav
@@ -665,7 +665,7 @@ Example request sent to `bazel/build`:
     {
       "id": "root/app-build",
       "local_id": "app-build",
-      "manifest_path": "HARNESS.yml",
+      "manifest_path": "MUSTS.yml",
       "scope_path": ".",
       "depth": 0,
       "with": {
@@ -675,7 +675,7 @@ Example request sent to `bazel/build`:
     {
       "id": "App/Login/login-build",
       "local_id": "login-build",
-      "manifest_path": "App/Login/HARNESS.yml",
+      "manifest_path": "App/Login/MUSTS.yml",
       "scope_path": "App/Login",
       "depth": 2,
       "with": {
@@ -754,7 +754,7 @@ Example response:
       "instructions": [
         "Run `bazel build //App/Login:Login`.",
         "Capture stdout/stderr as a log asset.",
-        "Record the result with `harness evidence bazel-build-login`."
+        "Record the result with `musts evidence bazel-build-login`."
       ],
       "evidence_contract": {
         "text": {
@@ -829,7 +829,7 @@ The extension decides whether that evidence satisfies the task.
 ### 10.1 Evidence Command
 
 ```bash
-harness evidence <task-id> \
+musts evidence <task-id> \
   --text "<freeform summary>" \
   --asset <path> \
   --asset <path>
@@ -842,7 +842,7 @@ The agent should not hand-craft a complex JSON bundle.
 The agent should do simple things:
 
 ```bash
-harness evidence mav-login-flow \
+musts evidence mav-login-flow \
   --text "Validated valid and invalid email login behavior." \
   --asset /tmp/login-success.png \
   --asset /tmp/login-run.mp4 \
@@ -853,7 +853,7 @@ The CLI:
 
 1. infers MIME types
 2. records file size and metadata
-3. copies assets into `.harness/evidence`
+3. copies assets into `.musts/evidence`
 4. builds the structured submission object
 5. calls the extension
 
@@ -895,17 +895,17 @@ Example request sent to `mav/expect`:
     "text": "Validated two valid email logins and one invalid email error path.",
     "assets": [
       {
-        "path": ".harness/evidence/mav-login-flow/submission-001/success.png",
+        "path": ".musts/evidence/mav-login-flow/submission-001/success.png",
         "mime": "image/png",
         "size": 182331
       },
       {
-        "path": ".harness/evidence/mav-login-flow/submission-001/run.mp4",
+        "path": ".musts/evidence/mav-login-flow/submission-001/run.mp4",
         "mime": "video/mp4",
         "size": 4839102
       },
       {
-        "path": ".harness/evidence/mav-login-flow/submission-001/report.json",
+        "path": ".musts/evidence/mav-login-flow/submission-001/report.json",
         "mime": "application/json",
         "size": 4210
       }
@@ -929,15 +929,15 @@ Example request sent to `mav/expect`:
   "normalized_assets": [
     {
       "kind": "screenshot",
-      "path": ".harness/evidence/mav-login-flow/submission-001/success.png"
+      "path": ".musts/evidence/mav-login-flow/submission-001/success.png"
     },
     {
       "kind": "video",
-      "path": ".harness/evidence/mav-login-flow/submission-001/run.mp4"
+      "path": ".musts/evidence/mav-login-flow/submission-001/run.mp4"
     },
     {
       "kind": "mav-report",
-      "path": ".harness/evidence/mav-login-flow/submission-001/report.json"
+      "path": ".musts/evidence/mav-login-flow/submission-001/report.json"
     }
   ]
 }
@@ -954,7 +954,7 @@ Example request sent to `mav/expect`:
       "message": "No screenshot asset was submitted."
     }
   ],
-  "message": "Evidence is incomplete. Capture a screenshot and submit it with `harness evidence mav-login-flow --asset <path>`."
+  "message": "Evidence is incomplete. Capture a screenshot and submit it with `musts evidence mav-login-flow --asset <path>`."
 }
 ```
 
@@ -968,7 +968,7 @@ Missing:
 
 Next:
 Capture a screenshot and run:
-  harness evidence mav-login-flow --asset <path>
+  musts evidence mav-login-flow --asset <path>
 ```
 
 ### 10.6 Evidence Store Layout
@@ -976,7 +976,7 @@ Capture a screenshot and run:
 Recommended internal layout:
 
 ```text
-.harness/
+.musts/
   evidence/
     mav-login-flow/
       submission-001/
@@ -1003,7 +1003,7 @@ The core writes a normalized record after each submission.
   "assets": [
     {
       "original_path": "/tmp/success.png",
-      "stored_path": ".harness/evidence/mav-login-flow/submission-001/success.png",
+      "stored_path": ".musts/evidence/mav-login-flow/submission-001/success.png",
       "mime": "image/png",
       "size": 182331
     }
@@ -1022,15 +1022,15 @@ The core writes a normalized record after each submission.
 ### 11.1 Required MVP Commands
 
 ```bash
-harness validate
-harness evidence <task-id>
+musts validate
+musts evidence <task-id>
 ```
 
 Everything else is optional.
 
-### 11.2 `harness validate`
+### 11.2 `musts validate`
 
-`harness validate` computes pending validation tasks for the current workspace state.
+`musts validate` computes pending validation tasks for the current workspace state.
 
 It does not execute those tasks.
 
@@ -1048,7 +1048,7 @@ It does not execute those tasks.
 #### Example Output
 
 ```text
-Harness validation pending.
+Musts validation pending.
 
 Task: bazel-build-login
 Title: Build Login module
@@ -1060,7 +1060,7 @@ Instructions:
   1. Run `bazel build //App/Login:Login`.
   2. Save stdout/stderr to a log file.
   3. Record evidence:
-     harness evidence bazel-build-login \
+     musts evidence bazel-build-login \
        --text "bazel build //App/Login:Login succeeded" \
        --asset <build-log>
 
@@ -1079,32 +1079,32 @@ Instructions:
      - video
      - mav-report
   3. Record evidence:
-     harness evidence mav-login-flow \
+     musts evidence mav-login-flow \
        --text "<summary>" \
        --asset <screenshot> \
        --asset <video> \
        --asset <mav-report>
 
 Completion rule:
-  Repeat `harness validate` after recording evidence.
+  Repeat `musts validate` after recording evidence.
   The task is not done until this report is empty.
 ```
 
 #### Clean Output
 
 ```text
-Harness validation clean.
+Musts validation clean.
 No pending validation tasks for the current workspace snapshot.
 ```
 
-### 11.3 `harness evidence`
+### 11.3 `musts evidence`
 
-`harness evidence` registers text and assets for a task.
+`musts evidence` registers text and assets for a task.
 
 #### Syntax
 
 ```bash
-harness evidence <task-id> \
+musts evidence <task-id> \
   --text "<freeform summary>" \
   --asset <path> \
   --asset <path>
@@ -1112,7 +1112,7 @@ harness evidence <task-id> \
 
 #### Behavior
 
-1. Load the task returned by the most recent applicable `harness validate`.
+1. Load the task returned by the most recent applicable `musts validate`.
 2. Copy or register submitted assets into the internal evidence store.
 3. Attach submitted text.
 4. Check whether the current workspace snapshot still matches the task snapshot.
@@ -1145,7 +1145,7 @@ Therefore:
 Recommended:
 
 ```text
-.harness/state.sqlite
+.musts/state.sqlite
 ```
 
 ### 12.3 Conceptual Tables
@@ -1214,12 +1214,12 @@ Stores:
 
 ```text
 App/Login/LoginView.swift
-App/Login/HARNESS.yml
-App/HARNESS.yml
-HARNESS.yml
+App/Login/MUSTS.yml
+App/MUSTS.yml
+MUSTS.yml
 ```
 
-5. For global `harness validate`, use the manifest index instead of recursively searching from scratch.
+5. For global `musts validate`, use the manifest index instead of recursively searching from scratch.
 6. For files in affected scopes, use mtime and size as cheap invalidation checks.
 7. Compute content hash only when metadata differs.
 8. Compute aggregate scope hash from:
@@ -1232,7 +1232,7 @@ manifest hashes + relevant file hashes
 
 ### 12.5 What If Files Change While Evidence Is Being Recorded?
 
-`harness evidence` refreshes the current snapshot before accepting.
+`musts evidence` refreshes the current snapshot before accepting.
 
 If the task was generated for an older snapshot, the CLI rejects the evidence:
 
@@ -1243,7 +1243,7 @@ Reason:
   The workspace files covered by this validation task changed after the task was issued.
 
 Next:
-  Run `harness validate` again and follow the new task list.
+  Run `musts validate` again and follow the new task list.
 ```
 
 The agent never passes snapshot IDs.
@@ -1260,7 +1260,7 @@ The agent modifies files normally.
 
 No hooks are required in the MVP.
 
-### Step 2: Agent Runs `harness validate`
+### Step 2: Agent Runs `musts validate`
 
 The CLI:
 
@@ -1311,17 +1311,17 @@ The CLI does not execute the tasks.
 For each task:
 
 ```bash
-harness evidence <task-id> --text "<summary>" --asset <path> ...
+musts evidence <task-id> --text "<summary>" --asset <path> ...
 ```
 
-If the CLI rejects the evidence, the agent fixes what is missing and calls `harness evidence` again.
+If the CLI rejects the evidence, the agent fixes what is missing and calls `musts evidence` again.
 
 ### Step 7: Agent Repeats Validation
 
 The agent runs:
 
 ```bash
-harness validate
+musts validate
 ```
 
 If new tasks appear, it repeats the loop.
@@ -1341,26 +1341,26 @@ The skill teaches the agent how to loop over it.
 ### 14.1 Skill Draft
 
 ```md
-# Harness Validation Skill
+# Musts Validation Skill
 
 Purpose:
-Ensure repository-defined harness validation is clean before declaring a task done.
+Ensure repository-defined musts validation is clean before declaring a task done.
 
 Protocol:
-1. Run `harness validate`.
+1. Run `musts validate`.
 2. Treat the returned tasks as the validation todo list.
 3. If multiple tasks can be executed independently, use subagents in parallel.
 4. If the report says one task satisfies multiple checks, execute it once.
 5. Do not invent evidence requirements. Use the evidence contract in the task report.
 6. For each task, perform the requested validation using the relevant tool.
 7. Record evidence with:
-   `harness evidence <task-id> --text "<summary>" --asset <path> ...`
-8. If evidence is rejected, fix the missing/invalid evidence and call `harness evidence` again.
-9. Run `harness validate` again.
+   `musts evidence <task-id> --text "<summary>" --asset <path> ...`
+8. If evidence is rejected, fix the missing/invalid evidence and call `musts evidence` again.
+9. Run `musts validate` again.
 10. Repeat until it reports no pending validation tasks.
 
 Hard rule:
-The task is not done until `harness validate` is empty.
+The task is not done until `musts validate` is empty.
 ```
 
 ### 14.2 Grouping Responsibilities
@@ -1383,7 +1383,7 @@ The agent does execution planning over final tasks.
 ### 15.1 Repo Setup
 
 ```yaml
-# /HARNESS.yml
+# /MUSTS.yml
 version: 1
 
 checks:
@@ -1394,7 +1394,7 @@ checks:
 ```
 
 ```yaml
-# /App/Login/HARNESS.yml
+# /App/Login/MUSTS.yml
 version: 1
 
 checks:
@@ -1497,7 +1497,7 @@ The extension decides that the deeper Login target is the right task.
 ```bash
 bazel build //App/Login:Login 2>&1 | tee /tmp/login-build.log
 
-harness evidence bazel-build-login \
+musts evidence bazel-build-login \
   --text "bazel build //App/Login:Login succeeded" \
   --asset /tmp/login-build.log
 ```
@@ -1507,7 +1507,7 @@ harness evidence bazel-build-login \
 The agent uses MAV to drive the app and collect artifacts.
 
 ```bash
-harness evidence mav-login-flow \
+musts evidence mav-login-flow \
   --text "Validated valid email login and invalid email error state using MAV." \
   --asset /tmp/mav-login-success.png \
   --asset /tmp/mav-login-run.mp4 \
@@ -1517,13 +1517,13 @@ harness evidence mav-login-flow \
 ### 15.7 Final Check
 
 ```bash
-harness validate
+musts validate
 ```
 
 Expected:
 
 ```text
-Harness validation clean.
+Musts validation clean.
 No pending validation tasks for the current workspace snapshot.
 ```
 
@@ -1637,21 +1637,21 @@ The user did not configure grouping. The extension decided.
 
 Options:
 
-- `HARNESS.yml`
+- `MUSTS.yml`
 - `VERIFY.yml`
 - `VALIDATE.yml`
-- `.harness.yml`
+- `.musts.yml`
 
 Current recommendation:
 
 ```text
-HARNESS.yml
+MUSTS.yml
 ```
 
 Reason:
 
-- matches the broader harness engineering concept
-- makes room for future harness-related fields
+- matches the broader musts engineering concept
+- makes room for future musts-related fields
 - still scoped to validation in v1
 
 Risk:
@@ -1735,8 +1735,8 @@ Potential ignored directories:
 
 ```text
 .git
-.harness/evidence
-.harness/cache
+.musts/evidence
+.musts/cache
 node_modules
 bazel-bin
 bazel-out
@@ -1811,7 +1811,7 @@ No.
 Future:
 
 ```text
-before done -> run harness validate
+before done -> run musts validate
 if pending -> block/report tasks
 ```
 
@@ -1823,18 +1823,18 @@ if pending -> block/report tasks
 
 Implement:
 
-- parse `HARNESS.yml`
+- parse `MUSTS.yml`
 - require `version: 1`
 - require `checks`
 - require each check to have `uses`
 - allow arbitrary `with`
-- build manifest index in `.harness/state.sqlite`
+- build manifest index in `.musts/state.sqlite`
 - compute simple scope snapshots
 
 Deliverable:
 
 ```bash
-harness validate
+musts validate
 ```
 
 can discover manifests and report schema errors.
@@ -1843,7 +1843,7 @@ can discover manifests and report schema errors.
 
 Implement:
 
-- load `.harness/extensions/*/extension.yml`
+- load `.musts/extensions/*/extension.yml`
 - map `uses` values to capabilities
 - validate `with` payloads with JSON Schema where available
 - call resolver command over stdin JSON
@@ -1852,14 +1852,14 @@ Implement:
 Deliverable:
 
 ```text
-HARNESS.yml checks become extension-generated tasks.
+MUSTS.yml checks become extension-generated tasks.
 ```
 
 ### Phase 3: Validate Report
 
 Implement:
 
-- `harness validate`
+- `musts validate`
 - agent-readable task rendering
 - ignored checks rendering
 - clean state rendering
@@ -1868,17 +1868,17 @@ Implement:
 Deliverable:
 
 ```text
-Agent can run harness validate and receive a task list.
+Agent can run musts validate and receive a task list.
 ```
 
 ### Phase 4: Evidence Recording
 
 Implement:
 
-- `harness evidence <task-id>`
+- `musts evidence <task-id>`
 - `--text`
 - repeatable `--asset`
-- asset copy into `.harness/evidence`
+- asset copy into `.musts/evidence`
 - MIME/type metadata
 - evidence validation command
 - accepted evidence ledger
@@ -1926,7 +1926,7 @@ Responsibilities:
 Implement a reusable skill:
 
 ```text
-Run harness validate.
+Run musts validate.
 Execute returned tasks.
 Record evidence.
 Repeat until clean.
@@ -1948,10 +1948,10 @@ A successful MVP should support this scenario:
 1. A repo has:
 
 ```text
-HARNESS.yml
-App/Login/HARNESS.yml
-.harness/extensions/bazel
-.harness/extensions/mav
+MUSTS.yml
+App/Login/MUSTS.yml
+.musts/extensions/bazel
+.musts/extensions/mav
 ```
 
 2. The agent changes:
@@ -1963,7 +1963,7 @@ App/Login/LoginView.swift
 3. The agent runs:
 
 ```bash
-harness validate
+musts validate
 ```
 
 4. The CLI returns:
@@ -1982,13 +1982,13 @@ It does not return the root full app build if `bazel/build` decides the child bu
 7. The agent runs:
 
 ```bash
-harness validate
+musts validate
 ```
 
 8. The CLI returns:
 
 ```text
-Harness validation clean.
+Musts validation clean.
 No pending validation tasks for the current workspace snapshot.
 ```
 
@@ -2012,7 +2012,7 @@ Potential use:
 
 ```text
 Before final response:
-  run harness validate
+  run musts validate
   if pending tasks exist, block completion
 ```
 
@@ -2029,11 +2029,11 @@ Potential use:
 Future command family:
 
 ```bash
-harness install extension mav
-harness doctor
-harness sync
-harness list extensions
-harness init
+musts install extension mav
+musts doctor
+musts sync
+musts list extensions
+musts init
 ```
 
 ### 20.4 Facts Integration
@@ -2042,7 +2042,7 @@ Possible later link:
 
 ```text
 facts describe semantic truths
-HARNESS.yml says how to validate areas of the repo
+MUSTS.yml says how to validate areas of the repo
 extensions produce evidence
 ```
 
@@ -2085,5 +2085,5 @@ The CLI decides whether the produced evidence is accepted.
 
 The most important product sentence:
 
-> The task is not done until `harness validate` is empty.
+> The task is not done until `musts validate` is empty.
 

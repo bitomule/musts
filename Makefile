@@ -20,7 +20,7 @@ fmt:
 	cargo fmt
 
 install:
-	cargo install --path crates/harness --locked
+	cargo install --path crates/musts --locked
 
 all: lint test e2e
 

@@ -1,13 +1,13 @@
-# Writing a harness extension
+# Writing a musts extension
 
-A harness extension is **any executable** that speaks the JSON-over-stdio protocol described here and in [`PLAN.md`](PLAN.md) §4.6 + §9–§10 of the spec. The reference extensions in this repo are Rust binaries because they ride along the test suite, but the protocol is language-agnostic — a 30-line shell script is just as valid.
+A musts extension is **any executable** that speaks the JSON-over-stdio protocol described here and in [`PLAN.md`](PLAN.md) §4.6 + §9–§10 of the spec. The reference extensions in this repo are Rust binaries because they ride along the test suite, but the protocol is language-agnostic — a 30-line shell script is just as valid.
 
 ## TL;DR — a real extension in 30 lines of bash
 
 The canonical "your first extension" is checked in at [`docs/examples/eslint-check/`](examples/eslint-check/) — a complete `eslint/check` implementation: `eslint-check.sh` (a small `bash` + `jq` script) plus the `extension.yml` next to it.
 
 ```yaml
-# .harness/extensions/eslint/extension.yml
+# .musts/extensions/eslint/extension.yml
 name: eslint
 version: 0.1.0
 capabilities:
@@ -48,7 +48,7 @@ case "$mode" in
 esac
 ```
 
-That's it. No Rust toolchain, no harness-only library, no extension protocol crate. It works because the protocol IS just JSON-in / JSON-out. A Python or Node version is equally short. The full file (with the evidence path written out) is `docs/examples/eslint-check/eslint-check.sh` and is exercised end to end by `crates/harness/tests/shell_extension_e2e.rs`.
+That's it. No Rust toolchain, no musts-only library, no extension protocol crate. It works because the protocol IS just JSON-in / JSON-out. A Python or Node version is equally short. The full file (with the evidence path written out) is `docs/examples/eslint-check/eslint-check.sh` and is exercised end to end by `crates/musts/tests/shell_extension_e2e.rs`.
 
 ## Core capabilities (no extension needed)
 
@@ -66,7 +66,7 @@ The core ships **one built-in capability** so a fresh workspace can use the vali
   ```
   No `evidence: [...]` field. Core supplies a text-required-assets-optional contract and accepts any evidence the agent attaches. See [`PLAN.md`](PLAN.md) §6.0 for the schema and policy.
 
-When `uses: agent` is encountered, no `.harness/extensions/` directory is consulted. If you want to **override** the built-in (e.g. add MIME-specific evidence requirements), ship an extension whose `extension.yml` declares `uses: agent` — descriptor-backed extensions win over built-ins.
+When `uses: agent` is encountered, no `.musts/extensions/` directory is consulted. If you want to **override** the built-in (e.g. add MIME-specific evidence requirements), ship an extension whose `extension.yml` declares `uses: agent` — descriptor-backed extensions win over built-ins.
 
 Everything else is an extension.
 
@@ -74,8 +74,8 @@ Everything else is an extension.
 
 ```text
 <workspace>/
-├── HARNESS.yml                     # one or more manifests anywhere in the tree
-└── .harness/
+├── MUSTS.yml                     # one or more manifests anywhere in the tree
+└── .musts/
     └── extensions/
         └── <name>/
             ├── extension.yml       # this is what core loads
@@ -113,14 +113,14 @@ For each call, core spawns the binary, writes one JSON document to stdin, closes
 
 - **One JSON document per response.** Garbage before or after the document, or multiple concatenated objects, is a protocol error.
 - **stdout is for the response only.** Use stderr for diagnostics — it is captured verbatim and surfaced in error messages.
-- **Always flush stdout before exit.** Rust's `stdout()` is fully buffered when piped; `harness-extension-util::write_response` flushes for you, but if you roll your own you must explicitly flush.
+- **Always flush stdout before exit.** Rust's `stdout()` is fully buffered when piped; `musts-extension-util::write_response` flushes for you, but if you roll your own you must explicitly flush.
 - **Max response size: 4 MiB.** Larger responses are rejected.
-- **Timeout: 30 s.** Configurable for the parent via `HARNESS_EXTENSION_TIMEOUT_SECS`.
+- **Timeout: 30 s.** Configurable for the parent via `MUSTS_EXTENSION_TIMEOUT_SECS`.
 - **`protocol_version: 1`** in every response. Responses with any other value are rejected.
 
 ### Resolve
 
-`<binary> resolve <capability>` receives a [`ResolveRequest`](../crates/harness-protocol/src/lib.rs):
+`<binary> resolve <capability>` receives a [`ResolveRequest`](../crates/musts-protocol/src/lib.rs):
 
 ```json
 {
@@ -132,7 +132,7 @@ For each call, core spawns the binary, writes one JSON document to stdin, closes
     {
       "id": "App/Login/login-build",
       "local_id": "login-build",
-      "manifest_path": "App/Login/HARNESS.yml",
+      "manifest_path": "App/Login/MUSTS.yml",
       "scope_path": "App/Login",
       "depth": 2,
       "with": { "target": "//App/Login:Login" }
@@ -177,7 +177,7 @@ For each call, core spawns the binary, writes one JSON document to stdin, closes
 
 ### Evidence
 
-`<binary> evidence <capability>` receives an [`EvidenceValidationRequest`](../crates/harness-protocol/src/lib.rs):
+`<binary> evidence <capability>` receives an [`EvidenceValidationRequest`](../crates/musts-protocol/src/lib.rs):
 
 ```json
 {
@@ -192,7 +192,7 @@ For each call, core spawns the binary, writes one JSON document to stdin, closes
   "submission": {
     "text": "bazel build //App/Login:Login succeeded",
     "assets": [
-      { "path": ".harness/evidence/bazel-build-app-login/submission-001/build.log",
+      { "path": ".musts/evidence/bazel-build-app-login/submission-001/build.log",
         "mime": "text/plain", "size": 4096 }
     ]
   },
@@ -231,16 +231,16 @@ For each call, core spawns the binary, writes one JSON document to stdin, closes
 - Any id in your accepted `satisfies` that wasn't in the request's `task.satisfies` is an **over-claim**: the core rejects the whole submission with exit 2 and the rejected ids in the error message. Don't return checks that weren't issued.
 - Partial accept (returning a subset of `task.satisfies`) is legal and intentional. Unlisted ids remain pending and will be re-emitted on the next `validate`.
 - Read evidence assets via `workspace_root.join(asset.path)` — `asset.path` is workspace-relative.
-- Asset paths exist on disk before your binary is invoked; core copies them into `.harness/evidence/<task>/submission-NNN/` first. You can read, hash, parse, or inspect them however you like.
+- Asset paths exist on disk before your binary is invoked; core copies them into `.musts/evidence/<task>/submission-NNN/` first. You can read, hash, parse, or inspect them however you like.
 - The `evidence.json` marker file is written by core **after** your accept returns and the ledger commit succeeds. You never write it.
 
 ## If you prefer Rust
 
-The shell-script flow above is the default recommendation. If you would rather write the extension in Rust (e.g. because it needs to do non-trivial parsing, or you want compile-time enforcement of the wire shapes), the workspace ships a `harness-extension-util` crate. A complete extension is roughly 30 lines plus your business logic:
+The shell-script flow above is the default recommendation. If you would rather write the extension in Rust (e.g. because it needs to do non-trivial parsing, or you want compile-time enforcement of the wire shapes), the workspace ships a `musts-extension-util` crate. A complete extension is roughly 30 lines plus your business logic:
 
 ```rust
-use harness_extension_util::ipc_main;
-use harness_protocol::{ResolveRequest, ResolveResponse, EvidenceValidationRequest, EvidenceValidationResponse};
+use musts_extension_util::ipc_main;
+use musts_protocol::{ResolveRequest, ResolveResponse, EvidenceValidationRequest, EvidenceValidationResponse};
 
 fn main() -> std::process::ExitCode {
     ipc_main(resolve, evidence)
@@ -250,7 +250,7 @@ fn resolve(req: ResolveRequest) -> Result<ResolveResponse, String> { /* … */ }
 fn evidence(req: EvidenceValidationRequest) -> Result<EvidenceValidationResponse, String> { /* … */ }
 ```
 
-The helper closes stdin before reading stdout (so your `serde_json::from_reader` won't deadlock), flushes stdout on response, surfaces any returned `String` error on stderr, and exits with code 2 on failure. Read [`crates/harness-extension-util/src/lib.rs`](../crates/harness-extension-util/src/lib.rs).
+The helper closes stdin before reading stdout (so your `serde_json::from_reader` won't deadlock), flushes stdout on response, surfaces any returned `String` error on stderr, and exits with code 2 on failure. Read [`crates/musts-extension-util/src/lib.rs`](../crates/musts-extension-util/src/lib.rs).
 
 Three Rust reference extensions are shipped:
 
@@ -262,9 +262,9 @@ Three Rust reference extensions are shipped:
 
 The test stub at [`tests/fixtures/stub_extension/`](../tests/fixtures/stub_extension/) implements every PLAN.md §7.2.1 mode and is a useful template for testing core changes that need a misbehaving extension. The env-var matrix:
 
-- `HARNESS_STUB_RESOLVE_SHAPE`, `HARNESS_STUB_RESOLVE_MODE`
-- `HARNESS_STUB_EVIDENCE_SHAPE`, `HARNESS_STUB_EVIDENCE_MODE`
-- `HARNESS_STUB_DELAY_MS`, `HARNESS_STUB_RESPONSE_BYTES`
+- `MUSTS_STUB_RESOLVE_SHAPE`, `MUSTS_STUB_RESOLVE_MODE`
+- `MUSTS_STUB_EVIDENCE_SHAPE`, `MUSTS_STUB_EVIDENCE_MODE`
+- `MUSTS_STUB_DELAY_MS`, `MUSTS_STUB_RESPONSE_BYTES`
 
 Set these from your tests via `std::env::set_var` + `#[serial_test::serial]`.
 

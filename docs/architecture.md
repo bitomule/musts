@@ -1,24 +1,24 @@
 # Architecture
 
-`harness` is a single CLI binary that drives a validation loop between agents and extensions. The authoritative source is [`PLAN.md`](PLAN.md) §4; this document gives the bird's-eye view a contributor needs to navigate the code.
+`musts` is a single CLI binary that drives a validation loop between agents and extensions. The authoritative source is [`PLAN.md`](PLAN.md) §4; this document gives the bird's-eye view a contributor needs to navigate the code.
 
 ## Crates
 
 | Crate | Role |
 |---|---|
-| `crates/harness-protocol` | Pure serde types for the JSON-over-stdio extension protocol. Zero behaviour. |
-| `crates/harness-extension-util` | Helpers for Rust extension authors: stdio framing (`ipc_main`, `read_request`, `write_response`), MIME-based asset classification (`asset_kind::*`). |
-| `crates/harness-core` | All domain logic — manifests, snapshots, state, extension runtime, validate orchestrator, evidence pipeline. |
-| `crates/harness` | The CLI binary. Argument parsing (`clap`), error rendering, exit codes. |
+| `crates/musts-protocol` | Pure serde types for the JSON-over-stdio extension protocol. Zero behaviour. |
+| `crates/musts-extension-util` | Helpers for Rust extension authors: stdio framing (`ipc_main`, `read_request`, `write_response`), MIME-based asset classification (`asset_kind::*`). |
+| `crates/musts-core` | All domain logic — manifests, snapshots, state, extension runtime, validate orchestrator, evidence pipeline. |
+| `crates/musts` | The CLI binary. Argument parsing (`clap`), error rendering, exit codes. |
 | `extensions/bazel-build` | Reference `bazel/build` extension. Deepest-target policy. |
 | `extensions/mav-expect` | Reference `mav/expect` extension. Per-scope grouping + MIME-driven evidence validation with JSON-parse on `mav-report` / `accessibility-tree` assets. |
-| `tests/fixtures/stub_extension` | Configurable test stub used by the integration suite. Behaviour driven by `HARNESS_STUB_*` env vars (PLAN.md §7.2.1). |
+| `tests/fixtures/stub_extension` | Configurable test stub used by the integration suite. Behaviour driven by `MUSTS_STUB_*` env vars (PLAN.md §7.2.1). |
 
 The protocol crate is the only dependency boundary between core and extensions. Third-party extensions ignore the Rust crates entirely; the JSON wire shape is the contract.
 
 ## The two pipelines
 
-### `harness validate`
+### `musts validate`
 
 Implements `PLAN.md` §4.1.
 
@@ -39,7 +39,7 @@ exit 0 if clean, 1 if pending, 2 on configuration error.
 
 Idempotent: a re-run on an unchanged workspace yields the same task list, the same `task_snapshot_hash` values, and the same JSON output.
 
-### `harness evidence`
+### `musts evidence`
 
 Implements `PLAN.md` §4.2.
 
@@ -70,15 +70,15 @@ Atomic: every accept is one SQLite transaction. The `evidence.json` marker file 
 
 ## Portable validated state — `ledger.lock.yaml`
 
-`.harness/state.sqlite` is machine-local: a fresh `git clone` starts with no `evidence_records` rows, so without help every check would be re-emitted as dirty. The lock file at `.harness/ledger.lock.yaml` is the portable companion: a deterministic, sorted YAML list of `(check_id, scope_hash)` tuples that have been accepted somewhere. `validate`'s "is this green?" lookup unions the local SQLite query with the lock's `contains` check; `evidence`'s accept path appends the new tuple and rewrites the file.
+`.musts/state.sqlite` is machine-local: a fresh `git clone` starts with no `evidence_records` rows, so without help every check would be re-emitted as dirty. The lock file at `.musts/ledger.lock.yaml` is the portable companion: a deterministic, sorted YAML list of `(check_id, scope_hash)` tuples that have been accepted somewhere. `validate`'s "is this green?" lookup unions the local SQLite query with the lock's `contains` check; `evidence`'s accept path appends the new tuple and rewrites the file.
 
-What this buys: the team commits the lock alongside the manifests; a clone runs `harness validate` and only sees tasks for scopes its own changes have invalidated (the blake3 scope hashes match the lock for everything else). `state.sqlite` and `evidence/` stay gitignored — they are a perf cache and an asset payload, not the source of truth.
+What this buys: the team commits the lock alongside the manifests; a clone runs `musts validate` and only sees tasks for scopes its own changes have invalidated (the blake3 scope hashes match the lock for everything else). `state.sqlite` and `evidence/` stay gitignored — they are a perf cache and an asset payload, not the source of truth.
 
 What this does not buy: merge conflict resolution between branches that each accepted evidence at different scope hashes. The format is intentionally simple — a YAML list — so `git merge` with line-based conflict markers gives a usable starting point.
 
 ## Cross-process locking
 
-Every state-writing command acquires an advisory file lock on `.harness/.lock` (`fs2::FileExt::try_lock_exclusive`). On contention we exit 2 with `"another harness process is running"`; we never block. The lock is held through the SQLite transaction that mutates `tasks` (validate) or `evidence_records` (evidence). Read-only paths (`--help`, `--version`) skip bootstrap entirely.
+Every state-writing command acquires an advisory file lock on `.musts/.lock` (`fs2::FileExt::try_lock_exclusive`). On contention we exit 2 with `"another musts process is running"`; we never block. The lock is held through the SQLite transaction that mutates `tasks` (validate) or `evidence_records` (evidence). Read-only paths (`--help`, `--version`) skip bootstrap entirely.
 
 ## Convergence model
 
@@ -86,8 +86,8 @@ Detailed in `PLAN.md` §4.5. The short version: a check goes green only when an 
 
 ## Where to look
 
-- Manifest parsing edge cases → `crates/harness-core/src/manifest/parser.rs`.
-- Why a check is or isn't dirty → `crates/harness-core/src/validate.rs::run` + `evidence::ledger::is_green` + `state::lock::LedgerLock::contains`.
+- Manifest parsing edge cases → `crates/musts-core/src/manifest/parser.rs`.
+- Why a check is or isn't dirty → `crates/musts-core/src/validate.rs::run` + `evidence::ledger::is_green` + `state::lock::LedgerLock::contains`.
 - Why an extension returned what it did → run the extension manually with the captured request JSON on stdin (the IPC contract is documented in `PLAN.md` §4.6).
-- Why a workspace path didn't resolve → `crates/harness-core/src/workspace.rs`.
-- What the JSON report looks like → `crates/harness-core/src/report.rs` + the §5 example in `PLAN.md`.
+- Why a workspace path didn't resolve → `crates/musts-core/src/workspace.rs`.
+- What the JSON report looks like → `crates/musts-core/src/report.rs` + the §5 example in `PLAN.md`.

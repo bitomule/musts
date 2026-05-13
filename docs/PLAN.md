@@ -1,24 +1,24 @@
-# `harness` MVP — Implementation Plan
+# `musts` MVP — Implementation Plan
 
-Companion to [`harness-validation-plan.md`](harness-validation-plan.md) (v0.2 spec). This document picks the technology, architecture, and execution order to ship the MVP described in §18–§19 of the spec.
+Companion to [`musts-design.md`](musts-design.md) (v0.2 spec). This document picks the technology, architecture, and execution order to ship the MVP described in §18–§19 of the spec.
 
 ---
 
 ## 1. What we are actually building
 
-A single CLI binary, `harness`, exposing two commands:
+A single CLI binary, `musts`, exposing two commands:
 
 ```bash
-harness validate
-harness evidence <task-id> --text "<summary>" [--asset <path>]...
+musts validate
+musts evidence <task-id> --text "<summary>" [--asset <path>]...
 ```
 
 …plus the runtime needed to make those commands meaningful: manifest discovery, snapshot/change detection, extension protocol (JSON over stdio), an evidence store, and a SQLite-backed ledger. We also ship two reference extensions (`bazel/build`, `mav/expect`) so we can prove the §15 worked example end-to-end.
 
 Out of scope for MVP (matches §3 and §17 of the spec):
-- Claude hooks, CI integration, prompt injection, facts system, full harness graph.
+- Claude hooks, CI integration, prompt injection, facts system, full musts graph.
 - Extension sandboxing, signing, allowlists.
-- `harness init`, `harness doctor`, `harness install` (deferred to "later layers").
+- `musts init`, `musts doctor`, `musts install` (deferred to "later layers").
 - Resource locks across parallel agents (we expose `parallelizable`; orchestration is the agent's job).
 
 ---
@@ -49,7 +49,7 @@ If the maintainer wants to revisit, the only honest alternative is Swift; we sho
 - `ignore` — `.gitignore`-aware directory walking (already used by `ripgrep`).
 - `walkdir` — fallback raw traversal where we want to bypass ignore rules.
 - `mime_guess` — asset MIME detection.
-- `fs2` — advisory file lock for cross-process coordination (`.harness/.lock`).
+- `fs2` — advisory file lock for cross-process coordination (`.musts/.lock`).
 - `unicode-normalization` — NFC normalisation of paths before hashing.
 - `shell-words` — parse the descriptor's string-form `command`.
 - `anyhow` (binary), `thiserror` (library boundaries) — error handling.
@@ -67,27 +67,27 @@ Dev-only:
 ## 3. Repository layout
 
 ```
-validator-claude/
+musts/
 ├── Cargo.toml                       # workspace manifest
 ├── rust-toolchain.toml              # pin stable
 ├── Makefile                         # thin wrapper (build/test/e2e)
 ├── README.md
 ├── docs/
-│   ├── harness-validation-plan.md   # the spec (vendored)
+│   ├── musts-design.md   # the spec (vendored)
 │   ├── PLAN.md                      # this file
 │   ├── architecture.md              # written in Phase 1
 │   ├── extensions.md                # written in Phase 5
 │   └── skill.md                     # the agent skill, written in Phase 7
 ├── crates/
-│   ├── harness-protocol/            # pure serde types shared with extensions
+│   ├── musts-protocol/            # pure serde types shared with extensions
 │   │   ├── Cargo.toml
 │   │   └── src/lib.rs               # ResolveRequest/Response, EvidenceRequest/Response, …
-│   ├── harness-extension-util/      # helpers for Rust extension authors
+│   ├── musts-extension-util/      # helpers for Rust extension authors
 │   │   ├── Cargo.toml
 │   │   └── src/lib.rs               # stdio framing, asset-kind by MIME,
 │   │                                # size/text guards. Lands in Phase 5 so
 │   │                                # bazel-build & mav-expect share it.
-│   ├── harness-core/                # library: all the domain logic
+│   ├── musts-core/                # library: all the domain logic
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── lib.rs
@@ -98,8 +98,8 @@ validator-claude/
 │   │       ├── extension/           # descriptor loading + IPC runtime
 │   │       ├── evidence/            # asset copy, submission build, ledger write
 │   │       ├── report/              # text renderer (plus future --json)
-│   │       └── validate.rs          # orchestrator behind `harness validate`
-│   └── harness/                     # binary entry point
+│   │       └── validate.rs          # orchestrator behind `musts validate`
+│   └── musts/                     # binary entry point
 │       ├── Cargo.toml
 │       └── src/main.rs              # clap parser → core
 ├── extensions/
@@ -114,13 +114,13 @@ validator-claude/
 │       ├── schemas/expect.schema.json
 │       └── extension.yml.template
 ├── tests/                           # workspace-level E2E tests (Rust)
-│   ├── common/                      # test harness: build workspaces, run binary
+│   ├── common/                      # test scaffolding: build workspaces, run binary
 │   └── e2e/                         # one file per scenario
 └── fixtures/                        # canned manifests + repos used by tests and docs
     └── login-app/                   # mirrors §15 of the spec
 ```
 
-Rationale for splitting the protocol crate: Rust extensions (and any third party) can depend on `harness-protocol` to get type-safe IPC types without pulling in `rusqlite`, `blake3`, etc. Non-Rust extensions ignore the crate; the JSON shape is the source of truth.
+Rationale for splitting the protocol crate: Rust extensions (and any third party) can depend on `musts-protocol` to get type-safe IPC types without pulling in `rusqlite`, `blake3`, etc. Non-Rust extensions ignore the crate; the JSON shape is the source of truth.
 
 ### 3.1 Root `Cargo.toml` (workspace membership)
 
@@ -128,10 +128,10 @@ Rationale for splitting the protocol crate: Rust extensions (and any third party
 [workspace]
 resolver = "2"
 members = [
-  "crates/harness-protocol",
-  "crates/harness-extension-util",
-  "crates/harness-core",
-  "crates/harness",
+  "crates/musts-protocol",
+  "crates/musts-extension-util",
+  "crates/musts-core",
+  "crates/musts",
   "extensions/bazel-build",
   "extensions/mav-expect",
   "tests/fixtures/stub_extension",
@@ -142,13 +142,13 @@ edition = "2021"
 rust-version = "1.81"
 ```
 
-Every crate (including the reference extensions and the stub used by tests) is a workspace member. That means `cargo build --workspace` produces every binary the test harness needs in one step, and the stub gets the same dependency versions as core — preventing serde-version drift between core and the IPC peer.
+Every crate (including the reference extensions and the stub used by tests) is a workspace member. That means `cargo build --workspace` produces every binary the test suite needs in one step, and the stub gets the same dependency versions as core — preventing serde-version drift between core and the IPC peer.
 
 ---
 
 ## 4. Core architecture
 
-### 4.1 Pipeline for `harness validate`
+### 4.1 Pipeline for `musts validate`
 
 ```text
 Discover manifests (cached)
@@ -172,18 +172,18 @@ For each capability, call extension `resolve` over stdin/stdout JSON
         ▼
 Replace the `tasks` table with the current run's tasks (truncate within
 the same transaction that inserts the new rows). Old tasks that the
-extension no longer emits are gone, so `harness evidence` for a stale
-task_id reports "task no longer applies — run harness validate". Render
+extension no longer emits are gone, so `musts evidence` for a stale
+task_id reports "task no longer applies — run musts validate". Render
 report.
 ```
 
-`harness validate` is read-mostly for the ledger + replaces the tasks table. It never writes `evidence_records`.
+`musts validate` is read-mostly for the ledger + replaces the tasks table. It never writes `evidence_records`.
 
-### 4.2 Pipeline for `harness evidence`
+### 4.2 Pipeline for `musts evidence`
 
 ```text
 Look up the task by id in the `tasks` table. If absent, render
-"task no longer applies — run harness validate" and exit 2.
+"task no longer applies — run musts validate" and exit 2.
         │
         ▼
 Recompute the task_snapshot_hash from the current scope_hashes of every
@@ -196,15 +196,15 @@ check's effective scope contribute to staleness; edits anywhere else
 **Re-validate semantics (resolution of the "which task is current?" question).** The `tasks` table is replaced wholesale by every `validate` (§4.1). A task id is therefore always "the most recent `validate`'s row for that id". If the agent runs `validate` twice without recording evidence in between:
 
 - If the resolver returned the same id both times **and no files changed in between**, the second `task_snapshot_hash` equals the first, and the agent's queued evidence is still valid.
-- If the resolver returned the same id but files changed in between, the second `task_snapshot_hash` differs — the queued evidence is now stale and `harness evidence` rejects it.
-- If the resolver no longer returns the id (the relevant check went green via earlier evidence, or the resolver changed its mind), the row is gone and `harness evidence` returns "task no longer applies."
+- If the resolver returned the same id but files changed in between, the second `task_snapshot_hash` differs — the queued evidence is now stale and `musts evidence` rejects it.
+- If the resolver no longer returns the id (the relevant check went green via earlier evidence, or the resolver changed its mind), the row is gone and `musts evidence` returns "task no longer applies."
 
 In short: re-running `validate` is equivalent to issuing a fresh task list. The agent skill (§14, Phase 7) tells agents to record evidence before re-running `validate`; the core mechanic that makes that rule load-bearing lives here.
 
 ```text
         │
         ▼
-Copy assets into .harness/evidence/<task_id>/submission-NNN/
+Copy assets into .musts/evidence/<task_id>/submission-NNN/
 Compute mime, size, file hash
         │
         ▼
@@ -237,15 +237,15 @@ On reject: print the rejection message to stderr, exit 1.
 
 | Module | Responsibility | Key types |
 |---|---|---|
-| `manifest::discovery` | Walk the workspace once, find every `HARNESS.yml`, watch for new/removed ones on subsequent runs using dir mtimes. | `ManifestPath`, `ManifestTree` |
+| `manifest::discovery` | Walk the workspace once, find every `MUSTS.yml`, watch for new/removed ones on subsequent runs using dir mtimes. | `ManifestPath`, `ManifestTree` |
 | `manifest::parser` | Validate `version: 1`, load checks, capture `with` opaquely. | `Manifest`, `Check`, `CheckId` |
 | `manifest::with_validation` | After extensions are loaded, validate each check's `with` against the capability's JSON schema. Schema failures surface as **manifest errors** (exit 2), not extension failures, and report the manifest path + JSON pointer to the offending field. Runs before any `resolve` call. | — |
 | `manifest::ids` | Build globally stable check IDs: `<scope_path>/<local_id>` (root scope uses `root/`). | `CheckId` |
 | `snapshot::fingerprint` | mtime+size cache, lazy blake3 rehash. | `FileFingerprint` |
 | `snapshot::scope` | Compute scope hashes; encapsulate the ignored-directories list. | `ScopeHash` |
-| `state::db` | Open `.harness/state.sqlite`, apply migrations, expose typed CRUD. | `Db` |
+| `state::db` | Open `.musts/state.sqlite`, apply migrations, expose typed CRUD. | `Db` |
 | `state::tables` | Definitions for `manifest_index`, `file_fingerprints`, `scope_snapshots`, `tasks`, `evidence_records`. | — |
-| `extension::descriptor` | Parse `.harness/extensions/*/extension.yml`. | `ExtensionDescriptor`, `Capability` |
+| `extension::descriptor` | Parse `.musts/extensions/*/extension.yml`. | `ExtensionDescriptor`, `Capability` |
 | `extension::runtime` | Spawn child process, write request JSON, read response JSON, enforce timeout, surface stderr on failure. | `ExtensionRunner` |
 | `evidence::store` | Allocate `submission-NNN` directory, copy + checksum assets, write `evidence.json` **last** (after the ledger commit) so an interrupted submission leaves identifiable garbage. The `normalized_assets` array from a successful evidence response (spec §10.4) is stored verbatim inside the ledger's `result_json` blob; no separate column in v1. | `EvidenceStore` |
 | `evidence::ledger` | Read/write `evidence_records`, expose "is this check green for this scope hash?" | `Ledger` |
@@ -263,13 +263,13 @@ On reject: print the rejection message to stderr, exit 1.
 
 - **Hash function**: blake3, 256-bit, hex-encoded. Reason: ~10× faster than SHA-256 on Apple Silicon; large repos hit IO long before CPU.
 - **Per-check effective scope (important)**: a check's scope hash is computed over the files in its declaring manifest's folder **minus the files under any deeper manifest that declares a check of the same capability**. The carve-out stabilises a check's `scope_hash` and its `changed_files` list when only files under a deeper sibling are edited; it does **not** make the check "clean" in §4.1's dirty-detection sense. A check is dirty whenever no green ledger row matches the current `scope_hash` — independent of whether the hash actually changed since the previous run. So a never-satisfied root check will always be dirty and always fan out to the resolver; the carve-out's job is to ensure the resolver sees the *same* input (`scope_hash`, `changed_files`) on each idle re-run and therefore returns the *same* `ignored_checks` answer. **Convergence does not depend on this carve-out** — the completion criterion is "no pending *tasks*", and an extension returns checks it does not want to act on in `ignored_checks`. The carve-out keeps that decision local and the IPC calls stable; it is not load-bearing for the agent loop terminating.
-- **File granularity**: every file under the effective scope, minus the ignore list. Ignored: `.git/`, `.harness/evidence/`, `.harness/cache/`, `node_modules/`, `target/`, `bazel-bin*`, `bazel-out*`, `bazel-testlogs*`, `DerivedData/`, `*.xcodeproj/xcuserdata/`. Also obeys `.gitignore` via the `ignore` crate so derived files outside Git but inside the workspace still count.
+- **File granularity**: every file under the effective scope, minus the ignore list. Ignored: `.git/`, `.musts/evidence/`, `.musts/cache/`, `node_modules/`, `target/`, `bazel-bin*`, `bazel-out*`, `bazel-testlogs*`, `DerivedData/`, `*.xcodeproj/xcuserdata/`. Also obeys `.gitignore` via the `ignore` crate so derived files outside Git but inside the workspace still count.
 - **Scope hash**: `blake3(sorted_join(rel_path || "\0" || file_hash) || "\0" || manifest_hash || "\0" || ext_descriptor_hash || "\0" || sorted_join(descendant_manifest_rel_path))`. Including descendant manifest *paths* (not contents — those are hashed for their own scopes) means adding/removing a child manifest invalidates the parent's idea of "what's applicable to me." Including the extension descriptor hash means swapping or upgrading an extension invalidates evidence. Both are explicit and intentional.
 - **Per-check scope_hash provenance**: a check is always hashed against its **declaring manifest's** scope, never against the task that ends up satisfying it. A task that satisfies checks from two different manifests records two distinct ledger rows, each keyed by the corresponding declaring-manifest scope hash.
 - **Manifest hash**: blake3 of the file bytes.
 - **Cheap path**: on second+ runs, if a file's mtime+size match the cached fingerprint, reuse the stored hash. Only recompute hashes when (mtime OR size) changes.
 - **Discovery invalidation**: we do **not** rely on directory mtimes to detect new/removed manifests — APFS and some git operations leave them stale. Every run does a parallel `ignore::WalkBuilder` traversal of the workspace, which is fast enough on warm caches (low ms for >100k files) and is the only correctness-safe option. The cached `manifest_index` provides the previous state so we can detect adds/removes.
-- **Symlinks**: not followed when walking scope contents (avoids cycles and pulls of huge external trees). A symlinked `HARNESS.yml` is loaded but its target file's bytes are hashed via the link.
+- **Symlinks**: not followed when walking scope contents (avoids cycles and pulls of huge external trees). A symlinked `MUSTS.yml` is loaded but its target file's bytes are hashed via the link.
 - **Filename normalisation (required for hash stability across macOS APFS/HFS+ and Linux)**:
   - Every relative path that feeds into a hash is first **Unicode-NFC normalised** (some macOS APIs return NFD for non-ASCII filenames; git stores NFC; without normalisation the same checkout produces different scope hashes on different surfaces).
   - On case-insensitive filesystems (default macOS APFS, HFS+), paths are additionally lowercased before hashing. The detection happens once per workspace by probing the FS; the result is cached in `manifest_index` so we cannot accidentally mix modes.
@@ -277,7 +277,7 @@ On reject: print the rejection message to stderr, exit 1.
 
 ### 4.4.1 Orphan-submission GC
 
-`harness validate` runs an opportunistic GC over `.harness/evidence/` at the start of every run, before the resolve fan-out:
+`musts validate` runs an opportunistic GC over `.musts/evidence/` at the start of every run, before the resolve fan-out:
 
 - For each `<task_id>/submission-NNN/`: if `evidence.json` is missing, treat the dir as an aborted submission (Ctrl-C between asset copy and ledger commit) and delete it.
 - For each submission that has an `evidence.json` but no row in `evidence_records`, the same applies — the ledger transaction never committed. Delete.
@@ -287,19 +287,19 @@ The GC is best-effort; failures are logged at warn level and never abort the run
 
 ### 4.5.1 Cross-process locking & first-run bootstrap
 
-Two `harness` invocations on the same workspace must not corrupt the ledger or persist inconsistent task rows. SQLite's WAL prevents bytes-level corruption but not logical races (two `validate`s computing different `tasks` rows simultaneously, or `evidence` racing a `validate` truncate).
+Two `musts` invocations on the same workspace must not corrupt the ledger or persist inconsistent task rows. SQLite's WAL prevents bytes-level corruption but not logical races (two `validate`s computing different `tasks` rows simultaneously, or `evidence` racing a `validate` truncate).
 
 The bootstrap sequence for any state-writing command, in order:
 
-1. **Ensure `.harness/` exists.** `fs::create_dir_all(".harness")`. If it exists but is not writable → exit 2 with the scenario-21 message. Concurrent first runs both `mkdir -p` idempotently; no race.
-2. **Open the lock file** with `OpenOptions::new().create(true).write(true).open(".harness/.lock")`. The file is *always* created if missing; multiple callers calling `create(true)` simultaneously is safe (POSIX guarantees one inode). Do **not** use `create_new` — that would turn a benign existing file into a hard error.
-3. **Acquire the lock** with `fs2`'s `FileExt::try_lock_exclusive` on the opened handle. On `WouldBlock`, exit 2 with `"another harness process is running — retry shortly"`. We do not block-wait in v1; the agent loop can retry trivially.
+1. **Ensure `.musts/` exists.** `fs::create_dir_all(".musts")`. If it exists but is not writable → exit 2 with the scenario-21 message. Concurrent first runs both `mkdir -p` idempotently; no race.
+2. **Open the lock file** with `OpenOptions::new().create(true).write(true).open(".musts/.lock")`. The file is *always* created if missing; multiple callers calling `create(true)` simultaneously is safe (POSIX guarantees one inode). Do **not** use `create_new` — that would turn a benign existing file into a hard error.
+3. **Acquire the lock** with `fs2`'s `FileExt::try_lock_exclusive` on the opened handle. On `WouldBlock`, exit 2 with `"another musts process is running — retry shortly"`. We do not block-wait in v1; the agent loop can retry trivially.
 4. **Open and migrate `state.sqlite`.** Migrations are idempotent (§7.1 test).
 5. Do the work. Drop the handle on exit — `fs2` releases the lock; the lock file itself persists, which is fine.
 
 - `validate` holds the lock from step 3 through "commit replaced tasks table".
 - `evidence` holds the lock from step 3 through "ledger commit + write `evidence.json`".
-- Read-only paths (`--help`, `--version`, future `harness list-tasks`) skip the entire bootstrap.
+- Read-only paths (`--help`, `--version`, future `musts list-tasks`) skip the entire bootstrap.
 
 ### 4.6 Extension IPC contract (concrete)
 
@@ -311,12 +311,12 @@ The bootstrap sequence for any state-writing command, in order:
   ```
 
   …or a string parsed with `shell-words` rules (POSIX-ish), not naive whitespace split. Shell metacharacters (`|`, `;`, `&`, `<`, `>`, `$`, backticks) are rejected in the string form to keep the contract free of any implicit shell layer. Both forms are validated at descriptor-load time.
-- **Working directory**: workspace root, regardless of where the user invoked `harness`. Relative paths inside the descriptor (binaries, schemas) resolve against the descriptor's directory.
-- **stdin**: exactly one JSON object matching `ResolveRequest` or `EvidenceValidationRequest` from `harness-protocol`. EOF terminates the request. **Core must close (drop) the child's stdin handle immediately after writing the request bytes**, before reading stdout — otherwise extensions that parse with `serde_json::from_reader(stdin())` deadlock waiting for EOF while core deadlocks waiting for output. `extension::runtime` has a dedicated unit test for this to prevent silent regressions.
+- **Working directory**: workspace root, regardless of where the user invoked `musts`. Relative paths inside the descriptor (binaries, schemas) resolve against the descriptor's directory.
+- **stdin**: exactly one JSON object matching `ResolveRequest` or `EvidenceValidationRequest` from `musts-protocol`. EOF terminates the request. **Core must close (drop) the child's stdin handle immediately after writing the request bytes**, before reading stdout — otherwise extensions that parse with `serde_json::from_reader(stdin())` deadlock waiting for EOF while core deadlocks waiting for output. `extension::runtime` has a dedicated unit test for this to prevent silent regressions.
 - **stdout**: exactly one JSON object matching the response type. Trailing newline allowed; any garbage **before** or **after** the JSON document is a protocol error. Extensions that need to log must write to stderr.
 - **Max response size**: 4 MiB. Responses larger than this are rejected with a clear error pointing at the extension. (Evidence-validation responses can carry diagnostics, but 4 MiB is generous and prevents pathological extensions from blowing core memory.)
 - **stderr**: free-form; captured and surfaced verbatim on non-zero exit or on protocol error.
-- **Timeout**: 30 s default, configurable via env `HARNESS_EXTENSION_TIMEOUT_SECS`. Timeout = treat as failure; the child is killed and stderr surfaced.
+- **Timeout**: 30 s default, configurable via env `MUSTS_EXTENSION_TIMEOUT_SECS`. Timeout = treat as failure; the child is killed and stderr surfaced.
 - **Protocol version**: every request carries `protocol_version: 1`. Responses without it, or with a higher major version, are rejected. v2 reserves the right to break the shape.
 - **`changed_files` and `dirty_scopes` semantics**:
   - On the **first run** for a workspace (no rows in `file_fingerprints` / `scope_snapshots`), or for any check whose current scope_hash has no matching ledger row, every file inside the check's effective scope is listed in `changed_files`, and the check's `scope_path` is listed in `dirty_scopes`. The contract is "no prior fingerprint = treat all in-scope files as changed."
@@ -397,10 +397,10 @@ A check is "green" iff `SELECT 1 FROM evidence_records WHERE check_id=? AND scop
 ## 5. CLI surface
 
 ```
-harness validate [--json] [--log <level>]
-harness evidence <task-id> --text <str> [--asset <path>]... [--log <level>]
-harness --version
-harness --help
+musts validate [--json] [--log <level>]
+musts evidence <task-id> --text <str> [--asset <path>]... [--log <level>]
+musts --version
+musts --help
 ```
 
 - `--json` on `validate`: emit the same data as the text report but in a stable JSON shape. The shape is **frozen at first ship** and `insta`-snapshotted; future fields are added with care. Exit codes are unchanged under `--json` (0 = clean, 1 = pending). The contract:
@@ -431,19 +431,19 @@ harness --help
   ```
 
   The per-task fields mirror spec §9.4's `ResolveResponse.tasks[]` verbatim — `--json` is "the merged resolve responses with status + workspace_root added", not a new shape. When clean, `tasks` and `ignored_checks` are empty arrays (never absent); `notes` may be empty.
-- **Exit codes** (designed so `harness validate && commit` is the natural agent idiom):
+- **Exit codes** (designed so `musts validate && commit` is the natural agent idiom):
   - `validate`: **0 iff the report is clean**; **1 if any validation task is pending**; 2 on configuration errors (bad manifest, missing extension, schema-invalid `with` payload); 70 on internal errors.
   - `evidence`: 0 if accepted; 1 if rejected by the extension; 2 if the task is unknown or the snapshot is stale; 70 on internal errors.
 - All errors go to stderr; reports go to stdout.
 - **Workspace root resolution** (in order):
   1. `--workspace <path>` flag, when provided, is canonicalised (symlinks resolved) and used verbatim.
-  2. Else: canonicalise `cwd`, then walk upward to the nearest ancestor containing a **`.git` directory** (not a `.git` *file*); that directory is the workspace root, regardless of where the `HARNESS.yml` files live below it. A `.git` *file* (the gitlink that marks a submodule worktree) is treated as **transparent** — we keep walking up so submodules resolve to the outer repo. If the user genuinely wants the submodule as a workspace, they pass `--workspace`.
-  3. Else (no git repo): walk upward from canonicalised `cwd` to the nearest ancestor containing a `HARNESS.yml`. **Stop at the first one — do not climb across that boundary.** This prevents us from accidentally selecting `/Users/<name>/` as a workspace just because someone left a stray YAML file there.
+  2. Else: canonicalise `cwd`, then walk upward to the nearest ancestor containing a **`.git` directory** (not a `.git` *file*); that directory is the workspace root, regardless of where the `MUSTS.yml` files live below it. A `.git` *file* (the gitlink that marks a submodule worktree) is treated as **transparent** — we keep walking up so submodules resolve to the outer repo. If the user genuinely wants the submodule as a workspace, they pass `--workspace`.
+  3. Else (no git repo): walk upward from canonicalised `cwd` to the nearest ancestor containing a `MUSTS.yml`. **Stop at the first one — do not climb across that boundary.** This prevents us from accidentally selecting `/Users/<name>/` as a workspace just because someone left a stray YAML file there.
   4. If still not found, exit 2 with a clear error suggesting `--workspace`.
 - The `workspace_root` passed to extensions in the resolve/evidence requests is always the canonical absolute path.
 - **Canonicalisation failures**: `std::fs::canonicalize` returns `Err` for broken symlinks, missing components, or unreadable ancestors. We translate any such error into exit 2 with the message `"could not canonicalise workspace path: <error>; pass --workspace <path>"` — never a raw `Os` error. The implementation tries `canonicalize` first; on failure with `--workspace` provided it falls back to a *logical* (non-resolved) absolute path with a `warn!` log, so users with intentionally non-canonical workspace paths can still proceed.
 
-Deferred commands (documented but not implemented in MVP): `harness init`, `harness doctor`, `harness list-tasks`, `harness ledger`.
+Deferred commands (documented but not implemented in MVP): `musts init`, `musts doctor`, `musts list-tasks`, `musts ledger`.
 
 ---
 
@@ -453,7 +453,7 @@ Deferred commands (documented but not implemented in MVP): `harness init`, `harn
 
 A single capability ships **inside the core** and requires no extension
 descriptor — manifests can use it on any workspace with no
-`.harness/extensions/` setup. Purpose: the agent verifies facts
+`.musts/extensions/` setup. Purpose: the agent verifies facts
 directly with whatever judgement and tooling it has on hand (no MAV /
 Bazel / Playwright delegation), and submits a text summary plus
 optional supporting assets.
@@ -493,8 +493,8 @@ extensions) misses, both for schema validation and for the resolve /
 evidence fan-out. External descriptors can shadow a built-in by
 implementing the same `uses` value — the descriptor wins.
 
-The built-in's behaviour is baked into the harness binary, so it is
-NOT folded into `ext_descriptor_hash`. Bumping the harness version
+The built-in's behaviour is baked into the musts binary, so it is
+NOT folded into `ext_descriptor_hash`. Bumping the musts version
 without changing any extension keeps existing evidence valid (the
 trade-off is documented in §10 Risks; revisiting if the built-in's
 shape changes is straightforward).
@@ -505,7 +505,7 @@ Both reference extensions ship under `extensions/` of this repo as
 Rust binaries, but **that's a testability convenience, not a
 requirement**: an extension is any executable that speaks the JSON
 protocol (PLAN.md §4.6) — a 30-line shell script is just as valid.
-The reference Rust scaffold (`harness-extension-util`) is documented
+The reference Rust scaffold (`musts-extension-util`) is documented
 in `docs/extensions.md`.
 
 - Schema: `{ "target": string }`.
@@ -547,18 +547,18 @@ Three layers. Each test layer is required to be green at every checkpoint.
 - `extension::runtime`: timeout fires; non-zero exit surfaces stderr; oversized (>4 MiB) response rejected; non-JSON stdout rejected; multiple concatenated JSON documents rejected; `protocol_version` mismatch rejected; **stdin is closed before reading stdout so a `from_reader`-style extension does not deadlock**.
 - `evidence::store`: asset copy preserves bytes; submission numbering monotonic.
 - `evidence::ledger`: "is green?" query honours scope_hash; partial accept (extension returns subset of `satisfies`) green-marks only the listed checks.
-- `harness-protocol`: serde round-trip on every public type.
+- `musts-protocol`: serde round-trip on every public type.
 
 ### 7.2 Integration tests (per crate `tests/`)
 
-- `harness-core::tests::validate_with_stub_extension`: an in-process stub registered through a dummy descriptor produces a deterministic resolve response; the orchestrator returns the expected tasks and renders the expected report.
-- `harness-core::tests::evidence_accept_reject`: stub extension accepts on second submission; ledger reflects it; later `validate` call returns clean.
-- `harness-core::tests::stale_snapshot_rejection`: modify a file between resolve and evidence; the evidence call returns the §12.5 stale message.
-- `harness-core::tests::multi_scope_task_ledger`: a single stub-returned task lists `satisfies` from two different manifest scopes; on accept, two ledger rows are written, each keyed by the **declaring manifest's** scope_hash.
-- `harness-core::tests::partial_accept_keeps_unlisted_pending`: stub task `satisfies: [a, b]`, evidence response `accepted: true, satisfies: [a]`; ledger has one row; next `validate` still emits a task for `b`.
-- `harness-core::tests::workspace_root_resolution`: `.git` anchor wins over deeper `HARNESS.yml`; no-git fallback finds the nearest `HARNESS.yml` and stops there; missing both → exit 2.
-- `harness-core::tests::overclaim_rejected`: stub task `satisfies: [a]`, evidence response `accepted: true, satisfies: [a, b]` where `b` is not in the task; whole submission rejected with a message naming `b`.
-- `harness-core::tests::tasks_table_replaced_on_revalidate`: persisted task ids that the resolver no longer emits are gone after the next `validate`; `harness evidence <old_id>` returns the "task no longer applies" error.
+- `musts-core::tests::validate_with_stub_extension`: an in-process stub registered through a dummy descriptor produces a deterministic resolve response; the orchestrator returns the expected tasks and renders the expected report.
+- `musts-core::tests::evidence_accept_reject`: stub extension accepts on second submission; ledger reflects it; later `validate` call returns clean.
+- `musts-core::tests::stale_snapshot_rejection`: modify a file between resolve and evidence; the evidence call returns the §12.5 stale message.
+- `musts-core::tests::multi_scope_task_ledger`: a single stub-returned task lists `satisfies` from two different manifest scopes; on accept, two ledger rows are written, each keyed by the **declaring manifest's** scope_hash.
+- `musts-core::tests::partial_accept_keeps_unlisted_pending`: stub task `satisfies: [a, b]`, evidence response `accepted: true, satisfies: [a]`; ledger has one row; next `validate` still emits a task for `b`.
+- `musts-core::tests::workspace_root_resolution`: `.git` anchor wins over deeper `MUSTS.yml`; no-git fallback finds the nearest `MUSTS.yml` and stops there; missing both → exit 2.
+- `musts-core::tests::overclaim_rejected`: stub task `satisfies: [a]`, evidence response `accepted: true, satisfies: [a, b]` where `b` is not in the task; whole submission rejected with a message naming `b`.
+- `musts-core::tests::tasks_table_replaced_on_revalidate`: persisted task ids that the resolver no longer emits are gone after the next `validate`; `musts evidence <old_id>` returns the "task no longer applies" error.
 
 These use a stub extension provided as a tiny test binary built from a `tests/fixtures/stub_extension` crate so we exercise the actual IPC path.
 
@@ -568,24 +568,24 @@ The stub needs to cover the failure matrix that the static reference extensions 
 
 | Env var | Values | Purpose |
 |---|---|---|
-| `HARNESS_STUB_RESOLVE_SHAPE` | `default`, `empty`, `multi_task`, `ignore_all` | Shape of the resolve response when the resolve call succeeds. |
-| `HARNESS_STUB_RESOLVE_MODE` | `ok`, `timeout`, `garbage`, `oversized`, `nonzero_exit`, `bad_protocol_version` | Failure-injection knob for resolve calls. `ok` means "respect HARNESS_STUB_RESOLVE_SHAPE". |
-| `HARNESS_STUB_EVIDENCE_SHAPE` | `accept_all`, `accept_subset`, `reject`, `overclaim` | Shape of the evidence-validation response when the call succeeds. `accept_subset` returns `satisfies` shorter than the task's set; `overclaim` returns an id not in the task. |
-| `HARNESS_STUB_EVIDENCE_MODE` | `ok`, `timeout`, `garbage`, `oversized`, `nonzero_exit`, `bad_protocol_version` | Failure-injection knob for evidence calls. |
-| `HARNESS_STUB_DELAY_MS` | integer | Sleep before responding (drives timeout tests). |
-| `HARNESS_STUB_RESPONSE_BYTES` | integer | Pad the response with junk to test the 4 MiB cap. |
+| `MUSTS_STUB_RESOLVE_SHAPE` | `default`, `empty`, `multi_task`, `ignore_all` | Shape of the resolve response when the resolve call succeeds. |
+| `MUSTS_STUB_RESOLVE_MODE` | `ok`, `timeout`, `garbage`, `oversized`, `nonzero_exit`, `bad_protocol_version` | Failure-injection knob for resolve calls. `ok` means "respect MUSTS_STUB_RESOLVE_SHAPE". |
+| `MUSTS_STUB_EVIDENCE_SHAPE` | `accept_all`, `accept_subset`, `reject`, `overclaim` | Shape of the evidence-validation response when the call succeeds. `accept_subset` returns `satisfies` shorter than the task's set; `overclaim` returns an id not in the task. |
+| `MUSTS_STUB_EVIDENCE_MODE` | `ok`, `timeout`, `garbage`, `oversized`, `nonzero_exit`, `bad_protocol_version` | Failure-injection knob for evidence calls. |
+| `MUSTS_STUB_DELAY_MS` | integer | Sleep before responding (drives timeout tests). |
+| `MUSTS_STUB_RESPONSE_BYTES` | integer | Pad the response with junk to test the 4 MiB cap. |
 
 Phase 3 only exercises the `RESOLVE_*` knobs (evidence command doesn't exist yet). Phase 4 layers in the `EVIDENCE_*` knobs. The scenario→phase mapping in §9 splits accordingly.
 
-The stub's source is part of the workspace so it is rebuilt with every `cargo test`. Each scenario sets the variables it needs and runs the harness binary with `assert_cmd`.
+The stub's source is part of the workspace so it is rebuilt with every `cargo test`. Each scenario sets the variables it needs and runs the musts binary with `assert_cmd`.
 
 ### 7.3 E2E tests (workspace `tests/e2e/`)
 
-Run the real `harness` binary on a temp workspace using `assert_cmd`. Each scenario is one file; output is snapshot-tested with `insta` (snapshots reviewed by hand). Real Rust extensions are built with `cargo build --bin bazel-extension --bin mav-extension` before the test suite.
+Run the real `musts` binary on a temp workspace using `assert_cmd`. Each scenario is one file; output is snapshot-tested with `insta` (snapshots reviewed by hand). Real Rust extensions are built with `cargo build --bin bazel-extension --bin mav-extension` before the test suite.
 
 Scenarios (mirror §19 success criterion and beyond):
 
-1. **`clean_repo_clean_report`** — no changes since last accepted evidence → "Harness validation clean." (exit 0)
+1. **`clean_repo_clean_report`** — no changes since last accepted evidence → "Musts validation clean." (exit 0)
 2. **`first_run_emits_tasks`** — fresh repo with the §15 manifests → two pending tasks (`bazel-build-login`, `mav-login-flow`). (exit 1)
 3. **`evidence_loop`** — submit valid evidence for both tasks → next `validate` is clean.
 4. **`modify_file_reopens_task`** — touch `App/Login/LoginView.swift` → previously-green checks reopen.
@@ -598,15 +598,15 @@ Scenarios (mirror §19 success criterion and beyond):
 11. **`partial_accept`** — extension's evidence accept lists only one of the task's `satisfies` entries; the listed check goes green, the unlisted one remains pending and re-appears on the next `validate` until separately satisfied.
 12. **`same_local_id_two_manifests`** — `root/login-build` and `App/Login/login-build` (same `local_id`, different scopes) appear as distinct rows in the report, the ledger keys them independently, and accepting evidence for one leaves the other pending.
 13. **`unrelated_edit_does_not_stale`** — `validate` issues a task; the user edits a file in a scope that the task does **not** satisfy; the subsequent `evidence` call is accepted (only in-task-scope edits cause staleness — companion test to §4.2).
-14. **`stale_task_id_rejected`** — `validate` issues task A; the user edits a file; `validate` re-runs and emits task B (with a different id) because the extension's resolve output changed; `evidence A` is rejected with "task no longer applies — run harness validate" (exit 2).
-15. **`concurrent_validate_locks`** — two `harness validate` processes started concurrently: one acquires the lock, the other exits 2 with the "another harness process is running" message.
+14. **`stale_task_id_rejected`** — `validate` issues task A; the user edits a file; `validate` re-runs and emits task B (with a different id) because the extension's resolve output changed; `evidence A` is rejected with "task no longer applies — run musts validate" (exit 2).
+15. **`concurrent_validate_locks`** — two `musts validate` processes started concurrently: one acquires the lock, the other exits 2 with the "another musts process is running" message.
 16. **`unicode_path_stability`** — a fixture with NFD-normalised non-ASCII filenames on macOS produces the same scope_hash as the NFC-normalised equivalent.
 17. **`submodule_workspace_root`** — `cwd` inside a `.git`-file (gitlink) submodule resolves to the outer repo, not the submodule.
 18. **`missing_extension_capability`** — a manifest declares `uses: bazel/build` but no installed extension implements that capability → exit 2 with the manifest path, the offending check id, and a `"no extension implements capability bazel/build"` message.
 19. **`missing_extension_binary`** — descriptor present but `bin/<binary>` is missing or not executable → exit 2 naming the descriptor path and the resolved binary path.
-20. **`empty_extensions_dir`** — `.harness/extensions/` exists but is empty; any manifest with checks fails the same way as scenario 18 (capability has no implementor) — one shared error message format.
-21. **`readonly_state_dir`** — `.harness/` is read-only → exit 2 with `".harness/ is not writable; harness needs to create state.sqlite"` instead of a panic.
-22. **`empty_workspace_no_manifests`** — `.git` exists, zero `HARNESS.yml` files → exit 0 with "Harness validation clean. No HARNESS.yml files found." Distinguishes "nothing to validate" from "everything passed."
+20. **`empty_extensions_dir`** — `.musts/extensions/` exists but is empty; any manifest with checks fails the same way as scenario 18 (capability has no implementor) — one shared error message format.
+21. **`readonly_state_dir`** — `.musts/` is read-only → exit 2 with `".musts/ is not writable; musts needs to create state.sqlite"` instead of a panic.
+22. **`empty_workspace_no_manifests`** — `.git` exists, zero `MUSTS.yml` files → exit 0 with "Musts validation clean. No MUSTS.yml files found." Distinguishes "nothing to validate" from "everything passed."
 23. **`broken_cwd_canonicalisation`** — `cwd` resolves through a broken symlink or non-existent path → exit 2 with `"could not canonicalise workspace path: <error>; pass --workspace <path>"`, not a raw OS error.
 
 ### 7.4 How to run
@@ -625,13 +625,13 @@ make all             # lint + test + e2e
 A `fixtures/login-app/` directory mirrors §15. It is checked in and used by tests, but also documented in `README.md`:
 
 ```bash
-cargo install --path crates/harness
+cargo install --path crates/musts
 cd fixtures/login-app
-harness validate              # → two pending tasks
+musts validate              # → two pending tasks
 # follow the printed instructions, capture artefacts
-harness evidence bazel-build-login --text "..." --asset build.log
-harness evidence mav-login-flow   --text "..." --asset screen.png --asset run.mp4 --asset report.json
-harness validate              # → clean
+musts evidence bazel-build-login --text "..." --asset build.log
+musts evidence mav-login-flow   --text "..." --asset screen.png --asset run.mp4 --asset report.json
+musts validate              # → clean
 ```
 
 This is the human checkpoint at the end of every milestone.
@@ -646,7 +646,7 @@ make release         # cargo build --workspace --release
 make test
 make e2e
 make lint
-make install         # cargo install --path crates/harness
+make install         # cargo install --path crates/musts
 ```
 
 Toolchain pinned in `rust-toolchain.toml` to `1.81` (stable as of writing — bump on demand). `Cargo.lock` is committed because this repo ships a binary.
@@ -663,7 +663,7 @@ After every phase's `✅` checkpoint is green, run this loop before moving on:
 
 1. **Commit the phase's work** so the reviewer reads a stable snapshot.
 2. **Spawn a fresh `general-purpose` subagent** (a new one each round — no shared context with prior reviewers) with this brief:
-   - Read `docs/harness-validation-plan.md` (spec) and `docs/PLAN.md` (this plan).
+   - Read `docs/musts-design.md` (spec) and `docs/PLAN.md` (this plan).
    - Read the code landed in this phase only (the diff against the previous phase's tip, plus any files it materially depends on).
    - Hunt for **substantive** issues: spec/plan deviations, contract bugs, unhandled failure modes, missing tests for behaviour the phase claims to deliver, internal contradictions between code and PLAN.md. Skip nitpicks.
    - Return a numbered list (max 8) — each entry: one-line headline, 2–3 sentences of explanation citing file:line, a concrete fix. If clean, the reviewer responds exactly `No blocking issues found. Phase N is ready to land.`
@@ -678,46 +678,46 @@ Rules of the loop:
 - A `No blocking issues found.` from one reviewer is enough — we do not require two consecutive clean rounds. The 5-round audit of PLAN.md itself was sufficient prior art that the bar "one fresh reviewer says it's clean" reliably catches the real bugs.
 
 ### Phase 0 — Workspace skeleton *(½ day)*
-- Create the Cargo workspace, four crates (`harness-protocol`, `harness-extension-util`, `harness-core`, `harness`), two extension binaries with `main()` returning `Ok(())`, and the stub test extension binary under `tests/fixtures/stub_extension/`.
+- Create the Cargo workspace, four crates (`musts-protocol`, `musts-extension-util`, `musts-core`, `musts`), two extension binaries with `main()` returning `Ok(())`, and the stub test extension binary under `tests/fixtures/stub_extension/`.
 - `Makefile`, `rust-toolchain.toml`, `.gitignore`, `docs/architecture.md` placeholder.
 - ✅ `cargo test --workspace` runs (no tests yet) and `cargo build --workspace` succeeds.
 - 🔁 Run §9.0 review loop until clean before starting Phase 1.
 
 ### Phase 1 — Manifest model + state ground work *(2 days)*
-- `harness-protocol` types defined and snapshot-serded.
+- `musts-protocol` types defined and snapshot-serded.
 - `manifest::discovery`, `manifest::parser`, `manifest::ids`.
 - `state::db` with the schema in §4.7 and migrations.
 - `snapshot::fingerprint`, `snapshot::scope`.
-- `harness validate` walks a workspace and exits 0 without error when there are no manifests (a workspace with `.git` but no `HARNESS.yml` is trivially clean — printed as "Harness validation clean. No HARNESS.yml files found."). When manifests exist but the extension loader is not wired yet, fail with a clearly-labelled "Phase 1 only — extension loading lands in Phase 2" error to make the placeholder visible. The Phase 2 wiring then replaces this with the scenario-20 behaviour (exit 2, capability has no implementor) — no contradiction remains by end of Phase 2.
-- ✅ Unit tests for every module + one integration test on a two-manifest fixture; one E2E test for the no-HARNESS.yml empty-workspace path.
+- `musts validate` walks a workspace and exits 0 without error when there are no manifests (a workspace with `.git` but no `MUSTS.yml` is trivially clean — printed as "Musts validation clean. No MUSTS.yml files found."). When manifests exist but the extension loader is not wired yet, fail with a clearly-labelled "Phase 1 only — extension loading lands in Phase 2" error to make the placeholder visible. The Phase 2 wiring then replaces this with the scenario-20 behaviour (exit 2, capability has no implementor) — no contradiction remains by end of Phase 2.
+- ✅ Unit tests for every module + one integration test on a two-manifest fixture; one E2E test for the no-MUSTS.yml empty-workspace path.
 - 🔁 Run §9.0 review loop until clean before starting Phase 2.
 
 ### Phase 2 — Extension loading + IPC *(2 days)*
-- `extension::descriptor` loads `.harness/extensions/*/extension.yml`.
+- `extension::descriptor` loads `.musts/extensions/*/extension.yml`.
 - `extension::runtime` spawns a child, exchanges JSON, enforces the timeout.
 - Schema validation of `with` payloads against extension-declared schemas.
 - Stub extension binary used by tests.
 - ✅ Integration test: round-trip with stub extension; bad schema rejected; timeout exercised.
 - 🔁 Run §9.0 review loop until clean before starting Phase 3.
 
-### Phase 3 — `harness validate` report *(2 days)*
+### Phase 3 — `musts validate` report *(2 days)*
 - `validate.rs` orchestrator: dirty-scope detection, fan-out to extensions, persist tasks.
 - `report::text` renders the §11.2 output. `--json` produces a stable companion.
 - Idempotent re-runs: no extra writes if nothing changed.
 - Uses the **stub** extension for all tests in this phase (modes per §7.2.1).
-- ✅ E2E scenarios passing with the stub at the resolve layer only: **2 (first_run_emits_tasks)**, **8 (bad_manifest_errors)**, **9a (resolve-side `extension_failure` — every `HARNESS_STUB_RESOLVE_MODE`)**, **10 (json_output)**, **15 (concurrent_validate_locks)**, **16 (unicode_path_stability)**, **17 (submodule_workspace_root)**. Insta snapshots checked in.
+- ✅ E2E scenarios passing with the stub at the resolve layer only: **2 (first_run_emits_tasks)**, **8 (bad_manifest_errors)**, **9a (resolve-side `extension_failure` — every `MUSTS_STUB_RESOLVE_MODE`)**, **10 (json_output)**, **15 (concurrent_validate_locks)**, **16 (unicode_path_stability)**, **17 (submodule_workspace_root)**. Insta snapshots checked in.
 - 🔁 Run §9.0 review loop until clean before starting Phase 4.
 
-### Phase 4 — `harness evidence` command + ledger semantics *(2 days)*
+### Phase 4 — `musts evidence` command + ledger semantics *(2 days)*
 - `evidence::store` copies assets, allocates submission dirs.
 - Calls extension `evidence` capability, persists ledger rows on accept (per the §4.2 partial-accept rule: extension's `satisfies` is authoritative).
 - Stale-snapshot detection (per-task `task_snapshot_hash`) and rendered rejection.
 - Re-running `validate` after a green ledger row is found returns clean.
-- ✅ E2E scenarios that need the ledger but can still use the stub: **1 (clean_repo_clean_report)**, **3 (evidence_loop)**, **4 (modify_file_reopens_task)**, **5 (stale_evidence_rejected)**, **9b (evidence-side `extension_failure` — every `HARNESS_STUB_EVIDENCE_MODE`)**, **11 (partial_accept)**, **12 (same_local_id_two_manifests)**, **13 (unrelated_edit_does_not_stale)**, **14 (stale_task_id_rejected)**.
+- ✅ E2E scenarios that need the ledger but can still use the stub: **1 (clean_repo_clean_report)**, **3 (evidence_loop)**, **4 (modify_file_reopens_task)**, **5 (stale_evidence_rejected)**, **9b (evidence-side `extension_failure` — every `MUSTS_STUB_EVIDENCE_MODE`)**, **11 (partial_accept)**, **12 (same_local_id_two_manifests)**, **13 (unrelated_edit_does_not_stale)**, **14 (stale_task_id_rejected)**.
 - 🔁 Run §9.0 review loop until clean before starting Phase 5.
 
 ### Phase 5 — `bazel/build` reference extension + shared util *(1.5 days)*
-- Land `harness-extension-util` first (stdio framing helpers, asset-kind classification by MIME, response-size guard). Phase 6 reuses it; doing it now avoids a retroactive refactor.
+- Land `musts-extension-util` first (stdio framing helpers, asset-kind classification by MIME, response-size guard). Phase 6 reuses it; doing it now avoids a retroactive refactor.
 - Implements §16.1 deepest-target policy. No transitive-satisfy in MVP — the §4.5 carve-out plus the convergence model in §4.5 keep the loop closed.
 - Evidence validation: text + log asset, log non-empty.
 - ✅ E2E scenario **6 (bazel_picks_deepest_target)** passes against the real binary; build half of the §15 worked example passes.
@@ -730,7 +730,7 @@ Rules of the loop:
 - 🔁 Run §9.0 review loop until clean before starting Phase 7.
 
 ### Phase 7 — Agent skill + docs *(½ day)*
-- `docs/skill.md` based on spec §14.1 — copy-pasteable into Claude/Codex skill folders. **Must include the "record evidence for every task from the current `harness validate` output before re-running `harness validate`" rule**: re-running `validate` truncates the previous run's tasks table (§4.1), so any un-recorded task ids from that run will be rejected with "task no longer applies." This is the single most likely agent-loop bug; the skill addresses it explicitly.
+- `docs/skill.md` based on spec §14.1 — copy-pasteable into Claude/Codex skill folders. **Must include the "record evidence for every task from the current `musts validate` output before re-running `musts validate`" rule**: re-running `validate` truncates the previous run's tasks table (§4.1), so any un-recorded task ids from that run will be rejected with "task no longer applies." This is the single most likely agent-loop bug; the skill addresses it explicitly.
 - `docs/architecture.md` filled in.
 - `docs/extensions.md` describes the JSON contract for third-party extension authors.
 - ✅ The §19 success criterion runs end-to-end on `fixtures/login-app/`.
@@ -742,8 +742,8 @@ Total: ~10–12 working days of net implementation, plus 1–3 review-loop round
 
 ## 10. Risks & open questions
 
-- **Concurrent invocations**: two agents running `validate` simultaneously may race the SQLite DB. SQLite WAL handles most of it; for the MVP we accept "best-effort" semantics and document it. A future `harness lock` advisory file can fix it cheaply.
-- **Large assets**: copying a multi-GiB video into `.harness/evidence/` is wasteful. MVP behavior: copy with a warning over 100 MiB; future option to register by absolute path without copying.
+- **Concurrent invocations**: two agents running `validate` simultaneously may race the SQLite DB. SQLite WAL handles most of it; for the MVP we accept "best-effort" semantics and document it. A future `musts lock` advisory file can fix it cheaply.
+- **Large assets**: copying a multi-GiB video into `.musts/evidence/` is wasteful. MVP behavior: copy with a warning over 100 MiB; future option to register by absolute path without copying.
 - **`.gitignore` correctness**: if the workspace is not a git repo, the `ignore` crate's `.gitignore` rules are skipped and our built-in ignore list applies alone. That's fine, but worth documenting.
 - **Extension trust**: extensions execute arbitrary code with the user's permissions. We document it; we do not sandbox. Aligns with §17.8.
 - **Manifest discovery cost on huge monorepos**: full walk on every run, parallelised by the `ignore` crate. Profiling target: <500 ms on a 100k-file workspace with a warm OS cache. If we miss it, we add a watched-directory cache before Phase 4 ships.
@@ -760,13 +760,13 @@ Total: ~10–12 working days of net implementation, plus 1–3 review-loop round
 Reproduce §19 of the spec against `fixtures/login-app/` using only:
 
 ```bash
-cargo install --path crates/harness
+cargo install --path crates/musts
 cd fixtures/login-app
-harness validate
+musts validate
 # … run instructions, record evidence …
-harness validate            # clean
+musts validate            # clean
 ```
 
 …with all E2E scenarios in §7.3 green in CI-equivalent local runs.
 
-Once this is true, the loop the spec promises — *"the task is not done until `harness validate` is empty"* — is a thing the agent can actually run.
+Once this is true, the loop the spec promises — *"the task is not done until `musts validate` is empty"* — is a thing the agent can actually run.
