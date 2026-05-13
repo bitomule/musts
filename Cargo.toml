@@ -78,6 +78,17 @@ install-path = "CARGO_HOME"
 # this gap; until then `dist plan` skips its workflow-drift check.
 allow-dirty = ["ci"]
 
+# Override the retired runners cargo-dist 0.27 emits in its
+# `artifacts_matrix`. `windows-2019`, `ubuntu-20.04` are gone; `macos-13`
+# still exists but ARM darwin needs `macos-14`. Until we upgrade dist these
+# overrides are required for the build-local-artifacts jobs to schedule.
+[workspace.metadata.dist.github-custom-runners]
+aarch64-apple-darwin = "macos-14"
+x86_64-apple-darwin = "macos-13"
+aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
+x86_64-pc-windows-msvc = "windows-2022"
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
