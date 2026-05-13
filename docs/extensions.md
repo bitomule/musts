@@ -70,6 +70,37 @@ When `uses: agent` is encountered, no `.musts/extensions/` directory is consulte
 
 Everything else is an extension.
 
+## Narrowing a check to specific files: `paths`
+
+Every check (built-in or extension-backed) accepts an optional `paths` list of [`globset`](https://docs.rs/globset)-style patterns. When present, only files matching at least one pattern contribute to the check's effective scope hash, so unrelated edits leave the check green:
+
+```yaml
+checks:
+  tracking-tests:
+    uses: agent
+    paths:
+      - "**/Tracking*.swift"
+      - "**/TrackingEvents/**"
+    with:
+      facts:
+        - "TrackingEvents changes are covered by tests."
+
+  integration-fixtures:
+    uses: agent
+    paths: "tests/integration/**/*.json"
+    with:
+      facts:
+        - "The integration test JSON fixture is valid and intentional."
+```
+
+Semantics:
+
+- `paths` accepts either a single string or a list of strings. Absent or empty means "no filter" — the legacy behaviour applies (all files under the manifest's folder, minus the same-capability carve-out).
+- Patterns are matched against the workspace-relative path. `**/Tracking*.swift` matches at any depth; `tests/**` is rooted at the workspace.
+- On case-insensitive filesystems (default macOS / Windows) matching is case-insensitive — mirrors the workspace's own behaviour so `**/Tracking*.swift` keeps matching `Tracking.swift` regardless of how the file is stored.
+- A check whose `paths` currently matches **no** file is "not applicable" and is dropped from the task list. When a matching file is added later, the next `musts validate` picks it up automatically.
+- An invalid glob is a manifest error (exit 2) — surfaced at parse time, with the check id and the offending pattern.
+
 ## What a workspace expects
 
 ```text

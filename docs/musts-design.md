@@ -402,6 +402,14 @@ checks:
     uses: <extension-name>/<capability-name>
     with:
       # Extension-owned payload.
+    paths:
+      # Optional. Single string or list of gitignore-style globs.
+      # When present, only files matching at least one pattern
+      # contribute to the check's effective scope; a check that
+      # matches no files is treated as not-applicable and is
+      # dropped from the task list. See `docs/extensions.md` →
+      # "Narrowing a check to specific files: `paths`".
+      - "**/Tracking*.swift"
 ```
 
 ### 5.3 Root Manifest Example
