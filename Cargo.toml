@@ -22,7 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 blake3 = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 ignore = "0.4"
 walkdir = "2"
 fs2 = "0.4"
@@ -32,7 +32,7 @@ mime_guess = "2"
 jsonschema = { version = "0.18", default-features = false }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
@@ -42,7 +42,7 @@ tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
 insta = { version = "1", features = ["yaml", "json"] }
-rstest = "0.21"
+rstest = "0.26"
 serial_test = "3"
 
 [workspace.lints.rust]
