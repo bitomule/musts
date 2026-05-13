@@ -65,7 +65,7 @@ tap = "bitomule/homebrew-tap"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Which actions to run on pull requests
 pr-run-mode = "plan"
 # Whether to install an updater program
@@ -84,7 +84,6 @@ allow-dirty = ["ci"]
 # overrides are required for the build-local-artifacts jobs to schedule.
 [workspace.metadata.dist.github-custom-runners]
 aarch64-apple-darwin = "macos-14"
-x86_64-apple-darwin = "macos-13"
 aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"
 x86_64-unknown-linux-gnu = "ubuntu-22.04"
 x86_64-pc-windows-msvc = "windows-2022"
