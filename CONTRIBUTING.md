@@ -54,9 +54,15 @@ Common prefixes:
 
 Breaking changes: add `!` after the type (`feat!:`) and a `BREAKING CHANGE:` footer explaining the migration.
 
-## Changelog
+## Changelog & releases
 
-Add a line under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) for any PR that changes user-visible behavior, output format, or the extension protocol. Doc-only or pure-refactor PRs do not need an entry.
+You do **not** edit [`CHANGELOG.md`](CHANGELOG.md) in feature PRs. The release flow is automatic:
+
+- Every push to `main` triggers [`release-plz`](https://release-plz.dev/), which groups your Conventional Commits by type and maintains a single open **release PR** titled `chore(release): vX.Y.Z`.
+- That release PR contains the version bump per crate plus a fresh `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md` generated from the commits since the last release. The PR updates itself whenever new commits land on `main` — you don't need to close or reopen it.
+- When the maintainer decides to ship, merging the release PR creates the tag, publishes the crates to crates.io, and triggers `cargo-dist` to build binaries and update the Homebrew formula in `bitomule/homebrew-tap`.
+
+That means: the only thing you do per feature PR is write a clear Conventional Commit. The release PR keeps a running tally; the maintainer cuts a release when they decide it's worth shipping.
 
 ## Versioning policy
 
@@ -82,7 +88,7 @@ If you're using Claude Code or a similar agent, [`docs/skill.md`](docs/skill.md)
 - Keep PRs scoped — one capability, one fix, one refactor.
 - CI must be green (`make all` locally is a good proxy).
 - `musts validate` must be clean on the changed scope.
-- Add a `CHANGELOG.md` entry if applicable.
+- Use a Conventional Commit title — that's what release-plz reads to grow the next release's changelog.
 
 ## License
 
