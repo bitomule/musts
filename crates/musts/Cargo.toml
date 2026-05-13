@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Agent-first validation loop CLI."
+homepage = "https://github.com/bitomule/musts"
 keywords = ["musts", "validation", "agents", "cli", "developer-tools"]
 categories = ["development-tools", "command-line-utilities"]
 readme = "../../README.md"

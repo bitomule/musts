@@ -5,7 +5,7 @@ Thanks for considering a contribution. `musts` is pre-1.0 — small, focused PRs
 ## Toolchain
 
 - Rust toolchain is pinned via [`rust-toolchain.toml`](rust-toolchain.toml) (stable channel + `rustfmt` + `clippy`).
-- MSRV is **Rust 1.81** (declared in `Cargo.toml` and verified in CI).
+- MSRV is **Rust 1.88** (declared in `Cargo.toml` and verified in CI).
 
 If you have [`rustup`](https://rustup.rs/) installed, the right toolchain will be installed automatically the first time you build.
 

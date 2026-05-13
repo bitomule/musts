@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/bitomule/musts/actions/workflows/ci.yml/badge.svg)](https://github.com/bitomule/musts/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/musts.svg)](https://crates.io/crates/musts)
-[![MSRV](https://img.shields.io/badge/MSRV-1.81-blue.svg)](rust-toolchain.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](rust-toolchain.toml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 An agent-first validation loop for code repositories.
