@@ -352,40 +352,40 @@ mod tests {
     #[test]
     fn schema_rejects_missing_facts() {
         let s = schema();
-        let compiled = jsonschema::JSONSchema::compile(s).unwrap();
+        let validator = jsonschema::validator_for(s).unwrap();
         let bad = serde_json::json!({});
-        assert!(compiled.validate(&bad).is_err());
+        assert!(!validator.is_valid(&bad));
     }
 
     #[test]
     fn schema_rejects_empty_facts_array() {
         let s = schema();
-        let compiled = jsonschema::JSONSchema::compile(s).unwrap();
+        let validator = jsonschema::validator_for(s).unwrap();
         let bad = serde_json::json!({ "facts": [] });
-        assert!(compiled.validate(&bad).is_err());
+        assert!(!validator.is_valid(&bad));
     }
 
     #[test]
     fn schema_rejects_non_string_fact() {
         let s = schema();
-        let compiled = jsonschema::JSONSchema::compile(s).unwrap();
+        let validator = jsonschema::validator_for(s).unwrap();
         let bad = serde_json::json!({ "facts": [42] });
-        assert!(compiled.validate(&bad).is_err());
+        assert!(!validator.is_valid(&bad));
     }
 
     #[test]
     fn schema_rejects_additional_properties() {
         let s = schema();
-        let compiled = jsonschema::JSONSchema::compile(s).unwrap();
+        let validator = jsonschema::validator_for(s).unwrap();
         let bad = serde_json::json!({ "facts": ["x"], "extra": "y" });
-        assert!(compiled.validate(&bad).is_err());
+        assert!(!validator.is_valid(&bad));
     }
 
     #[test]
     fn schema_accepts_valid_payload() {
         let s = schema();
-        let compiled = jsonschema::JSONSchema::compile(s).unwrap();
+        let validator = jsonschema::validator_for(s).unwrap();
         let good = serde_json::json!({ "facts": ["F1", "F2"] });
-        assert!(compiled.validate(&good).is_ok());
+        assert!(validator.is_valid(&good));
     }
 }
