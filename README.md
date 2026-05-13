@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="musts logo" width="240">
+  <img src="assets/logo.png" alt="musts logo" width="240">
 </p>
 
 # musts
