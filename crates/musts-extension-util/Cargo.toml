@@ -6,9 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Helpers for Rust authors of musts extensions: stdio framing, asset-kind classification, size guards."
+keywords = ["musts", "validation", "agents", "extension"]
+categories = ["development-tools"]
 
 [dependencies]
-musts-protocol = { path = "../musts-protocol" }
+musts-protocol = { path = "../musts-protocol", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

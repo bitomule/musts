@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Reference cargo/{fmt,clippy,test} extension for the musts validation CLI."
+publish = false
 
 [[bin]]
 name = "cargo-extension"

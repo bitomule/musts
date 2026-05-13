@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Configurable test stub for the musts ⇄ extension protocol. Behaviour driven by MUSTS_STUB_* env vars."
+publish = false
 
 [[bin]]
 name = "stub-extension"
