@@ -29,21 +29,17 @@ pub fn validate_with_payload(
     let Some(schema) = schema else {
         return Ok(());
     };
-    let compiled = jsonschema::JSONSchema::compile(schema).map_err(|err| Error::WithSchema {
+    let validator = jsonschema::validator_for(schema).map_err(|err| Error::WithSchema {
         manifest_path: manifest_path.to_path_buf(),
         check_id: check_id.into(),
         capability: capability.into(),
         pointer: "".into(),
         message: format!("schema is invalid: {err}"),
     })?;
-    if let Err(errors) = compiled.validate(payload) {
+    if let Some(first) = validator.iter_errors(payload).next() {
         // Take the first error — agents only need one actionable
         // pointer, and the others usually cascade from it.
-        let first = errors
-            .into_iter()
-            .next()
-            .expect("validation Err with no errors is impossible");
-        let pointer = first.instance_path.to_string();
+        let pointer = first.instance_path().to_string();
         let pointer = if pointer.is_empty() {
             "/".to_string()
         } else {
