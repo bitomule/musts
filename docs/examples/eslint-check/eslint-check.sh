@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# Minimal harness extension implementing `eslint/check` in ~30 lines
+# Minimal musts extension implementing `eslint/check` in ~30 lines
 # of bash + jq. Demonstrates that an extension is "any executable" —
-# no Rust, no compiled binary, no harness-extension-util.
+# no Rust, no compiled binary, no musts-extension-util.
 #
 # Dependencies: jq.
 #
 # Wire-up: drop this file at
-# `<workspace>/.harness/extensions/eslint/eslint-check.sh`
+# `<workspace>/.musts/extensions/eslint/eslint-check.sh`
 # (chmod +x) plus the `extension.yml` next to it.
 
 set -euo pipefail
@@ -27,7 +27,7 @@ case "$mode" in
         instructions: [
           "Run `npx eslint .` from the workspace root.",
           "Capture stdout/stderr as a log asset and record evidence with:",
-          "  harness evidence eslint-root --text \"<summary>\" --asset <log>"
+          "  musts evidence eslint-root --text \"<summary>\" --asset <log>"
         ],
         evidence_contract: {
           text: { required: true,
