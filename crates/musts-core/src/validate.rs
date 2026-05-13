@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use musts_protocol::{
     ResolveCheck, ResolveRequest, ResolveResponse, SnapshotHandle, PROTOCOL_VERSION,
 };
@@ -24,7 +25,7 @@ use crate::extension::descriptor::{discover_descriptors, Capability, ExtensionDe
 use crate::extension::runtime::{ExtensionRunner, RuntimeOptions};
 use crate::manifest::{
     check_id, discover as discover_manifests, parse as parse_manifest, scope_path_for,
-    validate_with_payload, Manifest, ManifestEntry, ROOT_SCOPE,
+    validate_with_payload, Check, Manifest, ManifestEntry, ROOT_SCOPE,
 };
 use crate::report::{CapabilityNote, ValidateReport};
 use crate::snapshot::{
@@ -68,11 +69,23 @@ pub fn compute_current_scope_hashes(
             let cid = check_id(&scope, local_id);
             let descendant_paths =
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
-            let effective_files = effective_files_for(
-                &scope_files,
-                &normalise_prefix(&m.scope_prefix),
-                &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
+            let path_filter = compile_path_filter(&m.entry.rel_path, check)?;
+            let effective_files = filter_effective_files(
+                effective_files_for(
+                    &scope_files,
+                    &normalise_prefix(&m.scope_prefix),
+                    &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
+                ),
+                path_filter.as_ref(),
             );
+            // A check with an explicit `paths:` filter that currently
+            // matches nothing is "not applicable" — it has no effective
+            // scope to validate, so don't record a hash for it. The
+            // task list excludes it the same way; if files appear later
+            // the next `validate` will pick it up.
+            if path_filter.is_some() && effective_files.is_empty() {
+                continue;
+            }
             let scope_hash = compute_scope_hash(&ScopeInput {
                 files: effective_files,
                 manifest_hash: manifest_hash.clone(),
@@ -209,11 +222,22 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
             let cid = check_id(&scope, local_id);
             let descendant_paths =
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
-            let effective_files = effective_files_for(
-                &scope_files,
-                &normalise_prefix(&m.scope_prefix),
-                &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
+            let path_filter = compile_path_filter(&m.entry.rel_path, check)?;
+            let effective_files = filter_effective_files(
+                effective_files_for(
+                    &scope_files,
+                    &normalise_prefix(&m.scope_prefix),
+                    &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
+                ),
+                path_filter.as_ref(),
             );
+            // Skip checks whose `paths:` filter matches no current
+            // files: there is nothing for the extension to validate
+            // and emitting a task would dead-end. The check rejoins
+            // the loop automatically when a matching file appears.
+            if path_filter.is_some() && effective_files.is_empty() {
+                continue;
+            }
             let effective_file_paths: Vec<String> =
                 effective_files.iter().map(|(p, _)| p.clone()).collect();
             let scope_hash = compute_scope_hash(&ScopeInput {
@@ -633,6 +657,62 @@ fn descendant_same_capability_manifest_paths(
     out
 }
 
+/// Compile the check's `paths:` patterns into a `GlobSet` for fast
+/// matching. Returns `Ok(None)` when the check declares no patterns
+/// (the legacy "apply to everything in scope" path). Returns an error
+/// when a pattern fails to compile here — the parser already validates
+/// each pattern individually, so this only fires on a pathological
+/// `GlobSetBuilder::build` failure.
+///
+/// Globs are compiled case-insensitively because `normalise_rel_path`
+/// always lowercases the scope-file map keys for OS-portable scope
+/// hashes. Writing `**/Tracking*.swift` keeps matching regardless of
+/// the file's on-disk case.
+fn compile_path_filter(manifest_rel: &std::path::Path, check: &Check) -> Result<Option<GlobSet>> {
+    if check.paths.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = GlobSetBuilder::new();
+    for pat in &check.paths {
+        let glob = GlobBuilder::new(pat)
+            .case_insensitive(true)
+            .build()
+            .map_err(|err| Error::Manifest {
+                path: manifest_rel.to_path_buf(),
+                message: format!(
+                    "check `{}`: invalid glob `{}`: {}",
+                    check.local_id, pat, err
+                ),
+            })?;
+        builder.add(glob);
+    }
+    let set = builder.build().map_err(|err| Error::Manifest {
+        path: manifest_rel.to_path_buf(),
+        message: format!(
+            "check `{}`: could not build glob set: {}",
+            check.local_id, err
+        ),
+    })?;
+    Ok(Some(set))
+}
+
+/// Narrow `files` to entries matching the supplied filter. Passing
+/// `None` is a no-op (legacy "all files in scope"). The match is
+/// against the workspace-relative path string, so a pattern like
+/// `**/Tracking*.swift` works regardless of how deep the file is.
+fn filter_effective_files(
+    files: Vec<(String, String)>,
+    filter: Option<&GlobSet>,
+) -> Vec<(String, String)> {
+    let Some(set) = filter else {
+        return files;
+    };
+    files
+        .into_iter()
+        .filter(|(rel, _)| set.is_match(rel))
+        .collect()
+}
+
 /// Filter the workspace-wide file map down to a check's effective scope.
 fn effective_files_for(
     scope_files: &BTreeMap<String, String>,
@@ -871,5 +951,95 @@ mod tests {
         assert_eq!(scope_depth(ROOT_SCOPE), 0);
         assert_eq!(scope_depth("App"), 1);
         assert_eq!(scope_depth("App/Login"), 2);
+    }
+
+    fn make_check(local_id: &str, paths: Vec<&str>) -> Check {
+        Check {
+            local_id: local_id.into(),
+            uses: "cargo/test".into(),
+            with_payload: serde_json::Value::Object(Default::default()),
+            paths: paths.into_iter().map(String::from).collect(),
+        }
+    }
+
+    #[test]
+    fn filter_effective_files_no_filter_is_passthrough() {
+        let files = vec![
+            ("a.rs".into(), "h1".into()),
+            ("b.swift".into(), "h2".into()),
+        ];
+        let out = filter_effective_files(files.clone(), None);
+        assert_eq!(out, files);
+    }
+
+    #[test]
+    fn filter_effective_files_keeps_matches() {
+        let check = make_check("tracking", vec!["**/Tracking*.swift"]);
+        let filter = compile_path_filter(std::path::Path::new("MUSTS.yml"), &check).unwrap();
+        let files = vec![
+            ("App/TrackingEvents.swift".into(), "h1".into()),
+            ("App/OtherFile.swift".into(), "h2".into()),
+            ("Tests/TrackingEventsTests.swift".into(), "h3".into()),
+        ];
+        let out = filter_effective_files(files, filter.as_ref());
+        assert_eq!(
+            out,
+            vec![
+                ("App/TrackingEvents.swift".to_string(), "h1".to_string()),
+                (
+                    "Tests/TrackingEventsTests.swift".to_string(),
+                    "h3".to_string(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_effective_files_supports_multiple_patterns() {
+        let check = make_check("multi", vec!["**/*.json", "tests/**"]);
+        let filter = compile_path_filter(std::path::Path::new("MUSTS.yml"), &check).unwrap();
+        let files = vec![
+            ("fixtures/data.json".into(), "h1".into()),
+            ("tests/it.rs".into(), "h2".into()),
+            ("src/main.rs".into(), "h3".into()),
+        ];
+        let out = filter_effective_files(files, filter.as_ref());
+        assert_eq!(
+            out,
+            vec![
+                ("fixtures/data.json".to_string(), "h1".to_string()),
+                ("tests/it.rs".to_string(), "h2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_effective_files_returns_empty_when_no_matches() {
+        let check = make_check("none", vec!["**/Tracking*.swift"]);
+        let filter = compile_path_filter(std::path::Path::new("MUSTS.yml"), &check).unwrap();
+        let files = vec![
+            ("App/A.swift".into(), "h1".into()),
+            ("App/B.swift".into(), "h2".into()),
+        ];
+        let out = filter_effective_files(files, filter.as_ref());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn filter_effective_files_is_case_insensitive() {
+        // `normalise_rel_path` always lowercases scope-file keys for
+        // OS-portable scope hashes, so a glob written with mixed case
+        // ("Tracking*") must still match the lowercased entry.
+        let check = make_check("tracking", vec!["**/Tracking*.swift"]);
+        let filter = compile_path_filter(std::path::Path::new("MUSTS.yml"), &check).unwrap();
+        let files = vec![
+            ("app/trackingevents.swift".into(), "h1".into()),
+            ("app/other.swift".into(), "h2".into()),
+        ];
+        let out = filter_effective_files(files, filter.as_ref());
+        assert_eq!(
+            out,
+            vec![("app/trackingevents.swift".to_string(), "h1".to_string())]
+        );
     }
 }

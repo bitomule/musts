@@ -17,6 +17,7 @@ serde_yaml = { workspace = true }
 blake3 = { workspace = true }
 rusqlite = { workspace = true }
 ignore = { workspace = true }
+globset = { workspace = true }
 walkdir = { workspace = true }
 fs2 = { workspace = true }
 unicode-normalization = { workspace = true }

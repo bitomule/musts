@@ -2,10 +2,14 @@
 //!
 //! Behaviour:
 //! - Requires `version: 1`. Any other version is rejected.
-//! - Requires `checks` to be a map of `<local_id> → { uses, with }`.
+//! - Requires `checks` to be a map of `<local_id> → { uses, with, paths }`.
 //! - `with` is captured opaquely as `serde_json::Value`; schema validation
 //!   against the extension's JSON Schema happens later, in
 //!   `manifest::with_validation` (Phase 2).
+//! - `paths` is an optional list of gitignore-style glob patterns that
+//!   narrow the check's effective scope to files matching at least one
+//!   pattern. Patterns are validated at parse time so a malformed glob
+//!   becomes a manifest error.
 //! - Duplicate local IDs **inside the same manifest** are rejected with a
 //!   clear error pointing at the offending id.
 
@@ -38,6 +42,12 @@ pub struct Check {
     pub uses: String,
     /// Extension-owned `with` payload, captured opaquely.
     pub with_payload: serde_json::Value,
+    /// Optional gitignore-style glob patterns. When non-empty, the
+    /// check's effective scope is narrowed to files matching at least
+    /// one pattern (relative to the workspace root). An empty vector
+    /// means "no filter — apply to every file under the declaring
+    /// manifest's folder, modulo the standard same-capability carve-out".
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +66,29 @@ struct RawCheck {
     uses: String,
     #[serde(default = "default_with")]
     with: serde_yaml::Value,
+    #[serde(default)]
+    paths: RawPaths,
+}
+
+/// `paths:` accepts either a single string or a list of strings. Absent
+/// is treated as an empty list.
+#[derive(Debug, Default, Deserialize)]
+#[serde(untagged)]
+enum RawPaths {
+    #[default]
+    Absent,
+    One(String),
+    Many(Vec<String>),
+}
+
+impl RawPaths {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            RawPaths::Absent => Vec::new(),
+            RawPaths::One(s) => vec![s],
+            RawPaths::Many(v) => v,
+        }
+    }
 }
 
 /// Absent `with:` defaults to an empty mapping rather than `null`. This
@@ -111,6 +144,9 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
             message,
         })?;
 
+        let paths = raw_check.paths.into_vec();
+        validate_path_patterns(path, &local_id, &paths)?;
+
         if checks
             .insert(
                 local_id.clone(),
@@ -118,6 +154,7 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
                     local_id: local_id.clone(),
                     uses: raw_check.uses,
                     with_payload,
+                    paths,
                 },
             )
             .is_some()
@@ -134,6 +171,26 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
         version: file.version,
         checks,
     })
+}
+
+/// Validate every path pattern as a gitignore-style glob. Returns a
+/// manifest error pointing at the offending check + pattern on the
+/// first failure. Empty patterns are rejected — they would otherwise
+/// match nothing and silently disable the check.
+fn validate_path_patterns(manifest_path: &Path, local_id: &str, paths: &[String]) -> Result<()> {
+    for pat in paths {
+        if pat.trim().is_empty() {
+            return Err(Error::Manifest {
+                path: manifest_path.to_path_buf(),
+                message: format!("check `{local_id}`: `paths` contains an empty pattern"),
+            });
+        }
+        globset::Glob::new(pat).map_err(|err| Error::Manifest {
+            path: manifest_path.to_path_buf(),
+            message: format!("check `{local_id}`: invalid glob `{pat}`: {err}"),
+        })?;
+    }
+    Ok(())
 }
 
 /// Convert a `serde_yaml::Value` into a `serde_json::Value`. Returns
@@ -305,5 +362,90 @@ checks:
             manifest.checks["explicit"].with_payload,
             serde_json::Value::Null
         );
+    }
+
+    #[test]
+    fn paths_defaults_to_empty() {
+        let yaml = br#"
+version: 1
+checks:
+  free:
+    uses: custom/noop
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
+        assert!(manifest.checks["free"].paths.is_empty());
+    }
+
+    #[test]
+    fn paths_accepts_single_string() {
+        let yaml = br#"
+version: 1
+checks:
+  tracking-tests:
+    uses: cargo/test
+    paths: "**/Tracking*.swift"
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
+        assert_eq!(
+            manifest.checks["tracking-tests"].paths,
+            vec!["**/Tracking*.swift".to_string()]
+        );
+    }
+
+    #[test]
+    fn paths_accepts_list() {
+        let yaml = br#"
+version: 1
+checks:
+  tracking-tests:
+    uses: cargo/test
+    paths:
+      - "**/Tracking*.swift"
+      - "**/TrackingEvents/**"
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
+        assert_eq!(
+            manifest.checks["tracking-tests"].paths,
+            vec![
+                "**/Tracking*.swift".to_string(),
+                "**/TrackingEvents/**".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_glob() {
+        // An unterminated character class is a globset parse error.
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    paths:
+      - "src/[a-z"
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("bad"));
+        assert!(message.contains("invalid glob"));
+    }
+
+    #[test]
+    fn rejects_empty_pattern() {
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    paths:
+      - ""
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("empty pattern"));
     }
 }
