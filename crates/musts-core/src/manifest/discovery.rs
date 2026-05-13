@@ -21,6 +21,7 @@ pub struct ManifestEntry {
 /// by `rel_path` for determinism.
 pub fn discover(workspace_root: &Path) -> Result<Vec<ManifestEntry>> {
     let mut entries: Vec<ManifestEntry> = Vec::new();
+    let root = workspace_root.to_path_buf();
     let walker = ignore::WalkBuilder::new(workspace_root)
         .standard_filters(true)
         .git_ignore(true)
@@ -31,7 +32,12 @@ pub fn discover(workspace_root: &Path) -> Result<Vec<ManifestEntry>> {
         .require_git(false)
         .hidden(false)
         .follow_links(false)
-        .filter_entry(skip_built_in_ignores)
+        .filter_entry(move |entry| {
+            if !skip_built_in_ignores(entry) {
+                return false;
+            }
+            !is_sub_workspace(&root, entry)
+        })
         .build();
 
     for entry in walker {
@@ -52,6 +58,24 @@ pub fn discover(workspace_root: &Path) -> Result<Vec<ManifestEntry>> {
     }
     entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
     Ok(entries)
+}
+
+/// A directory below the workspace root is a "sub-workspace" when it
+/// declares its own `.musts/` configuration. We skip these so the parent
+/// walker does not try to resolve their manifests with the parent's
+/// extension index — examples include test fixtures and demo
+/// walkthroughs that are vendored as standalone musts workspaces.
+///
+/// The workspace root itself always has a `.musts/`; the `ancestors !=
+/// root` check is what makes it survive this filter.
+fn is_sub_workspace(workspace_root: &Path, entry: &ignore::DirEntry) -> bool {
+    if !entry.file_type().is_some_and(|t| t.is_dir()) {
+        return false;
+    }
+    if entry.path() == workspace_root {
+        return false;
+    }
+    entry.path().join(".musts").is_dir()
 }
 
 /// Built-in ignore predicate. These directories never contain manifests we
@@ -163,6 +187,40 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let entries = discover(dir.path()).unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn skips_sub_workspaces() {
+        // A child directory that declares its own `.musts/` is a
+        // standalone musts workspace (vendored fixtures, demo
+        // walkthroughs). The parent walker must not descend into it,
+        // otherwise root validate tries to resolve manifests with the
+        // wrong extension index.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write(&root.join("MUSTS.yml"), "version: 1\nchecks: {}\n");
+        write(
+            &root.join("fixtures/demo/MUSTS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        write(
+            &root.join("fixtures/demo/App/MUSTS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        // Demo has its own `.musts/`.
+        fs::create_dir_all(root.join("fixtures/demo/.musts/extensions")).unwrap();
+        // A sibling subtree without its own `.musts/` is still discovered.
+        write(&root.join("src/MUSTS.yml"), "version: 1\nchecks: {}\n");
+
+        let entries = discover(root).unwrap();
+        let rels: Vec<_> = entries
+            .iter()
+            .map(|e| e.rel_path.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            rels,
+            vec!["MUSTS.yml".to_string(), "src/MUSTS.yml".to_string(),]
+        );
     }
 
     #[test]

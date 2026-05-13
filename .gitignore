@@ -44,13 +44,11 @@ fixtures/*/.musts/extensions/*/stub-extension
 # canonical walkthrough must start with nothing validated.
 fixtures/*/.musts/ledger.lock.yaml
 
-# The fixture is a self-contained musts workspace (it has its own
-# .musts/extensions/ for bazel/build + mav/expect). Hide its
-# MUSTS.yml files from the parent walker so root-level
-# `musts validate` doesn't try to resolve them with the parent's
-# extension index.
-fixtures/*/MUSTS.yml
-fixtures/*/**/MUSTS.yml
+# Note: the fixture's `MUSTS.yml` files are committed by design and
+# discovered separately when you `cd fixtures/<demo>`. The parent
+# walker treats any subdirectory with its own `.musts/` as a
+# sub-workspace and skips it; see `crates/musts-core/src/manifest/
+# discovery.rs::is_sub_workspace`.
 
 # Test scratch space
 /e2e-output/
