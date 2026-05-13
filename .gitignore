@@ -18,6 +18,10 @@ Icon?
 *~
 .zed/
 
+# Agent scratch space (git worktrees, plans, transient state).
+# Never validated, never committed.
+.claude/
+
 # Musts runtime artifacts (anywhere a `.musts/` workspace lives —
 # the repo root, the fixture, future sub-workspaces).
 **/.musts/cache/

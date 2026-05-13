@@ -29,6 +29,8 @@ satisfied:
 - check: root/clippy
   scope_hash: 9f3d3bdb0f65e99e062d90bf533bac28f5d9fdd8d6d56756ae3bcab2f69f2736
 - check: root/clippy
+  scope_hash: a50ecaed2135dc13453f6136010fd17de071db2846f44a3a2acc42b0296bc024
+- check: root/clippy
   scope_hash: ac543aea35ab939780dddce14ec0b9a630920335728affa3bce0af6c5cc32c66
 - check: root/clippy
   scope_hash: d05747b6b4be3adf3d8ed23d871700d7929cf28825cab14ac98fb7807682023e
@@ -36,6 +38,8 @@ satisfied:
   scope_hash: dd561543e54b919f82391d8cd8f912b69e79103d5021450303813e9d424123ef
 - check: root/clippy
   scope_hash: f33743ab35536dadb7565693ecbf42beafb5950e1b43b99d34e9395ff2c4f519
+- check: root/clippy
+  scope_hash: f61a7e307b1ae04698e58a642595f454b8e1ae68093e1adbfe6f91ea8deef54f
 - check: root/fmt
   scope_hash: 27e51b53cb349f51359b9388842ad818f48f5a45b247d9d912b89aae0c9e7497
 - check: root/fmt
@@ -57,11 +61,15 @@ satisfied:
 - check: root/fmt
   scope_hash: 9f3d3bdb0f65e99e062d90bf533bac28f5d9fdd8d6d56756ae3bcab2f69f2736
 - check: root/fmt
+  scope_hash: a50ecaed2135dc13453f6136010fd17de071db2846f44a3a2acc42b0296bc024
+- check: root/fmt
   scope_hash: ac543aea35ab939780dddce14ec0b9a630920335728affa3bce0af6c5cc32c66
 - check: root/fmt
   scope_hash: dd561543e54b919f82391d8cd8f912b69e79103d5021450303813e9d424123ef
 - check: root/fmt
   scope_hash: f33743ab35536dadb7565693ecbf42beafb5950e1b43b99d34e9395ff2c4f519
+- check: root/fmt
+  scope_hash: f61a7e307b1ae04698e58a642595f454b8e1ae68093e1adbfe6f91ea8deef54f
 - check: root/test
   scope_hash: 27e51b53cb349f51359b9388842ad818f48f5a45b247d9d912b89aae0c9e7497
 - check: root/test
@@ -83,6 +91,8 @@ satisfied:
 - check: root/test
   scope_hash: 9f3d3bdb0f65e99e062d90bf533bac28f5d9fdd8d6d56756ae3bcab2f69f2736
 - check: root/test
+  scope_hash: a50ecaed2135dc13453f6136010fd17de071db2846f44a3a2acc42b0296bc024
+- check: root/test
   scope_hash: ac543aea35ab939780dddce14ec0b9a630920335728affa3bce0af6c5cc32c66
 - check: root/test
   scope_hash: d05747b6b4be3adf3d8ed23d871700d7929cf28825cab14ac98fb7807682023e
@@ -90,3 +100,5 @@ satisfied:
   scope_hash: dd561543e54b919f82391d8cd8f912b69e79103d5021450303813e9d424123ef
 - check: root/test
   scope_hash: f33743ab35536dadb7565693ecbf42beafb5950e1b43b99d34e9395ff2c4f519
+- check: root/test
+  scope_hash: f61a7e307b1ae04698e58a642595f454b8e1ae68093e1adbfe6f91ea8deef54f

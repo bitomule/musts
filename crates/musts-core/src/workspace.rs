@@ -3,8 +3,11 @@
 //! Implements `docs/PLAN.md` §5 rules:
 //! 1. Explicit `--workspace <path>`: canonicalise and use verbatim.
 //! 2. Walk upward from canonicalised cwd to the nearest ancestor with a
-//!    `.git` *directory* (not a `.git` file/gitlink — those are submodules
-//!    and we transparently keep walking).
+//!    `.git` *directory*, **or** a `.git` *file* (gitlink) that points
+//!    into `.git/worktrees/` — a worktree is a standalone validation
+//!    boundary, even though it shares the underlying git database with
+//!    the main checkout. Submodule gitlinks (`.git/modules/`) stay
+//!    transparent so cwd inside a submodule resolves to the outer repo.
 //! 3. Else: walk upward to the nearest ancestor containing a `MUSTS.yml`.
 //!    Stop at the first one — do not climb across that boundary.
 //! 4. Else: not-found error suggesting `--workspace`.
@@ -41,19 +44,57 @@ fn canonicalise(path: &Path) -> Result<PathBuf> {
         .map_err(|source| Error::WorkspaceCanonicalisation { source })
 }
 
-/// Walk upward looking for a `.git` **directory**. `.git` *files* (gitlinks
-/// used by submodules and worktrees) are transparent — we keep walking so
-/// cwd inside a submodule resolves to the outer repo.
+/// Walk upward looking for the nearest workspace boundary.
+///
+/// A boundary is:
+/// - a `.git` directory (regular checkout), or
+/// - a `.git` file whose `gitdir:` points into `<…>/worktrees/<name>`
+///   (a `git worktree add` checkout — a separate working tree that
+///   shares the object database with another checkout, but should be
+///   validated on its own).
+///
+/// Submodule gitlinks (`gitdir:` pointing into `<…>/modules/<name>`)
+/// stay transparent so cwd inside a submodule resolves to the outer repo.
 fn find_git_anchor(start: &Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
         let candidate = ancestor.join(".git");
         match std::fs::symlink_metadata(&candidate) {
             Ok(meta) if meta.is_dir() => return Some(ancestor.to_path_buf()),
-            // `.git` is a file (gitlink) or symlink → submodule/worktree → keep walking.
-            _ => continue,
+            Ok(_) => {
+                if is_worktree_gitlink(&candidate) {
+                    return Some(ancestor.to_path_buf());
+                }
+                continue;
+            }
+            Err(_) => continue,
         }
     }
     None
+}
+
+/// Read a `.git` gitlink file and decide whether it identifies a
+/// `git worktree`-style checkout (as opposed to a submodule).
+///
+/// The gitlink body is a single `gitdir: <path>` line. Worktrees keep
+/// their per-worktree git directory under `<main>/.git/worktrees/<name>`;
+/// submodules use `<parent>/.git/modules/<name>`. We accept any path
+/// whose final two segments are `worktrees/<name>` as a worktree —
+/// good enough to disambiguate the two cases without parsing git's
+/// internal layout further.
+fn is_worktree_gitlink(path: &Path) -> bool {
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Some(rest) = body.lines().find_map(|l| l.strip_prefix("gitdir:")) else {
+        return false;
+    };
+    let gitdir = Path::new(rest.trim());
+    let mut comps = gitdir.components().rev();
+    let _leaf = comps.next();
+    matches!(
+        comps.next(),
+        Some(std::path::Component::Normal(name)) if name == std::ffi::OsStr::new("worktrees")
+    )
 }
 
 /// Walk upward looking for the nearest ancestor containing `MUSTS.yml`.
@@ -97,7 +138,7 @@ mod tests {
 
     #[test]
     fn submodule_gitlink_is_transparent() {
-        // `.git` as a file (gitlink) → keep walking; outer `.git` dir wins.
+        // `.git` as a file pointing into `.git/modules/…` → keep walking.
         let outer = tmp();
         fs::create_dir(outer.path().join(".git")).unwrap();
         let inner = outer.path().join("submodule");
@@ -105,6 +146,24 @@ mod tests {
         fs::write(inner.join(".git"), "gitdir: ../.git/modules/submodule\n").unwrap();
         let resolved = resolve(None, &inner).unwrap();
         assert_eq!(resolved, outer.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn worktree_gitlink_anchors_locally() {
+        // `.git` as a file pointing into `.git/worktrees/…` → stop here.
+        // A `git worktree add` checkout is a standalone validation boundary
+        // even though it shares the object database with the main checkout.
+        let outer = tmp();
+        fs::create_dir(outer.path().join(".git")).unwrap();
+        let inner = outer.path().join("wt");
+        fs::create_dir(&inner).unwrap();
+        fs::write(
+            inner.join(".git"),
+            "gitdir: /tmp/main/.git/worktrees/feature\n",
+        )
+        .unwrap();
+        let resolved = resolve(None, &inner).unwrap();
+        assert_eq!(resolved, inner.canonicalize().unwrap());
     }
 
     #[test]

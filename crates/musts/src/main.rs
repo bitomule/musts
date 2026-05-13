@@ -7,7 +7,7 @@
 //! lock per `docs/PLAN.md` §4.5.1.
 
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
 use clap::{Parser, Subcommand};
 use musts_core::bootstrap::StateSession;
@@ -53,6 +53,26 @@ enum Command {
         #[arg(long = "asset", value_name = "PATH")]
         assets: Vec<PathBuf>,
     },
+    /// Manage the agent-facing musts skill.
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SkillCommand {
+    /// Install the musts skill globally so it is available to every agent.
+    ///
+    /// Delegates to `npx skills add bitomule/musts --skill musts --global` —
+    /// the same path Koubou and MAV use. Requires Node.js so `npx` is on
+    /// `PATH`.
+    Install {
+        /// Restrict installation to one agent runner (claude-code, cursor, …).
+        /// Defaults to every detected runner.
+        #[arg(long)]
+        agent: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -76,6 +96,9 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             text,
             assets,
         } => evidence_command(cli.workspace.as_deref(), task_id, text.as_deref(), assets),
+        Command::Skill { command } => match command {
+            SkillCommand::Install { agent } => skill_install(agent.as_deref()),
+        },
     }
 }
 
@@ -182,6 +205,46 @@ fn print_evidence_result(result: &EvidenceSubmissionResult) {
         println!("Summary: {summary}");
     }
     println!("\nRun `musts validate` again to confirm the report is now clean.");
+}
+
+fn skill_install(agent: Option<&str>) -> anyhow::Result<ExitCode> {
+    let mut args: Vec<String> = vec![
+        "--yes".to_string(),
+        "skills".to_string(),
+        "add".to_string(),
+        "bitomule/musts".to_string(),
+        "--skill".to_string(),
+        "musts".to_string(),
+        "--global".to_string(),
+        "--yes".to_string(),
+    ];
+    if let Some(agent) = agent {
+        args.push("--agent".to_string());
+        args.push(agent.to_string());
+    }
+
+    eprintln!("musts: running `npx {}`", args.join(" "));
+    let status = match ProcessCommand::new("npx").args(&args).status() {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!(
+                "error: failed to spawn `npx`: {err}\n\
+                 hint: install Node.js so `npx` is on PATH, then rerun `musts skill install`."
+            );
+            return Ok(ExitCode::from(1));
+        }
+    };
+    if status.success() {
+        eprintln!("musts: skill installed globally.");
+        return Ok(ExitCode::from(0));
+    }
+    let code = status.code().unwrap_or(1) as u8;
+    eprintln!(
+        "error: `npx skills add` exited with code {code}.\n\
+         hint: rerun `npx {}` to retry.",
+        args.join(" ")
+    );
+    Ok(ExitCode::from(code))
 }
 
 fn report_error(err: Error) -> ExitCode {
