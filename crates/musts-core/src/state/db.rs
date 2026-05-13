@@ -1,4 +1,4 @@
-//! SQLite handle for `.harness/state.sqlite`.
+//! SQLite handle for `.musts/state.sqlite`.
 //!
 //! Opens the database with WAL journaling and synchronous=NORMAL, applies
 //! the latest migration idempotently, and exposes typed helpers as the
@@ -116,7 +116,7 @@ impl Db {
     }
 }
 
-/// Open or create `.harness/state.sqlite` at `db_path`. Applies the latest
+/// Open or create `.musts/state.sqlite` at `db_path`. Applies the latest
 /// migration if needed.
 pub fn open(db_path: &Path) -> Result<Db> {
     let conn = Connection::open(db_path)?;
@@ -179,14 +179,14 @@ mod tests {
     #[test]
     fn manifest_index_upserts_and_overwrites() {
         let (_dir, mut db) = open_in_tmp();
-        db.upsert_manifest_index("HARNESS.yml", "root", 100, 32, &"abc".into(), 1)
+        db.upsert_manifest_index("MUSTS.yml", "root", 100, 32, &"abc".into(), 1)
             .unwrap();
-        db.upsert_manifest_index("HARNESS.yml", "root", 200, 64, &"def".into(), 2)
+        db.upsert_manifest_index("MUSTS.yml", "root", 200, 64, &"def".into(), 2)
             .unwrap();
         let (mtime, size, hash): (i64, i64, String) = db
             .conn()
             .query_row(
-                "SELECT mtime_ns, size_bytes, content_hash FROM manifest_index WHERE manifest_path = 'HARNESS.yml'",
+                "SELECT mtime_ns, size_bytes, content_hash FROM manifest_index WHERE manifest_path = 'MUSTS.yml'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )

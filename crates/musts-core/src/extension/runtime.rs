@@ -9,7 +9,7 @@
 //!   or after, multiple concatenated documents, and non-JSON output are
 //!   all protocol errors.
 //! - Max response size is 4 MiB. Larger responses are rejected.
-//! - Timeout: 30s default, configurable via `HARNESS_EXTENSION_TIMEOUT_SECS`.
+//! - Timeout: 30s default, configurable via `MUSTS_EXTENSION_TIMEOUT_SECS`.
 //! - `protocol_version` in the response must equal 1.
 //! - On non-zero exit, stderr is surfaced verbatim.
 
@@ -37,7 +37,7 @@ pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// Environment variable that overrides [`DEFAULT_TIMEOUT_SECS`].
-pub const TIMEOUT_ENV: &str = "HARNESS_EXTENSION_TIMEOUT_SECS";
+pub const TIMEOUT_ENV: &str = "MUSTS_EXTENSION_TIMEOUT_SECS";
 
 /// Tunables for the extension runtime. Defaults come from env vars and
 /// the constants above.

@@ -15,7 +15,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 fn has_jq() -> bool {
@@ -36,7 +36,7 @@ fn project_root() -> PathBuf {
 }
 
 fn install_eslint_extension(workspace: &Path) {
-    let dst = workspace.join(".harness/extensions/eslint");
+    let dst = workspace.join(".musts/extensions/eslint");
     fs::create_dir_all(&dst).unwrap();
     let script_src = project_root().join("docs/examples/eslint-check/eslint-check.sh");
     let script_dst = dst.join("eslint-check.sh");
@@ -74,7 +74,7 @@ fn shell_extension_drives_full_validate_evidence_loop() {
         return;
     }
     let dir = TempDir::new().unwrap();
-    write_manifest(&dir.path().join("HARNESS.yml"));
+    write_manifest(&dir.path().join("MUSTS.yml"));
     install_eslint_extension(dir.path());
 
     bin()
@@ -110,7 +110,7 @@ fn shell_extension_drives_full_validate_evidence_loop() {
         .arg("validate")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Harness validation clean."));
+        .stdout(predicate::str::contains("Musts validation clean."));
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn shell_extension_rejects_missing_log() {
         return;
     }
     let dir = TempDir::new().unwrap();
-    write_manifest(&dir.path().join("HARNESS.yml"));
+    write_manifest(&dir.path().join("MUSTS.yml"));
     install_eslint_extension(dir.path());
     bin()
         .arg("--workspace")

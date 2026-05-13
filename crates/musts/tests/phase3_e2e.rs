@@ -1,7 +1,7 @@
 //! Phase 3 end-to-end scenarios per `docs/PLAN.md` §7.3 and §9 Phase 3.
 //!
 //! Each scenario sets up a temp workspace with the required manifests
-//! and a stub-extension descriptor, then drives the real `harness`
+//! and a stub-extension descriptor, then drives the real `musts`
 //! binary.
 
 mod common;
@@ -15,7 +15,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 /// Path to the stub-extension binary. Built on demand if missing so
@@ -27,7 +27,7 @@ fn stub_binary() -> PathBuf {
 /// Install a stub-extension descriptor that claims the given fully
 /// qualified capability id.
 fn install_stub_descriptor(workspace: &Path, capability_uses: &str) {
-    let dir = workspace.join(".harness/extensions/stub");
+    let dir = workspace.join(".musts/extensions/stub");
     fs::create_dir_all(&dir).unwrap();
     let stub = stub_binary();
     fs::write(
@@ -56,8 +56,8 @@ fn write_manifest(path: &Path, body: &str) {
 
 fn run_validate(workspace: &Path) -> assert_cmd::assert::Assert {
     bin()
-        .env_remove("HARNESS_STUB_RESOLVE_MODE")
-        .env_remove("HARNESS_STUB_RESOLVE_SHAPE")
+        .env_remove("MUSTS_STUB_RESOLVE_MODE")
+        .env_remove("MUSTS_STUB_RESOLVE_SHAPE")
         .arg("--workspace")
         .arg(workspace)
         .arg("validate")
@@ -73,11 +73,11 @@ fn run_validate(workspace: &Path) -> assert_cmd::assert::Assert {
 fn scenario_2_first_run_emits_tasks() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  app-build:\n    uses: bazel/build\n    with:\n      target: //App:App\n",
     );
     write_manifest(
-        &dir.path().join("App/Login/HARNESS.yml"),
+        &dir.path().join("App/Login/MUSTS.yml"),
         "version: 1\nchecks:\n  login-build:\n    uses: bazel/build\n    with:\n      target: //App/Login:Login\n",
     );
     install_stub_descriptor(dir.path(), "bazel/build");
@@ -85,7 +85,7 @@ fn scenario_2_first_run_emits_tasks() {
     run_validate(dir.path())
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Harness validation pending."))
+        .stdout(predicate::str::contains("Musts validation pending."))
         .stdout(predicate::str::contains("Task: stub-task"))
         .stdout(predicate::str::contains("Extension: bazel/build"))
         .stdout(predicate::str::contains("Completion rule:"));
@@ -99,18 +99,18 @@ fn scenario_2_first_run_emits_tasks() {
 #[serial]
 fn scenario_8_bad_manifest_invalid_yaml() {
     let dir = TempDir::new().unwrap();
-    write_manifest(&dir.path().join("HARNESS.yml"), "not: [valid yaml\n");
+    write_manifest(&dir.path().join("MUSTS.yml"), "not: [valid yaml\n");
     run_validate(dir.path())
         .failure()
         .code(2)
-        .stderr(predicate::str::contains("HARNESS.yml"));
+        .stderr(predicate::str::contains("MUSTS.yml"));
 }
 
 #[test]
 #[serial]
 fn scenario_8_bad_manifest_unsupported_version() {
     let dir = TempDir::new().unwrap();
-    write_manifest(&dir.path().join("HARNESS.yml"), "version: 99\nchecks: {}\n");
+    write_manifest(&dir.path().join("MUSTS.yml"), "version: 99\nchecks: {}\n");
     install_stub_descriptor(dir.path(), "bazel/build");
     run_validate(dir.path())
         .failure()
@@ -125,10 +125,10 @@ fn scenario_8_bad_manifest_with_schema_violation() {
     // the manifest sends an integer.
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  bad:\n    uses: bazel/build\n    with:\n      target: 42\n",
     );
-    let cap_dir = dir.path().join(".harness/extensions/stub");
+    let cap_dir = dir.path().join(".musts/extensions/stub");
     fs::create_dir_all(cap_dir.join("schemas")).unwrap();
     fs::write(
         cap_dir.join("schemas/build.schema.json"),
@@ -169,18 +169,18 @@ capabilities:
 fn run_resolve_failure_mode(mode: &str) -> assert_cmd::assert::Assert {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
     install_stub_descriptor(dir.path(), "bazel/build");
     let mut cmd = bin();
-    cmd.env("HARNESS_STUB_RESOLVE_MODE", mode)
+    cmd.env("MUSTS_STUB_RESOLVE_MODE", mode)
         .arg("--workspace")
         .arg(dir.path())
         .arg("validate");
     if mode == "timeout" {
         // The stub sleeps 300s — keep the test fast.
-        cmd.env("HARNESS_EXTENSION_TIMEOUT_SECS", "1");
+        cmd.env("MUSTS_EXTENSION_TIMEOUT_SECS", "1");
     }
     // tempdir lifetime: keep the assertion inside the function so the
     // dir persists for the binary's run.
@@ -233,7 +233,7 @@ fn scenario_9a_resolve_timeout_is_rejected() {
 fn scenario_10_json_output_pending_shape() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
     install_stub_descriptor(dir.path(), "bazel/build");
@@ -270,17 +270,17 @@ fn scenario_10_json_output_pending_shape() {
 fn scenario_15_concurrent_validate_locks() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
     install_stub_descriptor(dir.path(), "bazel/build");
 
-    // Hold the lock manually, then run harness and expect lock-busy.
+    // Hold the lock manually, then run musts and expect lock-busy.
     use fs2::FileExt;
     use std::fs::OpenOptions;
-    let harness_dir = dir.path().join(".harness");
-    fs::create_dir_all(&harness_dir).unwrap();
-    let lock_path = harness_dir.join(".lock");
+    let musts_dir = dir.path().join(".musts");
+    fs::create_dir_all(&musts_dir).unwrap();
+    let lock_path = musts_dir.join(".lock");
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -298,7 +298,7 @@ fn scenario_15_concurrent_validate_locks() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains(
-            "another harness process is running",
+            "another musts process is running",
         ));
 
     drop(lock);
@@ -319,7 +319,7 @@ fn scenario_16_unicode_path_stability() {
     // `snapshot::paths::normalise_rel_path`.
     fn build(ws: &Path, name: &str) {
         write_manifest(
-            &ws.join("HARNESS.yml"),
+            &ws.join("MUSTS.yml"),
             "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
         );
         install_stub_descriptor(ws, "bazel/build");
@@ -345,7 +345,7 @@ fn scenario_16_unicode_path_stability() {
 
     fn read_scope_hash(workspace: &Path) -> String {
         use rusqlite::Connection;
-        let conn = Connection::open(workspace.join(".harness/state.sqlite")).unwrap();
+        let conn = Connection::open(workspace.join(".musts/state.sqlite")).unwrap();
         conn.query_row(
             "SELECT scope_hash FROM scope_snapshots WHERE scope_path = ?1",
             ["root/c"],
@@ -373,7 +373,7 @@ fn scenario_17_submodule_workspace_root() {
     let outer = TempDir::new().unwrap();
     fs::create_dir(outer.path().join(".git")).unwrap();
     write_manifest(
-        &outer.path().join("HARNESS.yml"),
+        &outer.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
     install_stub_descriptor(outer.path(), "bazel/build");
@@ -387,6 +387,6 @@ fn scenario_17_submodule_workspace_root() {
         .assert()
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Harness validation pending."))
+        .stdout(predicate::str::contains("Musts validation pending."))
         .stdout(predicate::str::contains("Task: stub-task"));
 }

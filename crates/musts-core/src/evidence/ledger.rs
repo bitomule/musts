@@ -70,7 +70,7 @@ pub struct StoredTask {
 
 /// Look up the stored task by id. Returns `None` if the task is not in
 /// the table — this is the "task no longer applies" signal for
-/// `harness evidence` after a `validate` re-issues a different set.
+/// `musts evidence` after a `validate` re-issues a different set.
 pub fn fetch_task(db: &Db, task_id: &str) -> Result<Option<StoredTask>> {
     let row = db
         .conn()

@@ -72,7 +72,7 @@ fn sample_resolve_request() -> ResolveRequest {
         checks: vec![ResolveCheck {
             id: "App/Login/login-build".into(),
             local_id: "login-build".into(),
-            manifest_path: "App/Login/HARNESS.yml".into(),
+            manifest_path: "App/Login/MUSTS.yml".into(),
             scope_path: "App/Login".into(),
             depth: 2,
             with_payload: serde_json::json!({}),
@@ -159,11 +159,11 @@ fn resolve_ignore_all_shape() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(10));
 
-    std::env::set_var("HARNESS_STUB_RESOLVE_SHAPE", "ignore_all");
+    std::env::set_var("MUSTS_STUB_RESOLVE_SHAPE", "ignore_all");
     let response = runner
         .resolve(&cap.resolve, &sample_resolve_request())
         .unwrap();
-    std::env::remove_var("HARNESS_STUB_RESOLVE_SHAPE");
+    std::env::remove_var("MUSTS_STUB_RESOLVE_SHAPE");
     assert!(response.tasks.is_empty());
     assert_eq!(response.ignored_checks.len(), 1);
     assert_eq!(response.ignored_checks[0].id, "App/Login/login-build");
@@ -177,11 +177,11 @@ fn resolve_timeout_is_rejected() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_millis(150));
 
-    std::env::set_var("HARNESS_STUB_RESOLVE_MODE", "timeout");
+    std::env::set_var("MUSTS_STUB_RESOLVE_MODE", "timeout");
     let err = runner
         .resolve(&cap.resolve, &sample_resolve_request())
         .unwrap_err();
-    std::env::remove_var("HARNESS_STUB_RESOLVE_MODE");
+    std::env::remove_var("MUSTS_STUB_RESOLVE_MODE");
     assert!(
         matches!(err, Error::ExtensionTimeout { .. }),
         "expected timeout, got: {err}"
@@ -203,11 +203,11 @@ fn resolve_garbage_stdout_is_rejected() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(5));
 
-    std::env::set_var("HARNESS_STUB_RESOLVE_MODE", "garbage");
+    std::env::set_var("MUSTS_STUB_RESOLVE_MODE", "garbage");
     let err = runner
         .resolve(&cap.resolve, &sample_resolve_request())
         .unwrap_err();
-    std::env::remove_var("HARNESS_STUB_RESOLVE_MODE");
+    std::env::remove_var("MUSTS_STUB_RESOLVE_MODE");
     let message = format!("{err}");
     assert!(
         message.contains("not valid JSON") || message.contains("data after"),
@@ -227,11 +227,11 @@ fn resolve_oversized_response_is_rejected() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(10));
 
-    std::env::set_var("HARNESS_STUB_RESOLVE_MODE", "oversized");
+    std::env::set_var("MUSTS_STUB_RESOLVE_MODE", "oversized");
     let err = runner
         .resolve(&cap.resolve, &sample_resolve_request())
         .unwrap_err();
-    std::env::remove_var("HARNESS_STUB_RESOLVE_MODE");
+    std::env::remove_var("MUSTS_STUB_RESOLVE_MODE");
     let message = format!("{err}");
     assert!(message.contains("exceeds"), "unexpected: {message}");
     assert!(
@@ -248,11 +248,11 @@ fn resolve_nonzero_exit_is_surfaced_with_stderr() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(5));
 
-    std::env::set_var("HARNESS_STUB_RESOLVE_MODE", "nonzero_exit");
+    std::env::set_var("MUSTS_STUB_RESOLVE_MODE", "nonzero_exit");
     let err = runner
         .resolve(&cap.resolve, &sample_resolve_request())
         .unwrap_err();
-    std::env::remove_var("HARNESS_STUB_RESOLVE_MODE");
+    std::env::remove_var("MUSTS_STUB_RESOLVE_MODE");
     let message = format!("{err}");
     assert!(
         message.contains("simulated failure"),
@@ -268,11 +268,11 @@ fn resolve_bad_protocol_version_is_rejected() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(5));
 
-    std::env::set_var("HARNESS_STUB_RESOLVE_MODE", "bad_protocol_version");
+    std::env::set_var("MUSTS_STUB_RESOLVE_MODE", "bad_protocol_version");
     let err = runner
         .resolve(&cap.resolve, &sample_resolve_request())
         .unwrap_err();
-    std::env::remove_var("HARNESS_STUB_RESOLVE_MODE");
+    std::env::remove_var("MUSTS_STUB_RESOLVE_MODE");
     let message = format!("{err}");
     assert!(
         message.contains("protocol_version"),
@@ -311,11 +311,11 @@ fn evidence_accept_subset() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(5));
 
-    std::env::set_var("HARNESS_STUB_EVIDENCE_SHAPE", "accept_subset");
+    std::env::set_var("MUSTS_STUB_EVIDENCE_SHAPE", "accept_subset");
     let response = runner
         .evidence(&cap.evidence, &sample_evidence_request())
         .unwrap();
-    std::env::remove_var("HARNESS_STUB_EVIDENCE_SHAPE");
+    std::env::remove_var("MUSTS_STUB_EVIDENCE_SHAPE");
     assert!(response.accepted);
     assert_eq!(response.satisfies, vec!["App/Login/login-build"]);
 }
@@ -328,11 +328,11 @@ fn evidence_reject_shape() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(5));
 
-    std::env::set_var("HARNESS_STUB_EVIDENCE_SHAPE", "reject");
+    std::env::set_var("MUSTS_STUB_EVIDENCE_SHAPE", "reject");
     let response = runner
         .evidence(&cap.evidence, &sample_evidence_request())
         .unwrap();
-    std::env::remove_var("HARNESS_STUB_EVIDENCE_SHAPE");
+    std::env::remove_var("MUSTS_STUB_EVIDENCE_SHAPE");
     assert!(!response.accepted);
     assert_eq!(response.missing.len(), 1);
 }
@@ -348,11 +348,11 @@ fn evidence_overclaim_returns_extra_satisfies() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(5));
 
-    std::env::set_var("HARNESS_STUB_EVIDENCE_SHAPE", "overclaim");
+    std::env::set_var("MUSTS_STUB_EVIDENCE_SHAPE", "overclaim");
     let response = runner
         .evidence(&cap.evidence, &sample_evidence_request())
         .unwrap();
-    std::env::remove_var("HARNESS_STUB_EVIDENCE_SHAPE");
+    std::env::remove_var("MUSTS_STUB_EVIDENCE_SHAPE");
     assert!(response
         .satisfies
         .contains(&"stub/unrelated-check".to_string()));
@@ -366,11 +366,11 @@ fn evidence_timeout_is_rejected() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_millis(150));
 
-    std::env::set_var("HARNESS_STUB_EVIDENCE_MODE", "timeout");
+    std::env::set_var("MUSTS_STUB_EVIDENCE_MODE", "timeout");
     let err = runner
         .evidence(&cap.evidence, &sample_evidence_request())
         .unwrap_err();
-    std::env::remove_var("HARNESS_STUB_EVIDENCE_MODE");
+    std::env::remove_var("MUSTS_STUB_EVIDENCE_MODE");
     assert!(matches!(err, Error::ExtensionTimeout { .. }));
     let display = format!("{err}");
     assert!(
@@ -387,11 +387,11 @@ fn evidence_bad_protocol_version_is_rejected() {
     let cap = &descriptor.capabilities["stub"];
     let runner = runner_with(&descriptor, Duration::from_secs(5));
 
-    std::env::set_var("HARNESS_STUB_EVIDENCE_MODE", "bad_protocol_version");
+    std::env::set_var("MUSTS_STUB_EVIDENCE_MODE", "bad_protocol_version");
     let err = runner
         .evidence(&cap.evidence, &sample_evidence_request())
         .unwrap_err();
-    std::env::remove_var("HARNESS_STUB_EVIDENCE_MODE");
+    std::env::remove_var("MUSTS_STUB_EVIDENCE_MODE");
     let message = format!("{err}");
     assert!(
         message.contains("protocol_version"),

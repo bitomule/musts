@@ -1,4 +1,4 @@
-//! Core library for the `harness` CLI.
+//! Core library for the `musts` CLI.
 //!
 //! Phases land per `docs/PLAN.md`:
 //! - Phase 1: `error`, `workspace`, `manifest`, `snapshot`, `state`.

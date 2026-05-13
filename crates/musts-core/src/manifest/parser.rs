@@ -1,4 +1,4 @@
-//! `HARNESS.yml` parser per `docs/PLAN.md` §4.3 (`manifest::parser`).
+//! `MUSTS.yml` parser per `docs/PLAN.md` §4.3 (`manifest::parser`).
 //!
 //! Behaviour:
 //! - Requires `version: 1`. Any other version is rejected.
@@ -66,7 +66,7 @@ fn default_with() -> serde_yaml::Value {
     serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
 }
 
-/// Parse a `HARNESS.yml` file from bytes. `path` is used for error messages
+/// Parse a `MUSTS.yml` file from bytes. `path` is used for error messages
 /// (and as the `path` field of the resulting [`Manifest`]).
 pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
     let file: ManifestFile =
@@ -183,7 +183,7 @@ mod tests {
     use super::*;
 
     fn p() -> PathBuf {
-        PathBuf::from("/repo/HARNESS.yml")
+        PathBuf::from("/repo/MUSTS.yml")
     }
 
     #[test]

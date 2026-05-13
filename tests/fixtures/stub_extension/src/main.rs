@@ -24,7 +24,7 @@ fn main() -> ExitCode {
     let mut input = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut input);
 
-    let delay_ms: u64 = std::env::var("HARNESS_STUB_DELAY_MS")
+    let delay_ms: u64 = std::env::var("MUSTS_STUB_DELAY_MS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
@@ -43,7 +43,7 @@ fn main() -> ExitCode {
 }
 
 fn handle_resolve(input: &[u8]) -> ExitCode {
-    let mode = std::env::var("HARNESS_STUB_RESOLVE_MODE").unwrap_or_else(|_| "ok".into());
+    let mode = std::env::var("MUSTS_STUB_RESOLVE_MODE").unwrap_or_else(|_| "ok".into());
     match mode.as_str() {
         "ok" => emit_resolve_ok(input),
         "timeout" => {
@@ -71,14 +71,14 @@ fn handle_resolve(input: &[u8]) -> ExitCode {
             emit_resolve_with_version(input, 9999)
         }
         other => {
-            eprintln!("stub-extension: unknown HARNESS_STUB_RESOLVE_MODE `{other}`");
+            eprintln!("stub-extension: unknown MUSTS_STUB_RESOLVE_MODE `{other}`");
             ExitCode::from(2)
         }
     }
 }
 
 fn handle_evidence(input: &[u8]) -> ExitCode {
-    let mode = std::env::var("HARNESS_STUB_EVIDENCE_MODE").unwrap_or_else(|_| "ok".into());
+    let mode = std::env::var("MUSTS_STUB_EVIDENCE_MODE").unwrap_or_else(|_| "ok".into());
     match mode.as_str() {
         "ok" => emit_evidence_ok(input),
         "timeout" => {
@@ -104,7 +104,7 @@ fn handle_evidence(input: &[u8]) -> ExitCode {
             emit_evidence_with_version(input, 9999)
         }
         other => {
-            eprintln!("stub-extension: unknown HARNESS_STUB_EVIDENCE_MODE `{other}`");
+            eprintln!("stub-extension: unknown MUSTS_STUB_EVIDENCE_MODE `{other}`");
             ExitCode::from(2)
         }
     }
@@ -119,7 +119,7 @@ fn emit_resolve_ok(input: &[u8]) -> ExitCode {
         }
     };
 
-    let shape = std::env::var("HARNESS_STUB_RESOLVE_SHAPE").unwrap_or_else(|_| "default".into());
+    let shape = std::env::var("MUSTS_STUB_RESOLVE_SHAPE").unwrap_or_else(|_| "default".into());
     let response = match shape.as_str() {
         "empty" => ResolveResponse {
             protocol_version: PROTOCOL_VERSION,
@@ -200,7 +200,7 @@ fn emit_evidence_ok(input: &[u8]) -> ExitCode {
         }
     };
     let shape =
-        std::env::var("HARNESS_STUB_EVIDENCE_SHAPE").unwrap_or_else(|_| "accept_all".into());
+        std::env::var("MUSTS_STUB_EVIDENCE_SHAPE").unwrap_or_else(|_| "accept_all".into());
     let response = match shape.as_str() {
         "accept_subset" => EvidenceValidationResponse {
             protocol_version: PROTOCOL_VERSION,
@@ -341,7 +341,7 @@ fn assets_passthrough(req: &EvidenceValidationRequest) -> Vec<NormalizedAsset> {
 
 fn pad_string() -> String {
     // 5 MiB: exceeds the 4 MiB cap regardless of surrounding JSON.
-    let bytes_env = std::env::var("HARNESS_STUB_RESPONSE_BYTES")
+    let bytes_env = std::env::var("MUSTS_STUB_RESPONSE_BYTES")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(5 * 1024 * 1024);

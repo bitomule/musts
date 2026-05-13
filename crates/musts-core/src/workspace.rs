@@ -5,7 +5,7 @@
 //! 2. Walk upward from canonicalised cwd to the nearest ancestor with a
 //!    `.git` *directory* (not a `.git` file/gitlink — those are submodules
 //!    and we transparently keep walking).
-//! 3. Else: walk upward to the nearest ancestor containing a `HARNESS.yml`.
+//! 3. Else: walk upward to the nearest ancestor containing a `MUSTS.yml`.
 //!    Stop at the first one — do not climb across that boundary.
 //! 4. Else: not-found error suggesting `--workspace`.
 
@@ -30,7 +30,7 @@ pub fn resolve(explicit: Option<&Path>, cwd: &Path) -> Result<PathBuf> {
     }
     Err(Error::WorkspaceNotFound {
         message: format!(
-            "no .git directory or HARNESS.yml found from {}; pass --workspace <path>",
+            "no .git directory or MUSTS.yml found from {}; pass --workspace <path>",
             start.display()
         ),
     })
@@ -56,11 +56,11 @@ fn find_git_anchor(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Walk upward looking for the nearest ancestor containing `HARNESS.yml`.
+/// Walk upward looking for the nearest ancestor containing `MUSTS.yml`.
 /// Stop at the first match — do not climb past it.
 fn find_manifest_anchor(start: &Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
-        if ancestor.join("HARNESS.yml").is_file() {
+        if ancestor.join("MUSTS.yml").is_file() {
             return Some(ancestor.to_path_buf());
         }
     }
@@ -90,7 +90,7 @@ mod tests {
         fs::create_dir(dir.path().join(".git")).unwrap();
         let nested = dir.path().join("a/b");
         fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("HARNESS.yml"), "version: 1\nchecks: {}\n").unwrap();
+        fs::write(nested.join("MUSTS.yml"), "version: 1\nchecks: {}\n").unwrap();
         let resolved = resolve(None, &nested).unwrap();
         assert_eq!(resolved, dir.path().canonicalize().unwrap());
     }
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn manifest_fallback_when_no_git() {
         let dir = tmp();
-        fs::write(dir.path().join("HARNESS.yml"), "version: 1\nchecks: {}\n").unwrap();
+        fs::write(dir.path().join("MUSTS.yml"), "version: 1\nchecks: {}\n").unwrap();
         let nested = dir.path().join("a");
         fs::create_dir(&nested).unwrap();
         let resolved = resolve(None, &nested).unwrap();
@@ -120,13 +120,13 @@ mod tests {
     #[test]
     fn manifest_fallback_stops_at_first_match() {
         let outer = tmp();
-        fs::write(outer.path().join("HARNESS.yml"), "version: 1\nchecks: {}\n").unwrap();
+        fs::write(outer.path().join("MUSTS.yml"), "version: 1\nchecks: {}\n").unwrap();
         let inner = outer.path().join("a");
         fs::create_dir(&inner).unwrap();
-        fs::write(inner.join("HARNESS.yml"), "version: 1\nchecks: {}\n").unwrap();
+        fs::write(inner.join("MUSTS.yml"), "version: 1\nchecks: {}\n").unwrap();
         let cwd = inner.join("b");
         fs::create_dir(&cwd).unwrap();
-        // From `a/b/`, the nearest HARNESS.yml is `a/HARNESS.yml`, not the outer one.
+        // From `a/b/`, the nearest MUSTS.yml is `a/MUSTS.yml`, not the outer one.
         let resolved = resolve(None, &cwd).unwrap();
         assert_eq!(resolved, inner.canonicalize().unwrap());
     }

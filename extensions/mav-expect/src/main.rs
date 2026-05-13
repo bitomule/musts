@@ -112,7 +112,7 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
             }
         }
         instructions.push(format!(
-            "Record evidence with `harness evidence {task_id} --text \"<summary>\" --asset <path>`."
+            "Record evidence with `musts evidence {task_id} --text \"<summary>\" --asset <path>`."
         ));
         let assets: Vec<AssetContract> = bucket
             .kinds
@@ -347,7 +347,7 @@ mod tests {
                 format!("{scope}/{local}")
             },
             local_id: local.into(),
-            manifest_path: "HARNESS.yml".into(),
+            manifest_path: "MUSTS.yml".into(),
             scope_path: scope.into(),
             depth: 0,
             with_payload: serde_json::json!({

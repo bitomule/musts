@@ -1,6 +1,6 @@
 //! Portable, repo-committed "validated state" ledger.
 //!
-//! Lives at `<workspace_root>/.harness/ledger.lock.yaml`. Contains the
+//! Lives at `<workspace_root>/.musts/ledger.lock.yaml`. Contains the
 //! minimum set of tuples `(check_id, scope_hash)` core needs to answer
 //! the satisfaction question without consulting `state.sqlite`. Format
 //! is sorted, deterministic YAML so diffs and merges are reviewable.
@@ -64,15 +64,15 @@ pub struct SatisfiedEntry {
     pub scope_hash: String,
 }
 
-/// Path to the lock file inside `<workspace_root>/.harness/`.
-pub fn path(harness_dir: &Path) -> PathBuf {
-    harness_dir.join(LOCK_FILENAME)
+/// Path to the lock file inside `<workspace_root>/.musts/`.
+pub fn path(musts_dir: &Path) -> PathBuf {
+    musts_dir.join(LOCK_FILENAME)
 }
 
 /// Read the lock file. Returns `Ok(LedgerLock::default())` when the
 /// file is absent (fresh workspace, nothing previously validated).
-pub fn load(harness_dir: &Path) -> Result<LedgerLock> {
-    let p = path(harness_dir);
+pub fn load(musts_dir: &Path) -> Result<LedgerLock> {
+    let p = path(musts_dir);
     let bytes = match std::fs::read(&p) {
         Ok(b) => b,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(LedgerLock::default()),
@@ -98,8 +98,8 @@ pub fn load(harness_dir: &Path) -> Result<LedgerLock> {
 /// `BTreeSet` so iteration is sorted alphabetically by `(check,
 /// scope_hash)`. Callers should pass a `&LedgerLock` already containing
 /// every entry they want persisted — this function does no merging.
-pub fn save(harness_dir: &Path, lock: &LedgerLock) -> Result<()> {
-    let p = path(harness_dir);
+pub fn save(musts_dir: &Path, lock: &LedgerLock) -> Result<()> {
+    let p = path(musts_dir);
     let body = serde_yaml::to_string(lock).map_err(|err| Error::LedgerLock {
         path: p.clone(),
         message: format!("could not serialise: {err}"),

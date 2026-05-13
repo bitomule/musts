@@ -1,4 +1,4 @@
-//! `harness evidence` pipeline per `docs/PLAN.md` §4.2.
+//! `musts evidence` pipeline per `docs/PLAN.md` §4.2.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -35,7 +35,7 @@ pub struct SubmissionInputs<'a> {
 }
 
 /// Drive a full evidence submission. The CLI builds `inputs` from
-/// `harness evidence <task-id> --text "…" --asset PATH …` and calls
+/// `musts evidence <task-id> --text "…" --asset PATH …` and calls
 /// this; tests do likewise.
 pub fn submit(
     session: &mut StateSession,
@@ -75,7 +75,7 @@ pub fn submit(
     }
 
     // 3. Allocate a submission directory and copy assets.
-    let evidence_root = session.harness_dir.join("evidence");
+    let evidence_root = session.musts_dir.join("evidence");
     let store = EvidenceStore::allocate(workspace_root, &evidence_root, inputs.task_id)?;
     let mut wire_assets = Vec::with_capacity(inputs.asset_paths.len());
     for path in inputs.asset_paths {
@@ -212,7 +212,7 @@ pub fn submit(
     //     and writing the full lock each time is self-healing: a missed
     //     write recovers on the next accepted submission of any check.
     {
-        let mut lock = crate::state::lock::load(&session.harness_dir)?;
+        let mut lock = crate::state::lock::load(&session.musts_dir)?;
         let mut changed = false;
         for (cid, scope_hash) in accepted_now.iter().zip(resolved_hashes.iter()) {
             if lock.record(cid, scope_hash) {
@@ -220,7 +220,7 @@ pub fn submit(
             }
         }
         if changed {
-            crate::state::lock::save(&session.harness_dir, &lock)?;
+            crate::state::lock::save(&session.musts_dir, &lock)?;
         }
     }
 

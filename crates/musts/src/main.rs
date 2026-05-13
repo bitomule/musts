@@ -1,7 +1,7 @@
-//! `harness` CLI entry point.
+//! `musts` CLI entry point.
 //!
 //! Phase 3 wires the validate orchestrator behind the `validate`
-//! subcommand. Empty workspaces (no `HARNESS.yml` anywhere) short-
+//! subcommand. Empty workspaces (no `MUSTS.yml` anywhere) short-
 //! circuit to a clean report before any state is created. Everything
 //! else goes through the orchestrator and acquires the cross-process
 //! lock per `docs/PLAN.md` §4.5.1.
@@ -20,7 +20,7 @@ use musts_core::workspace;
 use musts_core::Error;
 
 #[derive(Debug, Parser)]
-#[command(name = "harness", version, about = "Agent-first validation loop", long_about = None)]
+#[command(name = "musts", version, about = "Agent-first validation loop", long_about = None)]
 struct Cli {
     /// Override the workspace root. Useful inside submodules and CI.
     #[arg(long, global = true)]
@@ -42,7 +42,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Record evidence for a task issued by the most recent `harness validate`.
+    /// Record evidence for a task issued by the most recent `musts validate`.
     Evidence {
         /// Task id from the validate report.
         task_id: String,
@@ -104,7 +104,7 @@ fn validate_command(
         if json {
             println!("{}", serde_json::to_string_pretty(&render_json(&report))?);
         } else {
-            println!("Harness validation clean. No HARNESS.yml files found.");
+            println!("Musts validation clean. No MUSTS.yml files found.");
         }
         return Ok(ExitCode::from(0));
     }
@@ -181,7 +181,7 @@ fn print_evidence_result(result: &EvidenceSubmissionResult) {
     if let Some(summary) = &result.summary {
         println!("Summary: {summary}");
     }
-    println!("\nRun `harness validate` again to confirm the report is now clean.");
+    println!("\nRun `musts validate` again to confirm the report is now clean.");
 }
 
 fn report_error(err: Error) -> ExitCode {

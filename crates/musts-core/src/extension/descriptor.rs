@@ -1,4 +1,4 @@
-//! Extension descriptors live at `.harness/extensions/<name>/extension.yml`.
+//! Extension descriptors live at `.musts/extensions/<name>/extension.yml`.
 //!
 //! Per `docs/PLAN.md` §4.6, the `command` field accepts either:
 //! - an argv array (preferred): `["bin/foo", "resolve", "build"]`
@@ -17,7 +17,7 @@ use serde_json::Value as JsonValue;
 
 use crate::error::{Error, Result};
 
-/// One parsed `.harness/extensions/<name>/extension.yml`.
+/// One parsed `.musts/extensions/<name>/extension.yml`.
 #[derive(Debug, Clone)]
 pub struct ExtensionDescriptor {
     /// Directory containing `extension.yml`. Relative paths inside the
@@ -74,11 +74,11 @@ impl Command {
 // Loading
 // ---------------------------------------------------------------------------
 
-/// Walk `<workspace_root>/.harness/extensions/` and return one
+/// Walk `<workspace_root>/.musts/extensions/` and return one
 /// [`ExtensionDescriptor`] per `extension.yml` found. Missing
-/// `.harness/extensions/` is not an error — it yields an empty Vec.
+/// `.musts/extensions/` is not an error — it yields an empty Vec.
 pub fn discover_descriptors(workspace_root: &Path) -> Result<Vec<ExtensionDescriptor>> {
-    let ext_dir = workspace_root.join(".harness").join("extensions");
+    let ext_dir = workspace_root.join(".musts").join("extensions");
     if !ext_dir.exists() {
         return Ok(Vec::new());
     }
@@ -282,7 +282,7 @@ mod tests {
     fn loads_argv_form_descriptor() {
         let dir = TempDir::new().unwrap();
         let path = write_descriptor(
-            &dir.path().join(".harness/extensions/bazel"),
+            &dir.path().join(".musts/extensions/bazel"),
             r#"
 name: bazel
 version: 0.1.0
@@ -308,7 +308,7 @@ capabilities:
     fn loads_string_form_descriptor() {
         let dir = TempDir::new().unwrap();
         let path = write_descriptor(
-            &dir.path().join(".harness/extensions/bazel"),
+            &dir.path().join(".musts/extensions/bazel"),
             r#"
 name: bazel
 version: 0.1.0
@@ -332,7 +332,7 @@ capabilities:
     fn rejects_shell_metacharacters_in_string_form() {
         let dir = TempDir::new().unwrap();
         let path = write_descriptor(
-            &dir.path().join(".harness/extensions/bad"),
+            &dir.path().join(".musts/extensions/bad"),
             r#"
 name: bad
 version: 0.1.0
@@ -358,7 +358,7 @@ capabilities:
         // The argv array escapes the shell entirely, so `|` is fine there.
         let dir = TempDir::new().unwrap();
         let path = write_descriptor(
-            &dir.path().join(".harness/extensions/argv"),
+            &dir.path().join(".musts/extensions/argv"),
             r#"
 name: argv
 version: 0.1.0
@@ -382,7 +382,7 @@ capabilities:
     fn rejects_empty_argv() {
         let dir = TempDir::new().unwrap();
         let path = write_descriptor(
-            &dir.path().join(".harness/extensions/empty"),
+            &dir.path().join(".musts/extensions/empty"),
             r#"
 name: empty
 version: 0.1.0
@@ -402,7 +402,7 @@ capabilities:
     #[test]
     fn loads_schema_file_when_present() {
         let dir = TempDir::new().unwrap();
-        let cap_dir = dir.path().join(".harness/extensions/bazel");
+        let cap_dir = dir.path().join(".musts/extensions/bazel");
         fs::create_dir_all(cap_dir.join("schemas")).unwrap();
         fs::write(
             cap_dir.join("schemas/build.schema.json"),
@@ -440,7 +440,7 @@ capabilities:
     fn discover_walks_extensions_dir_and_sorts() {
         let dir = TempDir::new().unwrap();
         for name in ["bazel", "mav"] {
-            let cap_dir = dir.path().join(".harness/extensions").join(name);
+            let cap_dir = dir.path().join(".musts/extensions").join(name);
             fs::create_dir_all(&cap_dir).unwrap();
             fs::write(
                 cap_dir.join("extension.yml"),
@@ -470,11 +470,11 @@ capabilities:
         let cmd = Command {
             argv: vec!["bin/foo".into(), "x".into()],
         };
-        let descriptor_root = Path::new("/repo/.harness/extensions/bazel");
+        let descriptor_root = Path::new("/repo/.musts/extensions/bazel");
         let resolved = cmd.program_path(descriptor_root);
         assert_eq!(
             resolved,
-            PathBuf::from("/repo/.harness/extensions/bazel/bin/foo")
+            PathBuf::from("/repo/.musts/extensions/bazel/bin/foo")
         );
 
         let abs_cmd = Command {

@@ -1,6 +1,6 @@
-//! Wire types for the harness ⇄ extension JSON-over-stdio protocol.
+//! Wire types for the musts ⇄ extension JSON-over-stdio protocol.
 //!
-//! See `docs/harness-validation-plan.md` §9 (resolve) and §10 (evidence)
+//! See `docs/musts-design.md` §9 (resolve) and §10 (evidence)
 //! and `docs/PLAN.md` §4.6 (IPC contract).
 
 use serde::{Deserialize, Serialize};
@@ -182,7 +182,7 @@ mod tests {
             checks: vec![ResolveCheck {
                 id: "App/Login/login-build".into(),
                 local_id: "login-build".into(),
-                manifest_path: "App/Login/HARNESS.yml".into(),
+                manifest_path: "App/Login/MUSTS.yml".into(),
                 scope_path: "App/Login".into(),
                 depth: 2,
                 with_payload: serde_json::json!({ "target": "//App/Login:Login" }),
@@ -247,7 +247,7 @@ mod tests {
             submission: EvidenceSubmission {
                 text: Some("Validated login flow.".into()),
                 assets: vec![EvidenceAsset {
-                    path: ".harness/evidence/mav-login-flow/submission-001/success.png".into(),
+                    path: ".musts/evidence/mav-login-flow/submission-001/success.png".into(),
                     mime: "image/png".into(),
                     size: 182_331,
                 }],
@@ -267,7 +267,7 @@ mod tests {
             summary: Some("Required assets present.".into()),
             normalized_assets: vec![NormalizedAsset {
                 kind: "screenshot".into(),
-                path: ".harness/evidence/mav-login-flow/submission-001/success.png".into(),
+                path: ".musts/evidence/mav-login-flow/submission-001/success.png".into(),
             }],
             missing: vec![],
             message: None,

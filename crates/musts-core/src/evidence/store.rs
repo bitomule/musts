@@ -1,4 +1,4 @@
-//! Evidence asset store at `.harness/evidence/<task>/submission-NNN/`.
+//! Evidence asset store at `.musts/evidence/<task>/submission-NNN/`.
 //!
 //! Responsibilities per `docs/PLAN.md` §4.4.1 + §4.2:
 //! - Allocate the next `submission-NNN` directory.
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn allocate_starts_at_001_and_increments() {
         let workspace = TempDir::new().unwrap();
-        let evidence = workspace.path().join(".harness/evidence");
+        let evidence = workspace.path().join(".musts/evidence");
         let one = EvidenceStore::allocate(workspace.path(), &evidence, "t").unwrap();
         assert!(one.submission_id.ends_with("001"));
         let two = EvidenceStore::allocate(workspace.path(), &evidence, "t").unwrap();
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn add_asset_copies_and_reports_size() {
         let workspace = TempDir::new().unwrap();
-        let evidence = workspace.path().join(".harness/evidence");
+        let evidence = workspace.path().join(".musts/evidence");
         let store = EvidenceStore::allocate(workspace.path(), &evidence, "t").unwrap();
         let src = workspace.path().join("img.png");
         std::fs::write(&src, [0x89, 0x50, 0x4E, 0x47]).unwrap();
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn add_asset_avoids_filename_collisions() {
         let workspace = TempDir::new().unwrap();
-        let evidence = workspace.path().join(".harness/evidence");
+        let evidence = workspace.path().join(".musts/evidence");
         let store = EvidenceStore::allocate(workspace.path(), &evidence, "t").unwrap();
         let src = workspace.path().join("a.log");
         std::fs::write(&src, b"first").unwrap();
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn write_marker_creates_evidence_json() {
         let workspace = TempDir::new().unwrap();
-        let evidence = workspace.path().join(".harness/evidence");
+        let evidence = workspace.path().join(".musts/evidence");
         let store = EvidenceStore::allocate(workspace.path(), &evidence, "t").unwrap();
         store.write_marker(br#"{"x":1}"#).unwrap();
         let p = store.dir.join("evidence.json");

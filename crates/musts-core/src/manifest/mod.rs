@@ -1,4 +1,4 @@
-//! `HARNESS.yml` manifests: discovery, parsing, and stable IDs.
+//! `MUSTS.yml` manifests: discovery, parsing, and stable IDs.
 //!
 //! See `docs/PLAN.md` §4.3 (modules) and §4.4 (stable IDs).
 
@@ -13,4 +13,4 @@ pub use parser::{parse, Check, Manifest};
 pub use with_validation::validate_with_payload;
 
 /// Conventional manifest filename.
-pub const MANIFEST_FILE: &str = "HARNESS.yml";
+pub const MANIFEST_FILE: &str = "MUSTS.yml";

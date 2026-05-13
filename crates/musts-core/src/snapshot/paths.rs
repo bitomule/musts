@@ -17,11 +17,11 @@ use unicode_normalization::UnicodeNormalization;
 /// conservative "case-sensitive" assumption when in doubt because it never
 /// produces *false equivalences* (only false invalidations).
 pub fn is_case_insensitive_fs(probe_dir: &Path) -> bool {
-    let probe = probe_dir.join(".harness-case-probe-XyZ");
+    let probe = probe_dir.join(".musts-case-probe-XyZ");
     if std::fs::write(&probe, b"").is_err() {
         return false;
     }
-    let alt = probe_dir.join(".harness-case-probe-xyz");
+    let alt = probe_dir.join(".musts-case-probe-xyz");
     let case_insensitive = alt.exists();
     let _ = std::fs::remove_file(&probe);
     case_insensitive

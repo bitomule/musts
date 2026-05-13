@@ -1,4 +1,4 @@
-//! Persistent state stored at `.harness/state.sqlite`.
+//! Persistent state stored at `.musts/state.sqlite`.
 //!
 //! Schema lives in `schema.rs` and matches `docs/PLAN.md` §4.7. Migrations
 //! are versioned and idempotent.

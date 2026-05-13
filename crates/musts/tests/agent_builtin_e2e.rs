@@ -1,7 +1,7 @@
 //! End-to-end coverage for the built-in `agent` capability per
 //! `docs/PLAN.md` §6.0.
 //!
-//! No `.harness/extensions/` setup is required for any of these
+//! No `.musts/extensions/` setup is required for any of these
 //! scenarios — the whole point of the built-in is that a fresh
 //! workspace with one manifest can run the loop straight away.
 
@@ -14,7 +14,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 fn write_manifest(path: &Path, body: &str) {
@@ -27,7 +27,7 @@ fn write_manifest(path: &Path, body: &str) {
 fn agent_capability_no_extensions_needed() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   login-form:
@@ -70,7 +70,7 @@ checks:
         .arg("validate")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Harness validation clean."));
+        .stdout(predicate::str::contains("Musts validation clean."));
 }
 
 #[test]
@@ -78,7 +78,7 @@ checks:
 fn agent_text_required() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   c:
@@ -113,7 +113,7 @@ checks:
 fn agent_accepts_arbitrary_assets() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   c:
@@ -166,7 +166,7 @@ checks:
 fn agent_schema_rejects_empty_facts() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   c:
@@ -194,7 +194,7 @@ fn external_descriptor_shadows_builtin_agent() {
     // distinctive task_id we can assert on.
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   c:
@@ -217,7 +217,7 @@ checks:
             .unwrap();
         assert!(status.success());
     }
-    let ext = dir.path().join(".harness/extensions/agent");
+    let ext = dir.path().join(".musts/extensions/agent");
     fs::create_dir_all(&ext).unwrap();
     fs::write(
         ext.join("extension.yml"),
@@ -238,8 +238,8 @@ capabilities:
     .unwrap();
 
     let out = bin()
-        .env_remove("HARNESS_STUB_RESOLVE_MODE")
-        .env_remove("HARNESS_STUB_RESOLVE_SHAPE")
+        .env_remove("MUSTS_STUB_RESOLVE_MODE")
+        .env_remove("MUSTS_STUB_RESOLVE_SHAPE")
         .arg("--workspace")
         .arg(dir.path())
         .arg("validate")
@@ -260,7 +260,7 @@ capabilities:
 fn agent_groups_two_checks_in_same_scope() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   visual:

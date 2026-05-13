@@ -1,7 +1,7 @@
 //! Render the validation result for the agent.
 //!
 //! Two surfaces:
-//! - Text per `docs/harness-validation-plan.md` §11.2 — multi-line,
+//! - Text per `docs/musts-design.md` §11.2 — multi-line,
 //!   agent-friendly.
 //! - JSON per `docs/PLAN.md` §5 — stable shape, frozen at first ship.
 //!
@@ -20,7 +20,7 @@ pub struct CapabilityNote {
     pub note: String,
 }
 
-/// Aggregated output of a single `harness validate` run.
+/// Aggregated output of a single `musts validate` run.
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidateReport {
     pub workspace_root: String,
@@ -39,13 +39,13 @@ impl ValidateReport {
 pub fn render_text(report: &ValidateReport) -> String {
     let mut out = String::new();
     if report.is_clean() {
-        out.push_str("Harness validation clean.\n");
+        out.push_str("Musts validation clean.\n");
         out.push_str("No pending validation tasks for the current workspace snapshot.\n");
         push_notes_section(&mut out, &report.notes);
         push_ignored_section(&mut out, &report.ignored_checks);
         return out;
     }
-    out.push_str("Harness validation pending.\n\n");
+    out.push_str("Musts validation pending.\n\n");
     for (i, task) in report.tasks.iter().enumerate() {
         if i > 0 {
             out.push('\n');
@@ -56,7 +56,7 @@ pub fn render_text(report: &ValidateReport) -> String {
     push_ignored_section(&mut out, &report.ignored_checks);
     push_notes_section(&mut out, &report.notes);
     out.push_str("Completion rule:\n");
-    out.push_str("  Repeat `harness validate` after recording evidence.\n");
+    out.push_str("  Repeat `musts validate` after recording evidence.\n");
     out.push_str("  The task is not done until this report is empty.\n");
     out
 }
@@ -206,14 +206,14 @@ mod tests {
     #[test]
     fn text_clean_render() {
         let out = render_text(&clean_report());
-        assert!(out.starts_with("Harness validation clean."));
+        assert!(out.starts_with("Musts validation clean."));
         assert!(out.contains("No pending validation tasks"));
     }
 
     #[test]
     fn text_pending_render_contains_task_and_completion_rule() {
         let out = render_text(&pending_report());
-        assert!(out.contains("Harness validation pending."));
+        assert!(out.contains("Musts validation pending."));
         assert!(out.contains("Task: bazel-build-login"));
         assert!(out.contains("Extension: bazel/build"));
         assert!(out.contains("Satisfies:"));

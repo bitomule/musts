@@ -131,16 +131,16 @@ mod tests {
     fn adding_a_descendant_manifest_changes_the_hash() {
         let original = compute_scope_hash(&base());
         let mut modified = base();
-        modified.descendant_manifest_paths = vec!["App/Login/HARNESS.yml".into()];
+        modified.descendant_manifest_paths = vec!["App/Login/MUSTS.yml".into()];
         assert_ne!(original, compute_scope_hash(&modified));
     }
 
     #[test]
     fn descendant_paths_order_independent() {
         let mut a = base();
-        a.descendant_manifest_paths = vec!["a/HARNESS.yml".into(), "b/HARNESS.yml".into()];
+        a.descendant_manifest_paths = vec!["a/MUSTS.yml".into(), "b/MUSTS.yml".into()];
         let mut b = base();
-        b.descendant_manifest_paths = vec!["b/HARNESS.yml".into(), "a/HARNESS.yml".into()];
+        b.descendant_manifest_paths = vec!["b/MUSTS.yml".into(), "a/MUSTS.yml".into()];
         assert_eq!(compute_scope_hash(&a), compute_scope_hash(&b));
     }
 }

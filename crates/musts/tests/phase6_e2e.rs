@@ -12,7 +12,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 fn extension_binary(name: &str) -> PathBuf {
@@ -35,7 +35,7 @@ fn project_root() -> PathBuf {
 }
 
 fn install_mav_descriptor(workspace: &Path) {
-    let dir = workspace.join(".harness/extensions/mav");
+    let dir = workspace.join(".musts/extensions/mav");
     let schemas = dir.join("schemas");
     fs::create_dir_all(&schemas).unwrap();
     let source = project_root().join("extensions/mav-expect/schemas/expect.schema.json");
@@ -62,7 +62,7 @@ capabilities:
 }
 
 fn install_bazel_descriptor(workspace: &Path) {
-    let dir = workspace.join(".harness/extensions/bazel");
+    let dir = workspace.join(".musts/extensions/bazel");
     let schemas = dir.join("schemas");
     fs::create_dir_all(&schemas).unwrap();
     let source = project_root().join("extensions/bazel-build/schemas/build.schema.json");
@@ -102,7 +102,7 @@ fn write_manifest(path: &Path, body: &str) {
 fn scenario_7_mav_groups_expectations() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   valid:
@@ -168,7 +168,7 @@ fn mav_rejects_non_json_mav_report() {
     // garbage with `application/json` MIME and confirm rejection.
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   flow:
@@ -220,11 +220,11 @@ fn full_section_15_worked_example() {
     // mav/expect. Modifying App/Login/LoginView.swift dirties both
     // capabilities; bazel/build picks the deepest target, mav/expect
     // emits a single MAV task. After both evidences are recorded,
-    // `harness validate` is clean.
+    // `musts validate` is clean.
 
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   app-build:
@@ -234,7 +234,7 @@ checks:
 "#,
     );
     write_manifest(
-        &dir.path().join("App/Login/HARNESS.yml"),
+        &dir.path().join("App/Login/MUSTS.yml"),
         r#"version: 1
 checks:
   login-build:
@@ -339,5 +339,5 @@ checks:
         .arg("validate")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Harness validation clean."));
+        .stdout(predicate::str::contains("Musts validation clean."));
 }

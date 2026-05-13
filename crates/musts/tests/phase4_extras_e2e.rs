@@ -12,7 +12,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 fn write_manifest(path: &Path, body: &str) {
@@ -32,10 +32,10 @@ fn scenario_19_missing_extension_binary() {
     // the descriptor and the missing program.
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
-    let ext_dir = dir.path().join(".harness/extensions/bazel");
+    let ext_dir = dir.path().join(".musts/extensions/bazel");
     fs::create_dir_all(&ext_dir).unwrap();
     fs::write(
         ext_dir.join("extension.yml"),
@@ -72,15 +72,15 @@ capabilities:
 #[test]
 #[serial]
 fn scenario_20_empty_extensions_dir() {
-    // `.harness/extensions/` exists but is empty; manifests with
+    // `.musts/extensions/` exists but is empty; manifests with
     // checks must fail with the scenario-18-style "no extension
     // implements capability X" message.
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
-    fs::create_dir_all(dir.path().join(".harness/extensions")).unwrap();
+    fs::create_dir_all(dir.path().join(".musts/extensions")).unwrap();
 
     bin()
         .arg("--workspace")
@@ -107,16 +107,16 @@ fn scenario_21_readonly_state_dir() {
 
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
-    // Pre-create .harness/ and chmod it read-only so the write probe
+    // Pre-create .musts/ and chmod it read-only so the write probe
     // in bootstrap returns PermissionDenied.
-    let harness_dir = dir.path().join(".harness");
-    fs::create_dir_all(&harness_dir).unwrap();
-    let mut perms = fs::metadata(&harness_dir).unwrap().permissions();
+    let musts_dir = dir.path().join(".musts");
+    fs::create_dir_all(&musts_dir).unwrap();
+    let mut perms = fs::metadata(&musts_dir).unwrap().permissions();
     perms.set_mode(0o555);
-    fs::set_permissions(&harness_dir, perms).unwrap();
+    fs::set_permissions(&musts_dir, perms).unwrap();
 
     let result = bin()
         .arg("--workspace")
@@ -128,7 +128,7 @@ fn scenario_21_readonly_state_dir() {
     let _ = result;
 
     // Restore writable so TempDir can clean up.
-    let mut perms = fs::metadata(&harness_dir).unwrap().permissions();
+    let mut perms = fs::metadata(&musts_dir).unwrap().permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&harness_dir, perms).unwrap();
+    fs::set_permissions(&musts_dir, perms).unwrap();
 }

@@ -2,7 +2,7 @@
 //!
 //! Per `docs/PLAN.md` §6.0, these capabilities require no extension
 //! descriptor — manifests can use them on any workspace with no
-//! `.harness/extensions/` setup. The orchestrator's capability lookup
+//! `.musts/extensions/` setup. The orchestrator's capability lookup
 //! tries real (descriptor-backed) extensions first; on miss, it falls
 //! back to this registry.
 

@@ -24,8 +24,8 @@ fn discovers_parses_and_hashes_two_manifest_fixture() {
     let root = dir.path();
     fs::create_dir(root.join(".git")).unwrap();
 
-    let root_manifest = root.join("HARNESS.yml");
-    let nested_manifest = root.join("App/Login/HARNESS.yml");
+    let root_manifest = root.join("MUSTS.yml");
+    let nested_manifest = root.join("App/Login/MUSTS.yml");
     let login_view = root.join("App/Login/LoginView.swift");
 
     write(
@@ -47,8 +47,8 @@ fn discovers_parses_and_hashes_two_manifest_fixture() {
     assert_eq!(
         rels,
         vec![
-            "App/Login/HARNESS.yml".to_string(),
-            "HARNESS.yml".to_string()
+            "App/Login/MUSTS.yml".to_string(),
+            "MUSTS.yml".to_string()
         ]
     );
 
@@ -98,7 +98,7 @@ fn discovers_parses_and_hashes_two_manifest_fixture() {
         files: vec![],
         manifest_hash: hash_bytes(&root_bytes),
         ext_descriptor_hash: hash_bytes(b""),
-        descendant_manifest_paths: vec!["App/Login/HARNESS.yml".into()],
+        descendant_manifest_paths: vec!["App/Login/MUSTS.yml".into()],
     };
     let root_hash_original = compute_scope_hash(&root_input_with_carveout);
 
@@ -126,10 +126,10 @@ fn state_db_round_trips_with_two_manifest_inputs() {
     let db_path = dir.path().join("state.sqlite");
     let mut db = open(&db_path).unwrap();
 
-    db.upsert_manifest_index("HARNESS.yml", "root", 100, 32, &"hash-root".into(), 1)
+    db.upsert_manifest_index("MUSTS.yml", "root", 100, 32, &"hash-root".into(), 1)
         .unwrap();
     db.upsert_manifest_index(
-        "App/Login/HARNESS.yml",
+        "App/Login/MUSTS.yml",
         "App/Login",
         200,
         48,

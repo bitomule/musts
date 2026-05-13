@@ -11,7 +11,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 fn stub_binary() -> PathBuf {
@@ -19,7 +19,7 @@ fn stub_binary() -> PathBuf {
 }
 
 fn install_stub_descriptor(workspace: &Path, capability_uses: &str) {
-    let dir = workspace.join(".harness/extensions/stub");
+    let dir = workspace.join(".musts/extensions/stub");
     fs::create_dir_all(&dir).unwrap();
     let stub = stub_binary();
     fs::write(
@@ -49,7 +49,7 @@ fn write_manifest(path: &Path, body: &str) {
 fn build_basic_workspace() -> TempDir {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
     install_stub_descriptor(dir.path(), "bazel/build");
@@ -58,10 +58,10 @@ fn build_basic_workspace() -> TempDir {
 
 fn run_validate(workspace: &Path) -> assert_cmd::assert::Assert {
     bin()
-        .env_remove("HARNESS_STUB_RESOLVE_MODE")
-        .env_remove("HARNESS_STUB_RESOLVE_SHAPE")
-        .env_remove("HARNESS_STUB_EVIDENCE_MODE")
-        .env_remove("HARNESS_STUB_EVIDENCE_SHAPE")
+        .env_remove("MUSTS_STUB_RESOLVE_MODE")
+        .env_remove("MUSTS_STUB_RESOLVE_SHAPE")
+        .env_remove("MUSTS_STUB_EVIDENCE_MODE")
+        .env_remove("MUSTS_STUB_EVIDENCE_SHAPE")
         .arg("--workspace")
         .arg(workspace)
         .arg("validate")
@@ -70,8 +70,8 @@ fn run_validate(workspace: &Path) -> assert_cmd::assert::Assert {
 
 fn run_evidence(workspace: &Path, task_id: &str) -> assert_cmd::Command {
     let mut cmd = bin();
-    cmd.env_remove("HARNESS_STUB_RESOLVE_MODE")
-        .env_remove("HARNESS_STUB_RESOLVE_SHAPE")
+    cmd.env_remove("MUSTS_STUB_RESOLVE_MODE")
+        .env_remove("MUSTS_STUB_RESOLVE_SHAPE")
         .arg("--workspace")
         .arg(workspace)
         .arg("evidence")
@@ -94,7 +94,7 @@ fn scenario_1_clean_after_evidence() {
     run_validate(dir.path())
         .success()
         .code(0)
-        .stdout(predicate::str::contains("Harness validation clean."));
+        .stdout(predicate::str::contains("Musts validation clean."));
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +165,7 @@ fn run_evidence_failure_mode(mode: &str) -> assert_cmd::assert::Assert {
     let dir = build_basic_workspace();
     run_validate(dir.path()).failure().code(1);
     let mut cmd = bin();
-    cmd.env("HARNESS_STUB_EVIDENCE_MODE", mode)
+    cmd.env("MUSTS_STUB_EVIDENCE_MODE", mode)
         .arg("--workspace")
         .arg(dir.path())
         .arg("evidence")
@@ -173,7 +173,7 @@ fn run_evidence_failure_mode(mode: &str) -> assert_cmd::assert::Assert {
         .arg("--text")
         .arg("x");
     if mode == "timeout" {
-        cmd.env("HARNESS_EXTENSION_TIMEOUT_SECS", "1");
+        cmd.env("MUSTS_EXTENSION_TIMEOUT_SECS", "1");
     }
     let assert = cmd.assert();
     drop(dir);
@@ -238,7 +238,7 @@ fn scenario_11_partial_accept_leaves_unlisted_pending() {
     // emits one task that satisfies both.
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  a:\n    uses: bazel/build\n    with:\n      target: //a\n  b:\n    uses: bazel/build\n    with:\n      target: //b\n",
     );
     install_stub_descriptor(dir.path(), "bazel/build");
@@ -247,7 +247,7 @@ fn scenario_11_partial_accept_leaves_unlisted_pending() {
 
     // accept_subset: stub returns satisfies with only the first id.
     bin()
-        .env("HARNESS_STUB_EVIDENCE_SHAPE", "accept_subset")
+        .env("MUSTS_STUB_EVIDENCE_SHAPE", "accept_subset")
         .arg("--workspace")
         .arg(dir.path())
         .arg("evidence")
@@ -261,7 +261,7 @@ fn scenario_11_partial_accept_leaves_unlisted_pending() {
     let out = run_validate(dir.path())
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Harness validation pending."));
+        .stdout(predicate::str::contains("Musts validation pending."));
     let stdout = std::str::from_utf8(&out.get_output().stdout).unwrap();
     assert!(stdout.contains("root/a") || stdout.contains("root/b"));
 }
@@ -275,11 +275,11 @@ fn scenario_11_partial_accept_leaves_unlisted_pending() {
 fn scenario_12_same_local_id_two_manifests() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  login-build:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
     write_manifest(
-        &dir.path().join("App/Login/HARNESS.yml"),
+        &dir.path().join("App/Login/MUSTS.yml"),
         "version: 1\nchecks:\n  login-build:\n    uses: bazel/build\n    with:\n      target: //App/Login:Login\n",
     );
     install_stub_descriptor(dir.path(), "bazel/build");
@@ -315,18 +315,18 @@ fn scenario_13_unrelated_edit_does_not_stale() {
     let dir = TempDir::new().unwrap();
     // Two manifests with the SAME capability; sibling scopes.
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  app:\n    uses: bazel/build\n    with:\n      target: //x\n",
     );
     write_manifest(
-        &dir.path().join("Other/HARNESS.yml"),
+        &dir.path().join("Other/MUSTS.yml"),
         "version: 1\nchecks:\n  other:\n    uses: bazel/build\n    with:\n      target: //o\n",
     );
     install_stub_descriptor(dir.path(), "bazel/build");
 
     // multi_task: emit one task per check so we can pick the deeper one.
     bin()
-        .env("HARNESS_STUB_RESOLVE_SHAPE", "multi_task")
+        .env("MUSTS_STUB_RESOLVE_SHAPE", "multi_task")
         .arg("--workspace")
         .arg(dir.path())
         .arg("validate")
@@ -341,7 +341,7 @@ fn scenario_13_unrelated_edit_does_not_stale() {
     // multi_task — order is BTreeMap, capability iterates sorted).
     // Find the root task by id.
     let out = bin()
-        .env("HARNESS_STUB_RESOLVE_SHAPE", "multi_task")
+        .env("MUSTS_STUB_RESOLVE_SHAPE", "multi_task")
         .arg("--workspace")
         .arg(dir.path())
         .arg("validate")
@@ -394,7 +394,7 @@ fn scenario_14_stale_task_id_rejected() {
     // Re-run validate with `ignore_all` so the second validate emits
     // zero tasks and the `tasks` table is truncated to empty.
     bin()
-        .env("HARNESS_STUB_RESOLVE_SHAPE", "ignore_all")
+        .env("MUSTS_STUB_RESOLVE_SHAPE", "ignore_all")
         .arg("--workspace")
         .arg(dir.path())
         .arg("validate")

@@ -103,7 +103,7 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
             instructions: vec![
                 format!("Run `bazel build {target}`."),
                 "Capture stdout/stderr as a log asset.".into(),
-                "Record the result with `harness evidence <task-id> --text \"…\" --asset <log>`."
+                "Record the result with `musts evidence <task-id> --text \"…\" --asset <log>`."
                     .into(),
             ],
             evidence_contract: EvidenceContract {
@@ -249,7 +249,7 @@ mod tests {
                 format!("{scope}/{local}")
             },
             local_id: local.into(),
-            manifest_path: "HARNESS.yml".into(),
+            manifest_path: "MUSTS.yml".into(),
             scope_path: if scope.is_empty() {
                 "root".into()
             } else {

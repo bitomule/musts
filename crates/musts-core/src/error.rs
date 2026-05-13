@@ -64,17 +64,17 @@ pub enum Error {
         capability: String,
     },
 
-    #[error(".harness/ is not writable; harness needs to create state.sqlite")]
+    #[error(".musts/ is not writable; musts needs to create state.sqlite")]
     StateDirReadOnly,
 
     // -----------------------------------------------------------------------
     // Evidence errors (exit code 2 for stale/unknown, 1 for extension reject)
     // -----------------------------------------------------------------------
-    #[error("task `{task_id}` no longer applies — run `harness validate`")]
+    #[error("task `{task_id}` no longer applies — run `musts validate`")]
     TaskNotFound { task_id: String },
 
     #[error(
-        "evidence for task `{task_id}` is stale: files covered by this task changed after the task was issued — run `harness validate` again and follow the new task list"
+        "evidence for task `{task_id}` is stale: files covered by this task changed after the task was issued — run `musts validate` again and follow the new task list"
     )]
     EvidenceStale { task_id: String },
 
@@ -112,7 +112,7 @@ pub enum Error {
         source: rusqlite::Error,
     },
 
-    #[error("another harness process is running — retry shortly")]
+    #[error("another musts process is running — retry shortly")]
     LockBusy,
 
     #[error("ledger lock at {path}: {message}")]

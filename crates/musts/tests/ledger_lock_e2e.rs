@@ -1,4 +1,4 @@
-//! End-to-end coverage for `.harness/ledger.lock.yaml`, the portable
+//! End-to-end coverage for `.musts/ledger.lock.yaml`, the portable
 //! validated-state ledger.
 //!
 //! The lock file lets a clone inherit "already validated" state from
@@ -14,7 +14,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 fn write_manifest(path: &Path, body: &str) {
@@ -22,14 +22,14 @@ fn write_manifest(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
 }
 
-const LOCK_REL: &str = ".harness/ledger.lock.yaml";
+const LOCK_REL: &str = ".musts/ledger.lock.yaml";
 
 #[test]
 #[serial]
 fn evidence_accept_writes_lock_file() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   contract:
@@ -91,7 +91,7 @@ fn fresh_clone_inherits_validated_state_via_lock() {
     // check as already satisfied.
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   contract:
@@ -121,11 +121,11 @@ checks:
 
     // The local SQLite ledger has the green row. Wipe it — this is what
     // a fresh `git clone` looks like.
-    let state_db = dir.path().join(".harness/state.sqlite");
+    let state_db = dir.path().join(".musts/state.sqlite");
     assert!(state_db.exists(), "state.sqlite must exist at this point");
     fs::remove_file(&state_db).unwrap();
     for ext in ["state.sqlite-shm", "state.sqlite-wal"] {
-        let p = dir.path().join(".harness").join(ext);
+        let p = dir.path().join(".musts").join(ext);
         if p.exists() {
             fs::remove_file(p).unwrap();
         }
@@ -142,7 +142,7 @@ checks:
         .arg("validate")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Harness validation clean."));
+        .stdout(predicate::str::contains("Musts validation clean."));
 }
 
 #[test]
@@ -150,7 +150,7 @@ checks:
 fn editing_a_file_invalidates_only_its_scope() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   root-contract:
@@ -161,7 +161,7 @@ checks:
 "#,
     );
     write_manifest(
-        &dir.path().join("sub/HARNESS.yml"),
+        &dir.path().join("sub/MUSTS.yml"),
         r#"version: 1
 checks:
   sub-contract:
@@ -207,7 +207,7 @@ checks:
         .success();
 
     // Simulate clone (state.sqlite gone) and edit only sub/source.txt.
-    fs::remove_file(dir.path().join(".harness/state.sqlite")).unwrap();
+    fs::remove_file(dir.path().join(".musts/state.sqlite")).unwrap();
     fs::write(dir.path().join("sub/source.txt"), "v2\n").unwrap();
 
     let output = bin()
@@ -237,7 +237,7 @@ checks:
 fn malformed_lock_file_is_a_configuration_error() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   contract:
@@ -246,7 +246,7 @@ checks:
       facts: ["A."]
 "#,
     );
-    fs::create_dir_all(dir.path().join(".harness")).unwrap();
+    fs::create_dir_all(dir.path().join(".musts")).unwrap();
     fs::write(dir.path().join(LOCK_REL), "::: not yaml :::").unwrap();
 
     bin()

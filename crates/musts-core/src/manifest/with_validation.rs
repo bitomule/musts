@@ -78,7 +78,7 @@ mod tests {
     }
 
     fn p() -> PathBuf {
-        PathBuf::from("HARNESS.yml")
+        PathBuf::from("MUSTS.yml")
     }
 
     #[test]
@@ -119,7 +119,7 @@ mod tests {
                 pointer: _,
                 message,
             } => {
-                assert_eq!(manifest_path, PathBuf::from("HARNESS.yml"));
+                assert_eq!(manifest_path, PathBuf::from("MUSTS.yml"));
                 assert_eq!(check_id, "root/app-build");
                 assert_eq!(capability, "bazel/build");
                 assert!(

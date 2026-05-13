@@ -12,7 +12,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 fn bazel_binary() -> PathBuf {
@@ -20,7 +20,7 @@ fn bazel_binary() -> PathBuf {
 }
 
 fn project_root() -> PathBuf {
-    // crates/harness/tests/phase5_e2e.rs → ../../../
+    // crates/musts/tests/phase5_e2e.rs → ../../../
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
         .parent()
@@ -30,7 +30,7 @@ fn project_root() -> PathBuf {
 }
 
 fn install_bazel_descriptor(workspace: &Path) {
-    let dir = workspace.join(".harness/extensions/bazel");
+    let dir = workspace.join(".musts/extensions/bazel");
     let schemas = dir.join("schemas");
     fs::create_dir_all(&schemas).unwrap();
     let source_schema = project_root().join("extensions/bazel-build/schemas/build.schema.json");
@@ -66,7 +66,7 @@ fn write_manifest(path: &Path, body: &str) {
 fn scenario_6_bazel_picks_deepest_target() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   app-build:
@@ -76,7 +76,7 @@ checks:
 "#,
     );
     write_manifest(
-        &dir.path().join("App/Login/HARNESS.yml"),
+        &dir.path().join("App/Login/MUSTS.yml"),
         r#"version: 1
 checks:
   login-build:
@@ -132,7 +132,7 @@ checks:
 fn bazel_build_evidence_accepts_text_plus_log() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   app-build:
@@ -175,7 +175,7 @@ checks:
         .arg("validate")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Harness validation clean."));
+        .stdout(predicate::str::contains("Musts validation clean."));
 }
 
 #[test]
@@ -183,7 +183,7 @@ checks:
 fn bazel_build_evidence_rejects_missing_text_or_log() {
     let dir = TempDir::new().unwrap();
     write_manifest(
-        &dir.path().join("HARNESS.yml"),
+        &dir.path().join("MUSTS.yml"),
         r#"version: 1
 checks:
   c:

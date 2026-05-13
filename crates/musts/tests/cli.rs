@@ -1,4 +1,4 @@
-//! End-to-end tests for the `harness` CLI (Phase 1 surface).
+//! End-to-end tests for the `musts` CLI (Phase 1 surface).
 //!
 //! These exercise the binary as a black box via `assert_cmd`. Phase 1
 //! only ships two outcomes: empty-workspace clean (exit 0) and
@@ -9,7 +9,7 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 fn bin() -> Command {
-    Command::cargo_bin("musts").expect("harness binary not built")
+    Command::cargo_bin("musts").expect("musts binary not built")
 }
 
 #[test]
@@ -24,7 +24,7 @@ fn empty_workspace_with_git_anchor_is_clean() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Harness validation clean. No HARNESS.yml files found.",
+            "Musts validation clean. No MUSTS.yml files found.",
         ));
 }
 
@@ -57,7 +57,7 @@ fn missing_extension_capability_reports_clearly() {
     // and offending check id.
     let dir = TempDir::new().unwrap();
     std::fs::write(
-        dir.path().join("HARNESS.yml"),
+        dir.path().join("MUSTS.yml"),
         "version: 1\nchecks:\n  app-build:\n    uses: bazel/build\n    with:\n      target: //App:App\n",
     )
     .unwrap();
@@ -73,12 +73,12 @@ fn missing_extension_capability_reports_clearly() {
             "no extension implements capability `bazel/build`",
         ))
         .stderr(predicate::str::contains("root/app-build"))
-        .stderr(predicate::str::contains("HARNESS.yml"));
+        .stderr(predicate::str::contains("MUSTS.yml"));
 }
 
 #[test]
 fn missing_workspace_reports_workspace_not_found() {
-    // Run from a tmpdir that contains neither `.git` nor any HARNESS.yml.
+    // Run from a tmpdir that contains neither `.git` nor any MUSTS.yml.
     // Pass through `--workspace` so we don't accidentally resolve to the
     // calling test's git root.
     let dir = TempDir::new().unwrap();
@@ -93,7 +93,7 @@ fn missing_workspace_reports_workspace_not_found() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains(
-            "no .git directory or HARNESS.yml found",
+            "no .git directory or MUSTS.yml found",
         ));
 }
 

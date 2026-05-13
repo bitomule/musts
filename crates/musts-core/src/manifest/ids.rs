@@ -11,7 +11,7 @@ use std::path::Path;
 pub const ROOT_SCOPE: &str = "root";
 
 /// Compute the scope-path string for a manifest at `manifest_rel_path`
-/// (relative to the workspace root). For a root manifest (`HARNESS.yml`
+/// (relative to the workspace root). For a root manifest (`MUSTS.yml`
 /// at the workspace root), returns the [`ROOT_SCOPE`] sentinel.
 ///
 /// Path components are joined with `/` regardless of host OS — the value is
@@ -41,13 +41,13 @@ mod tests {
 
     #[test]
     fn root_manifest_has_root_scope() {
-        let p = PathBuf::from("HARNESS.yml");
+        let p = PathBuf::from("MUSTS.yml");
         assert_eq!(scope_path_for(&p), ROOT_SCOPE);
     }
 
     #[test]
     fn nested_manifest_scope_uses_forward_slashes() {
-        let p = PathBuf::from("App/Login/HARNESS.yml");
+        let p = PathBuf::from("App/Login/MUSTS.yml");
         assert_eq!(scope_path_for(&p), "App/Login");
     }
 

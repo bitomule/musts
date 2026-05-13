@@ -1,6 +1,6 @@
-//! Convenience helpers for Rust-authored harness extensions.
+//! Convenience helpers for Rust-authored musts extensions.
 //!
-//! The harness ⇄ extension contract is documented in
+//! The musts ⇄ extension contract is documented in
 //! `docs/PLAN.md` §4.6:
 //! - exactly one JSON request on stdin, EOF-terminated;
 //! - exactly one JSON response on stdout;

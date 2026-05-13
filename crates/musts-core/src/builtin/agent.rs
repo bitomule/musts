@@ -93,7 +93,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
             instructions.push(format!("  - {f}"));
         }
         instructions.push(format!(
-            "Record evidence with `harness evidence agent-{slug} --text \"<summary>\"`; attach any \
+            "Record evidence with `musts evidence agent-{slug} --text \"<summary>\"`; attach any \
              screenshots, logs, or other assets that support your conclusion."
         ));
         tasks.push(Task {
@@ -222,7 +222,7 @@ mod tests {
                 format!("{scope}/{local}")
             },
             local_id: local.into(),
-            manifest_path: "HARNESS.yml".into(),
+            manifest_path: "MUSTS.yml".into(),
             scope_path: scope.into(),
             depth: 0,
             with_payload: payload,

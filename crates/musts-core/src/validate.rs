@@ -1,4 +1,4 @@
-//! `harness validate` orchestrator. Implements the pipeline in
+//! `musts validate` orchestrator. Implements the pipeline in
 //! `docs/PLAN.md` §4.1.
 //!
 //! Wired together by [`run`]: bootstrap state → discover manifests +
@@ -40,7 +40,7 @@ pub struct ValidateOptions {
 }
 
 /// Compute the current `scope_hash` for every applicable check in the
-/// workspace. Used by `harness evidence` to detect drift between when a
+/// workspace. Used by `musts evidence` to detect drift between when a
 /// task was issued and when evidence is recorded (the `task_snapshot_hash`
 /// staleness check in PLAN.md §4.2).
 ///
@@ -51,7 +51,7 @@ pub fn compute_current_scope_hashes(
     workspace_root: &Path,
 ) -> Result<BTreeMap<String, String>> {
     let now_unix = unix_seconds_now();
-    let case_insensitive = is_case_insensitive_fs(&session.harness_dir);
+    let case_insensitive = is_case_insensitive_fs(&session.musts_dir);
 
     let manifest_entries = discover_manifests(workspace_root)?;
     let manifests = load_manifests(workspace_root, &manifest_entries)?;
@@ -93,7 +93,7 @@ pub fn compute_current_scope_hashes(
     Ok(out)
 }
 
-/// Best-effort GC of `.harness/evidence/<task>/submission-NNN/` directories
+/// Best-effort GC of `.musts/evidence/<task>/submission-NNN/` directories
 /// per `docs/PLAN.md` §4.4.1:
 ///
 /// - missing `evidence.json` → aborted submission, delete.
@@ -102,7 +102,7 @@ pub fn compute_current_scope_hashes(
 ///
 /// Submissions whose ledger row exists are kept as history.
 fn gc_orphan_submissions(session: &StateSession) {
-    let evidence_root = session.harness_dir.join("evidence");
+    let evidence_root = session.musts_dir.join("evidence");
     let Ok(read) = std::fs::read_dir(&evidence_root) else {
         return;
     };
@@ -156,7 +156,7 @@ fn ledger_has_submission(
 pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<ValidateReport> {
     let workspace_root = &opts.workspace_root;
     let now_unix = unix_seconds_now();
-    let case_insensitive = is_case_insensitive_fs(&session.harness_dir);
+    let case_insensitive = is_case_insensitive_fs(&session.musts_dir);
 
     // 0. Best-effort cleanup of orphan submission dirs from interrupted
     //    earlier evidence calls (PLAN.md §4.4.1).
@@ -165,7 +165,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     // 0b. Load the portable, repo-committed ledger lock. Empty when the
     //    file doesn't exist (fresh workspace) — the local
     //    `evidence_records` table still answers in that case.
-    let ledger_lock = crate::state::lock::load(&session.harness_dir)?;
+    let ledger_lock = crate::state::lock::load(&session.musts_dir)?;
 
     // 1. Discover manifests and parse each one.
     let manifest_entries = discover_manifests(workspace_root)?;
@@ -281,7 +281,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         // External descriptors win over built-ins (mirrors
         // `capability_schema` and `evidence::submit`): a workspace can
         // override or replace a built-in capability by shipping its
-        // own `.harness/extensions/<name>/extension.yml`. Only when no
+        // own `.musts/extensions/<name>/extension.yml`. Only when no
         // external implementor is installed do we fall back to the
         // built-in registry.
         let outcome: Result<musts_protocol::ResolveResponse> =
@@ -545,7 +545,7 @@ fn skip_built_in_ignores(entry: &ignore::DirEntry) -> bool {
     };
     let exact = matches!(
         name,
-        ".git" | ".harness" | "node_modules" | "target" | "DerivedData" | "xcuserdata"
+        ".git" | ".musts" | "node_modules" | "target" | "DerivedData" | "xcuserdata"
     );
     !(exact || name.starts_with("bazel-"))
 }
