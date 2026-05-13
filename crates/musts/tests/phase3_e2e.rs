@@ -297,9 +297,7 @@ fn scenario_15_concurrent_validate_locks() {
         .assert()
         .failure()
         .code(2)
-        .stderr(predicate::str::contains(
-            "another musts process is running",
-        ));
+        .stderr(predicate::str::contains("another musts process is running"));
 
     drop(lock);
 }

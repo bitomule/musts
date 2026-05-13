@@ -46,10 +46,7 @@ fn discovers_parses_and_hashes_two_manifest_fixture() {
         .collect();
     assert_eq!(
         rels,
-        vec![
-            "App/Login/MUSTS.yml".to_string(),
-            "MUSTS.yml".to_string()
-        ]
+        vec!["App/Login/MUSTS.yml".to_string(), "MUSTS.yml".to_string()]
     );
 
     // 2. Parsing each manifest yields its checks with stable global IDs.

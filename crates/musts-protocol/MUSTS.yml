@@ -5,7 +5,7 @@ checks:
     uses: agent
     with:
       facts:
-        - "harness-protocol contains only serde wire types and constants; any fn body beyond #[derive] machinery is justified or moved out."
+        - "musts-protocol contains only serde wire types and constants; any fn body beyond #[derive] machinery is justified or moved out."
         - "PROTOCOL_VERSION stays at 1 and no wire field has been added, renamed, or removed (or, if it has, the migration path is documented in the same change)."
         - "No new dependency has been introduced beyond serde and serde_json."
         - "No module performs I/O, validation, normalization, or transformation: the crate remains pure data."

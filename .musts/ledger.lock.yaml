@@ -1,6 +1,6 @@
 version: 1
 satisfied:
-- check: crates/harness-protocol/contract
+- check: crates/musts-protocol/contract
   scope_hash: 4a087c9a9ae7b38bb88c3ecb3e459b4405966c78595ef877256052c934dc2249
 - check: extensions/cargo/contract
   scope_hash: 339a1a48957c64170aa5aebc9f5f14906b244927285ff72a6312561d36f5236b

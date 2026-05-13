@@ -199,8 +199,7 @@ fn emit_evidence_ok(input: &[u8]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let shape =
-        std::env::var("MUSTS_STUB_EVIDENCE_SHAPE").unwrap_or_else(|_| "accept_all".into());
+    let shape = std::env::var("MUSTS_STUB_EVIDENCE_SHAPE").unwrap_or_else(|_| "accept_all".into());
     let response = match shape.as_str() {
         "accept_subset" => EvidenceValidationResponse {
             protocol_version: PROTOCOL_VERSION,
