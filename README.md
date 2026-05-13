@@ -4,6 +4,11 @@
 
 # musts
 
+[![CI](https://github.com/bitomule/musts/actions/workflows/ci.yml/badge.svg)](https://github.com/bitomule/musts/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/musts.svg)](https://crates.io/crates/musts)
+[![MSRV](https://img.shields.io/badge/MSRV-1.81-blue.svg)](rust-toolchain.toml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 An agent-first validation loop for code repositories.
 
 > The task is not done until `musts validate` is empty.
@@ -12,7 +17,7 @@ An agent-first validation loop for code repositories.
 
 ## Status
 
-MVP. Implements every phase in [`docs/PLAN.md`](docs/PLAN.md). The §19 success criterion runs end-to-end on [`fixtures/login-app/`](fixtures/login-app/) and is checked in as `phase6_e2e::full_section_15_worked_example`.
+Pre-1.0. The CLI surface, the extension protocol, and the `MUSTS.yml` format may change between minor versions until `1.0`. The §19 success criterion runs end-to-end on [`fixtures/login-app/`](fixtures/login-app/) and is checked in as `phase6_e2e::full_section_15_worked_example`.
 
 ## How it works (one paragraph)
 
@@ -104,4 +109,6 @@ The contract task lists its facts under `Instructions:` in the `validate` output
 
 ## License
 
-TBD.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
