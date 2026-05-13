@@ -1,47 +1,39 @@
-//! Path normalisation for hash stability across macOS APFS/HFS+ and Linux.
+//! Path normalisation for scope-hash stability across host operating
+//! systems.
 //!
-//! Per `docs/PLAN.md` §4.5:
-//! - Every relative path that feeds into a hash is **NFC-normalised**.
-//! - On case-insensitive filesystems the path is additionally lowercased
-//!   *for hashing purposes only*. The original casing on disk is preserved
-//!   for everything surfaced to users and extensions.
-//! - The detection happens once per workspace by probing the filesystem.
+//! The scope hash treats two rel-paths as equal iff their NFC-normalised,
+//! ASCII-lowercased forms match. This makes the lock file in
+//! `.musts/ledger.lock.yaml` portable: a hash computed on macOS APFS
+//! (case-insensitive by default) matches the one computed on Linux ext4
+//! (case-sensitive) for the same repo contents.
+//!
+//! The cost of always lowercasing is that two files differing only in case
+//! (`Foo.txt` and `foo.txt`) on a case-sensitive filesystem collide to the
+//! same hash key. The validate orchestrator detects this and returns
+//! [`crate::error::Error::CasePathCollision`] before any hash is consumed.
+//! Case-insensitive filesystems can't have those two files coexist, so the
+//! collision only matters on Linux/Windows-case-sensitive setups — and even
+//! there it represents a misconfigured repo that already breaks any clone
+//! onto macOS or Windows.
 
 use std::path::Path;
 
 use unicode_normalization::UnicodeNormalization;
 
-/// Probe the directory for case-insensitive behaviour by creating a tiny
-/// file with mixed casing and checking if it can be opened with the
-/// opposite case. Returns `false` on any I/O error — we prefer the more
-/// conservative "case-sensitive" assumption when in doubt because it never
-/// produces *false equivalences* (only false invalidations).
-pub fn is_case_insensitive_fs(probe_dir: &Path) -> bool {
-    let probe = probe_dir.join(".musts-case-probe-XyZ");
-    if std::fs::write(&probe, b"").is_err() {
-        return false;
-    }
-    let alt = probe_dir.join(".musts-case-probe-xyz");
-    let case_insensitive = alt.exists();
-    let _ = std::fs::remove_file(&probe);
-    case_insensitive
-}
-
-/// NFC-normalise a relative path, optionally lowercasing for the
-/// case-insensitive-FS case. The returned string uses `/` separators and is
-/// stable across host operating systems.
-pub fn normalise_rel_path(rel_path: &Path, case_insensitive: bool) -> String {
-    let mut s = rel_path
+/// NFC-normalise and ASCII-lowercase a relative path. The returned string
+/// uses `/` separators and is stable across host operating systems.
+///
+/// Always lowercases regardless of the host filesystem's case sensitivity
+/// — see the module docstring for the rationale.
+pub fn normalise_rel_path(rel_path: &Path) -> String {
+    rel_path
         .components()
         .filter_map(|c| c.as_os_str().to_str())
         .collect::<Vec<_>>()
         .join("/")
         .nfc()
-        .collect::<String>();
-    if case_insensitive {
-        s = s.to_lowercase();
-    }
-    s
+        .collect::<String>()
+        .to_lowercase()
 }
 
 #[cfg(test)]
@@ -55,18 +47,20 @@ mod tests {
         let nfd_e_accent = "e\u{0301}";
         let path_nfc = PathBuf::from("é/file.txt");
         let path_nfd = PathBuf::from(format!("{nfd_e_accent}/file.txt"));
-        assert_eq!(normalise_rel_path(&path_nfc, false), "é/file.txt");
-        assert_eq!(normalise_rel_path(&path_nfd, false), "é/file.txt");
-        assert_eq!(
-            normalise_rel_path(&path_nfc, false),
-            normalise_rel_path(&path_nfd, false)
-        );
+        assert_eq!(normalise_rel_path(&path_nfc), "é/file.txt");
+        assert_eq!(normalise_rel_path(&path_nfd), "é/file.txt");
+        assert_eq!(normalise_rel_path(&path_nfc), normalise_rel_path(&path_nfd));
     }
 
     #[test]
-    fn case_insensitive_lowercases() {
+    fn always_lowercases_regardless_of_host_fs() {
         let p = PathBuf::from("App/Login/View.swift");
-        assert_eq!(normalise_rel_path(&p, false), "App/Login/View.swift");
-        assert_eq!(normalise_rel_path(&p, true), "app/login/view.swift");
+        assert_eq!(normalise_rel_path(&p), "app/login/view.swift");
+    }
+
+    #[test]
+    fn lowercases_unicode_paths() {
+        let p = PathBuf::from("Café/Über.txt");
+        assert_eq!(normalise_rel_path(&p), "café/über.txt");
     }
 }
