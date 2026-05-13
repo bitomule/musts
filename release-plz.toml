@@ -12,21 +12,27 @@ publish = true
 
 # Workspace members that are not crates.io artifacts. Demo extensions ship
 # inside the musts binary release; the test stub never leaves the repo.
+# Their `Cargo.toml` already sets `publish = false`; mirror that here so
+# release-plz does not try to bump versions or push tags for them.
 [[package]]
 name = "cargo-extension"
 release = false
+publish = false
 
 [[package]]
 name = "bazel-build-extension"
 release = false
+publish = false
 
 [[package]]
 name = "mav-expect-extension"
 release = false
+publish = false
 
 [[package]]
 name = "stub-extension"
 release = false
+publish = false
 
 [changelog]
 header = """# Changelog
