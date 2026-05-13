@@ -451,7 +451,31 @@ checks:
         - mav-report
 ```
 
-### 5.5 Future Scope Fields
+### 5.5 Workspace `.mustsignore`
+
+A workspace-level `.mustsignore` (and any nested `.mustsignore` files in
+subdirectories) excludes matched files from the walker that builds each
+check's scope hash. Syntax and semantics match `.gitignore` exactly,
+including negation with `!pattern` and the rule that a child can't be
+re-included once its parent directory is excluded.
+
+Precedence — applied in this order during the walk:
+
+1. Built-in ignores (`.git/`, `.musts/`, `node_modules/`, `target/`,
+   `DerivedData/`, `xcuserdata/`, `bazel-*`).
+2. `.gitignore` (and `.git/info/exclude`) — honoured even outside a git
+   repository.
+3. `.mustsignore` — file is excluded from the walk → does not enter
+   `compute_scope_file_inputs` → does not contribute to `scope_hash` →
+   edits to it never re-invalidate dependent checks.
+4. Per-check `paths:` filter (narrows an already-walked scope to the
+   matching subset).
+
+`.mustsignore` is committed to the repo. Divergent files across clones
+produce different `scope_hash` values for the same code and break lock
+portability.
+
+### 5.6 Future Scope Fields
 
 Not required for MVP, but likely useful later:
 

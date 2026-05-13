@@ -36,6 +36,18 @@ Exit codes:
 - `validate`: 0 clean, 1 pending tasks, 2 configuration / stale / lock error, 70 internal error.
 - `evidence`: 0 accepted, 1 rejected by extension, 2 unknown task / stale snapshot / over-claim, 70 internal error.
 
+## `.mustsignore`
+
+`.mustsignore` is `.gitignore` for `musts`. Files it matches are excluded from the walker that builds each check's scope hash, so editing them never re-invalidates the ledger. Use it for files that you do want committed (canonical fixtures, generated artefacts under version control) but don't want gating the validation loop.
+
+```gitignore
+*.log
+scratch/
+!scratch/canonical.log    # negation works the same way as .gitignore
+```
+
+Place it at the workspace root (or in any subdirectory — applies to that subtree, same as nested `.gitignore`). The same precedence rules apply: built-in ignores → `.gitignore` → `.mustsignore` → per-check `paths:`. Commit the file — divergent `.mustsignore`s across clones produce different `scope_hash`es for the same code.
+
 ## Install
 
 ```bash
@@ -118,7 +130,7 @@ The contract task lists its facts under `Instructions:` in the `validate` output
 
 - [`docs/musts-design.md`](docs/musts-design.md) — the v0.2 design spec.
 - [`docs/PLAN.md`](docs/PLAN.md) — the implementation plan, ~30 review rounds applied; the source of contract decisions.
-- [`docs/skill.md`](docs/skill.md) — the agent skill (drop into `.claude/skills/`).
+- [`skills/musts/SKILL.md`](skills/musts/SKILL.md) — the agent skill (install with `musts skill install`).
 - [`docs/architecture.md`](docs/architecture.md) — bird's-eye view of the crates.
 - [`docs/extensions.md`](docs/extensions.md) — how to write a third-party extension.
 

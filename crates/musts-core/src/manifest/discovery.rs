@@ -30,6 +30,12 @@ pub fn discover(workspace_root: &Path) -> Result<Vec<ManifestEntry>> {
         // not be a git checkout, e.g. when discovered via the
         // MUSTS.yml fallback rule).
         .require_git(false)
+        // `.mustsignore` is `.gitignore` for musts: files matched here are
+        // excluded from the walk (and therefore from the scope hash), so
+        // edits to them never re-invalidate checks. Must be committed —
+        // a divergent `.mustsignore` across clones produces different
+        // scope hashes for the same code.
+        .add_custom_ignore_filename(".mustsignore")
         .hidden(false)
         .follow_links(false)
         .filter_entry(move |entry| {
@@ -236,5 +242,91 @@ mod tests {
         let entries = discover(root).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].rel_path, PathBuf::from("MUSTS.yml"));
+    }
+
+    #[test]
+    fn obeys_mustsignore() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write(&root.join(".mustsignore"), "scratch/\n");
+        write(&root.join("MUSTS.yml"), "version: 1\nchecks: {}\n");
+        write(&root.join("scratch/MUSTS.yml"), "version: 1\nchecks: {}\n");
+        // Sanity: a non-ignored sibling is still discovered.
+        write(&root.join("app/MUSTS.yml"), "version: 1\nchecks: {}\n");
+        let entries = discover(root).unwrap();
+        let rels: Vec<_> = entries
+            .iter()
+            .map(|e| e.rel_path.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            rels,
+            vec!["MUSTS.yml".to_string(), "app/MUSTS.yml".to_string(),]
+        );
+    }
+
+    #[test]
+    fn mustsignore_supports_negation() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // Same gotcha as `.gitignore`: if you ignore a *directory*, you
+        // can't re-include children with `!`. The working idiom is to
+        // ignore the directory's children individually so the directory
+        // itself is still walked, then negate the path you want kept.
+        write(
+            &root.join(".mustsignore"),
+            "fixtures/*\n!fixtures/canonical\n",
+        );
+        write(&root.join("MUSTS.yml"), "version: 1\nchecks: {}\n");
+        write(
+            &root.join("fixtures/throwaway/MUSTS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        write(
+            &root.join("fixtures/canonical/MUSTS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        let entries = discover(root).unwrap();
+        let rels: Vec<_> = entries
+            .iter()
+            .map(|e| e.rel_path.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            rels,
+            vec![
+                "MUSTS.yml".to_string(),
+                "fixtures/canonical/MUSTS.yml".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_mustsignore_scopes_to_subtree() {
+        // A `.mustsignore` in a subdirectory applies only to that subtree,
+        // identical to nested `.gitignore` behaviour.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write(&root.join("MUSTS.yml"), "version: 1\nchecks: {}\n");
+        write(&root.join("app/.mustsignore"), "vendored/\n");
+        write(
+            &root.join("app/vendored/MUSTS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        // Same dir name in a sibling subtree should NOT be ignored.
+        write(
+            &root.join("lib/vendored/MUSTS.yml"),
+            "version: 1\nchecks: {}\n",
+        );
+        let entries = discover(root).unwrap();
+        let rels: Vec<_> = entries
+            .iter()
+            .map(|e| e.rel_path.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            rels,
+            vec![
+                "MUSTS.yml".to_string(),
+                "lib/vendored/MUSTS.yml".to_string(),
+            ]
+        );
     }
 }

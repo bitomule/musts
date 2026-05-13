@@ -80,7 +80,7 @@ See [`docs/extensions.md`](docs/extensions.md) for the full contract. In short:
 4. Add tests against the contract.
 5. If it's a new capability for an existing extension family, update the relevant `extension.yml`.
 
-If you're using Claude Code or a similar agent, [`docs/skill.md`](docs/skill.md) drops into `.claude/skills/` and gives the agent the right mental model for the validation loop.
+If you're using Claude Code or a similar agent, install the bundled skill with `musts skill install` (source: [`skills/musts/SKILL.md`](skills/musts/SKILL.md)). It gives the agent the right mental model for the validation loop.
 
 ## Submitting a PR
 
