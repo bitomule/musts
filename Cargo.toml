@@ -72,6 +72,11 @@ pr-run-mode = "plan"
 install-updater = false
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
+# Accept hand-patched `ci/` workflow: the ubuntu-20.04 runner used by
+# cargo-dist 0.27's template has been retired by GitHub, so we bumped to
+# ubuntu-22.04 manually. `dist init` with cargo-dist >= 0.28 will close
+# this gap; until then `dist plan` skips its workflow-drift check.
+allow-dirty = ["ci"]
 
 # The profile that 'dist' will build with
 [profile.dist]
