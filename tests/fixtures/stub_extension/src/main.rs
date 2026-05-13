@@ -12,7 +12,7 @@ use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
 
-use harness_protocol::{
+use musts_protocol::{
     AssetContract, EvidenceContract, EvidenceValidationRequest, EvidenceValidationResponse,
     IgnoredCheck, MissingEvidence, NormalizedAsset, ResolveRequest, ResolveResponse, Task,
     TextContract, PROTOCOL_VERSION,

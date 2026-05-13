@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/harness-protocol",
-    "crates/harness-extension-util",
-    "crates/harness-core",
-    "crates/harness",
+    "crates/musts-protocol",
+    "crates/musts-extension-util",
+    "crates/musts-core",
+    "crates/musts",
     "extensions/bazel-build",
     "extensions/mav-expect",
     "extensions/cargo",
@@ -15,7 +15,7 @@ members = [
 edition = "2021"
 rust-version = "1.81"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/bitomule/validator-claude"
+repository = "https://github.com/bitomule/musts"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

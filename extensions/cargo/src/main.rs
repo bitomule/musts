@@ -19,8 +19,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use harness_extension_util::{asset_kind, ipc_main};
-use harness_protocol::{
+use musts_extension_util::{asset_kind, ipc_main};
+use musts_protocol::{
     AssetContract, EvidenceContract, EvidenceValidationRequest, EvidenceValidationResponse,
     IgnoredCheck, MissingEvidence, NormalizedAsset, ResolveRequest, ResolveResponse, Task,
     TextContract, PROTOCOL_VERSION,
@@ -320,7 +320,7 @@ fn capability_failure(capability: Capability, log: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_protocol::{
+    use musts_protocol::{
         EvidenceAsset, EvidenceSubmission, EvidenceTaskRef, ResolveCheck, SnapshotHandle,
     };
 

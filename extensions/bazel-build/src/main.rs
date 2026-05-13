@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
-use harness_extension_util::{asset_kind, ipc_main};
-use harness_protocol::{
+use musts_extension_util::{asset_kind, ipc_main};
+use musts_protocol::{
     AssetContract, EvidenceContract, EvidenceValidationRequest, EvidenceValidationResponse,
     IgnoredCheck, MissingEvidence, ResolveRequest, ResolveResponse, Task, TextContract,
     PROTOCOL_VERSION,
@@ -202,7 +202,7 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
     }
     let normalized_assets = log_assets
         .iter()
-        .map(|a| harness_protocol::NormalizedAsset {
+        .map(|a| musts_protocol::NormalizedAsset {
             kind: "log".into(),
             path: a.path.clone(),
         })
@@ -225,7 +225,7 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_protocol::{ResolveCheck, SnapshotHandle};
+    use musts_protocol::{ResolveCheck, SnapshotHandle};
 
     fn req(checks: Vec<ResolveCheck>) -> ResolveRequest {
         ResolveRequest {
@@ -311,9 +311,9 @@ mod tests {
 
     fn evidence_req(
         text: Option<&str>,
-        assets: Vec<harness_protocol::EvidenceAsset>,
+        assets: Vec<musts_protocol::EvidenceAsset>,
     ) -> EvidenceValidationRequest {
-        use harness_protocol::{EvidenceSubmission, EvidenceTaskRef};
+        use musts_protocol::{EvidenceSubmission, EvidenceTaskRef};
         EvidenceValidationRequest {
             protocol_version: PROTOCOL_VERSION,
             workspace_root: "/repo".into(),
@@ -344,8 +344,8 @@ mod tests {
         }
     }
 
-    fn asset(path: &str, mime: &str, size: u64) -> harness_protocol::EvidenceAsset {
-        harness_protocol::EvidenceAsset {
+    fn asset(path: &str, mime: &str, size: u64) -> musts_protocol::EvidenceAsset {
+        musts_protocol::EvidenceAsset {
             path: path.into(),
             mime: mime.into(),
             size,

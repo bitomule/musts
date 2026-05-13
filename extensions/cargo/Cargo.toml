@@ -5,15 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Reference cargo/{fmt,clippy,test} extension for the harness validation CLI."
+description = "Reference cargo/{fmt,clippy,test} extension for the musts validation CLI."
 
 [[bin]]
 name = "cargo-extension"
 path = "src/main.rs"
 
 [dependencies]
-harness-protocol = { path = "../../crates/harness-protocol" }
-harness-extension-util = { path = "../../crates/harness-extension-util" }
+musts-protocol = { path = "../../crates/musts-protocol" }
+musts-extension-util = { path = "../../crates/musts-extension-util" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

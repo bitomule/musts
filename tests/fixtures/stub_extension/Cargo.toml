@@ -5,14 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Configurable test stub for the harness ⇄ extension protocol. Behaviour driven by HARNESS_STUB_* env vars."
+description = "Configurable test stub for the musts ⇄ extension protocol. Behaviour driven by MUSTS_STUB_* env vars."
 
 [[bin]]
 name = "stub-extension"
 path = "src/main.rs"
 
 [dependencies]
-harness-protocol = { path = "../../../crates/harness-protocol" }
+musts-protocol = { path = "../../../crates/musts-protocol" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

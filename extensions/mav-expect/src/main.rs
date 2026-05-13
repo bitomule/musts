@@ -17,8 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::ExitCode;
 
-use harness_extension_util::{asset_kind, ipc_main};
-use harness_protocol::{
+use musts_extension_util::{asset_kind, ipc_main};
+use musts_protocol::{
     AssetContract, EvidenceAsset, EvidenceContract, EvidenceValidationRequest,
     EvidenceValidationResponse, IgnoredCheck, MissingEvidence, NormalizedAsset, ResolveRequest,
     ResolveResponse, Task, TextContract, PROTOCOL_VERSION,
@@ -318,7 +318,7 @@ fn human_kind(kind: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harness_protocol::{ResolveCheck, SnapshotHandle};
+    use musts_protocol::{ResolveCheck, SnapshotHandle};
 
     fn req(checks: Vec<ResolveCheck>) -> ResolveRequest {
         ResolveRequest {
@@ -428,7 +428,7 @@ mod tests {
 
     // ---- Evidence ----
 
-    use harness_protocol::{EvidenceSubmission, EvidenceTaskRef};
+    use musts_protocol::{EvidenceSubmission, EvidenceTaskRef};
 
     fn evidence_req(
         text: Option<&str>,

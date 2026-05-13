@@ -124,8 +124,8 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 name = "bazel-build-extension"
 version = "0.1.0"
 dependencies = [
- "harness-extension-util",
- "harness-protocol",
+ "musts-extension-util",
+ "musts-protocol",
  "serde",
  "serde_json",
 ]
@@ -192,8 +192,8 @@ checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 name = "cargo-extension"
 version = "0.1.0"
 dependencies = [
- "harness-extension-util",
- "harness-protocol",
+ "musts-extension-util",
+ "musts-protocol",
  "serde",
  "serde_json",
  "tempfile",
@@ -592,68 +592,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "fs2",
- "harness-core",
- "predicates",
- "rusqlite",
- "serde_json",
- "serial_test",
- "tempfile",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "harness-core"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "fs2",
- "harness-protocol",
- "ignore",
- "insta",
- "jsonschema",
- "mime_guess",
- "rstest",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "serial_test",
- "shell-words",
- "tempfile",
- "thiserror",
- "time",
- "tracing",
- "unicode-normalization",
- "walkdir",
-]
-
-[[package]]
-name = "harness-extension-util"
-version = "0.1.0"
-dependencies = [
- "harness-protocol",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "harness-protocol"
-version = "0.1.0"
-dependencies = [
- "insta",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -972,8 +910,8 @@ dependencies = [
 name = "mav-expect-extension"
 version = "0.1.0"
 dependencies = [
- "harness-extension-util",
- "harness-protocol",
+ "musts-extension-util",
+ "musts-protocol",
  "serde",
  "serde_json",
  "tempfile",
@@ -999,6 +937,68 @@ checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "musts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "fs2",
+ "musts-core",
+ "predicates",
+ "rusqlite",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "musts-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "fs2",
+ "ignore",
+ "insta",
+ "jsonschema",
+ "mime_guess",
+ "musts-protocol",
+ "rstest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "shell-words",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tracing",
+ "unicode-normalization",
+ "walkdir",
+]
+
+[[package]]
+name = "musts-extension-util"
+version = "0.1.0"
+dependencies = [
+ "musts-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "musts-protocol"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1552,7 +1552,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 name = "stub-extension"
 version = "0.1.0"
 dependencies = [
- "harness-protocol",
+ "musts-protocol",
  "serde",
  "serde_json",
 ]
