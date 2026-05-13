@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The first published release will be `0.1.0` and will include everything in this
 section.
 
+### Fixed
+
+- Scope-hash computation is now OS-portable. Previously
+  `normalise_rel_path` lowercased rel-paths only on case-insensitive
+  filesystems (macOS APFS), so a `.musts/ledger.lock.yaml` written from
+  macOS carried hashes that CI on Linux could not match. Paths now NFC +
+  lowercase regardless of host filesystem. On case-sensitive filesystems
+  with two files differing only in case (`Foo.txt` and `foo.txt`), validate
+  refuses with a new `Error::CasePathCollision` rather than silently folding
+  them into one hash key.
+
 ### Added
 
 - Per-check `paths` filter so a check only triggers when matching files change.

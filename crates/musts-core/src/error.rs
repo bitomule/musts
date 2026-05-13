@@ -117,6 +117,15 @@ pub enum Error {
 
     #[error("ledger lock at {path}: {message}")]
     LedgerLock { path: PathBuf, message: String },
+
+    #[error(
+        "case-only path collision under {workspace_root}: {first} and {second} normalise to the same hash key — rename one (their lowercase forms collide, so the scope hash would be ambiguous)"
+    )]
+    CasePathCollision {
+        workspace_root: PathBuf,
+        first: String,
+        second: String,
+    },
 }
 
 impl Error {
@@ -137,7 +146,8 @@ impl Error {
             | Error::TaskNotFound { .. }
             | Error::EvidenceStale { .. }
             | Error::EvidenceOverclaim { .. }
-            | Error::LedgerLock { .. } => 2,
+            | Error::LedgerLock { .. }
+            | Error::CasePathCollision { .. } => 2,
             Error::EvidenceRejected { .. } => 1,
             Error::Io { .. } | Error::Db { .. } => 70,
         }

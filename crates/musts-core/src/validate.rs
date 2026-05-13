@@ -28,8 +28,7 @@ use crate::manifest::{
 };
 use crate::report::{CapabilityNote, ValidateReport};
 use crate::snapshot::{
-    compute_scope_hash, hash_bytes, hash_file, is_case_insensitive_fs, normalise_rel_path,
-    FileFingerprint, ScopeInput,
+    compute_scope_hash, hash_bytes, hash_file, normalise_rel_path, FileFingerprint, ScopeInput,
 };
 
 /// Configuration for one validate run. Built by the CLI layer; tests
@@ -51,19 +50,12 @@ pub fn compute_current_scope_hashes(
     workspace_root: &Path,
 ) -> Result<BTreeMap<String, String>> {
     let now_unix = unix_seconds_now();
-    let case_insensitive = is_case_insensitive_fs(&session.musts_dir);
 
     let manifest_entries = discover_manifests(workspace_root)?;
     let manifests = load_manifests(workspace_root, &manifest_entries)?;
     let descriptors = discover_descriptors(workspace_root)?;
     let ext_descriptor_hash = aggregate_descriptor_hash(&descriptors);
-    let scope_files = compute_scope_file_inputs(
-        workspace_root,
-        &manifests,
-        session,
-        case_insensitive,
-        now_unix,
-    )?;
+    let scope_files = compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
     let mut out = BTreeMap::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
@@ -78,8 +70,8 @@ pub fn compute_current_scope_hashes(
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
             let effective_files = effective_files_for(
                 &scope_files,
-                &normalise_prefix(&m.scope_prefix, case_insensitive),
-                &descendant_prefixes(workspace_root, &manifests, m, &check.uses, case_insensitive),
+                &normalise_prefix(&m.scope_prefix),
+                &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
             );
             let scope_hash = compute_scope_hash(&ScopeInput {
                 files: effective_files,
@@ -156,7 +148,6 @@ fn ledger_has_submission(
 pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<ValidateReport> {
     let workspace_root = &opts.workspace_root;
     let now_unix = unix_seconds_now();
-    let case_insensitive = is_case_insensitive_fs(&session.musts_dir);
 
     // 0. Best-effort cleanup of orphan submission dirs from interrupted
     //    earlier evidence calls (PLAN.md §4.4.1).
@@ -205,13 +196,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     // 4. Compute the per-check effective scope and scope hash, plus the
     //    list of dirty checks (Phase 3: a check is dirty iff no green
     //    ledger row for the current scope_hash; Phase 4 adds the writes).
-    let scope_files = compute_scope_file_inputs(
-        workspace_root,
-        &manifests,
-        session,
-        case_insensitive,
-        now_unix,
-    )?;
+    let scope_files = compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
     let mut per_check = Vec::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
@@ -226,8 +211,8 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
             let effective_files = effective_files_for(
                 &scope_files,
-                &normalise_prefix(&m.scope_prefix, case_insensitive),
-                &descendant_prefixes(workspace_root, &manifests, m, &check.uses, case_insensitive),
+                &normalise_prefix(&m.scope_prefix),
+                &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
             );
             let effective_file_paths: Vec<String> =
                 effective_files.iter().map(|(p, _)| p.clone()).collect();
@@ -454,7 +439,6 @@ fn compute_scope_file_inputs(
     workspace_root: &Path,
     manifests: &[LoadedManifest],
     session: &mut StateSession,
-    case_insensitive: bool,
     now_unix: i64,
 ) -> Result<BTreeMap<String, String>> {
     // Walk every manifest's folder once, deduplicate by absolute path.
@@ -488,18 +472,35 @@ fn compute_scope_file_inputs(
         }
     }
 
+    // The scope hash always treats rel-paths as their lowercase NFC form so
+    // a lock generated on macOS APFS (case-insensitive) matches the hash
+    // computed on Linux ext4 (case-sensitive) for the same repo contents.
+    // The cost: on case-sensitive filesystems two files like `Foo.txt` and
+    // `foo.txt` can coexist and collide here. Detect that and refuse rather
+    // than silently fold them into a single hash key.
     let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut origin_of_normalised: BTreeMap<String, String> = BTreeMap::new();
     for abs_path in files.keys() {
         let rel = abs_path
             .strip_prefix(workspace_root)
             .unwrap_or(abs_path)
             .to_path_buf();
-        let normalised = normalise_rel_path(&rel, case_insensitive);
         let raw_rel = rel
             .components()
             .filter_map(|c| c.as_os_str().to_str())
             .collect::<Vec<_>>()
             .join("/");
+        let normalised = normalise_rel_path(&rel);
+        if let Some(prior_raw) = origin_of_normalised.get(&normalised) {
+            if prior_raw != &raw_rel {
+                return Err(Error::CasePathCollision {
+                    workspace_root: workspace_root.to_path_buf(),
+                    first: prior_raw.clone(),
+                    second: raw_rel,
+                });
+            }
+        }
+        origin_of_normalised.insert(normalised.clone(), raw_rel.clone());
         let metadata = std::fs::metadata(abs_path).map_err(|source| Error::Io {
             path: abs_path.clone(),
             source,
@@ -572,15 +573,13 @@ fn prefix_is_strict_ancestor(parent: &str, child: &str) -> bool {
 /// to subtract files from the parent's effective scope.
 ///
 /// The returned prefixes are normalised the **same way** the keys in
-/// `scope_files` are (NFC + optional lowercase) so a case-insensitive
-/// filesystem doesn't accidentally desync the comparison and break the
-/// carve-out.
+/// `scope_files` are (NFC + always-lowercase) so the comparison can match
+/// regardless of the host filesystem's case sensitivity.
 fn descendant_prefixes(
     _workspace_root: &Path,
     manifests: &[LoadedManifest],
     current: &LoadedManifest,
     capability: &str,
-    case_insensitive: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
     for other in manifests {
@@ -591,19 +590,15 @@ fn descendant_prefixes(
             continue;
         }
         if other.parsed.checks.values().any(|c| c.uses == capability) {
-            out.push(normalise_prefix(&other.scope_prefix, case_insensitive));
+            out.push(normalise_prefix(&other.scope_prefix));
         }
     }
     out
 }
 
-fn normalise_prefix(prefix: &str, case_insensitive: bool) -> String {
+fn normalise_prefix(prefix: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
-    let mut s = prefix.nfc().collect::<String>();
-    if case_insensitive {
-        s = s.to_lowercase();
-    }
-    s
+    prefix.nfc().collect::<String>().to_lowercase()
 }
 
 /// Workspace-relative paths of every deeper manifest that declares a
