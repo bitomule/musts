@@ -557,6 +557,25 @@ mod tests {
     }
 
     #[test]
+    fn evidence_accepts_accessibility_tree_from_json_asset() {
+        // `classify_asset` tags every JSON asset as `mav-report` (MIME
+        // can't distinguish accessibility-tree from mav-report). The
+        // `classified_for` alias must let a `mav-report` asset satisfy
+        // an `accessibility-tree` requirement.
+        let workspace = tempfile::tempdir().unwrap();
+        let tree = workspace.path().join("tree.json");
+        std::fs::write(&tree, br#"{"role":"button"}"#).unwrap();
+        let resp = evidence(&evidence_req_with_root(
+            Some("ok"),
+            vec![asset("tree.json", "application/json", 17)],
+            vec!["accessibility-tree"],
+            workspace.path().to_str().unwrap(),
+        ))
+        .unwrap();
+        assert!(resp.accepted, "missing: {:?}", resp.missing);
+    }
+
+    #[test]
     fn evidence_rejects_missing_kind() {
         let resp = evidence(&evidence_req(
             Some("ok"),

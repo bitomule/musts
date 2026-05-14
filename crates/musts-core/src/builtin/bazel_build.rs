@@ -104,14 +104,16 @@ pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
 
     let mut tasks = Vec::with_capacity(winners.len());
     for scope in winners {
-        let ancestors: Vec<String> = scope_keys
-            .iter()
-            .filter(|other| is_deeper(&scope, other))
-            .cloned()
-            .collect();
-        let mut merged_satisfies = std::mem::take(&mut by_scope.get_mut(&scope).unwrap().satisfies);
-        for ancestor in ancestors {
-            merged_satisfies.append(&mut by_scope.get_mut(&ancestor).unwrap().satisfies);
+        // Clone (don't drain) ancestor satisfies: every winning task must
+        // carry every shallower scope's check_ids so the partial-accept
+        // rule (PLAN.md §4.2) converges the ancestor as soon as evidence
+        // is recorded for ANY winner that subsumes it. Draining would
+        // attribute the ancestor's ids to only the first winner iterated.
+        let mut merged_satisfies = by_scope[&scope].satisfies.clone();
+        for other in &scope_keys {
+            if is_deeper(&scope, other) {
+                merged_satisfies.extend(by_scope[other].satisfies.iter().cloned());
+            }
         }
         let target = &by_scope[&scope].target;
         tasks.push(Task {
@@ -284,6 +286,32 @@ mod tests {
         assert!(response.tasks[0]
             .satisfies
             .contains(&"root/app-build".to_string()));
+        assert_eq!(response.ignored_checks.len(), 1);
+        assert_eq!(response.ignored_checks[0].id, "root/app-build");
+    }
+
+    #[test]
+    fn shared_ancestor_subsumes_into_every_winner() {
+        // Two sibling winners (`App/Login`, `App/Profile`) share an
+        // ancestor (`root`). Per PLAN.md §4.2 partial-accept, the
+        // ancestor's check id must appear in EVERY winner's `satisfies`
+        // so recording evidence for either deep target converges the
+        // ancestor — not just the first winner iterated.
+        let response = resolve(&req(vec![
+            check("root", "app-build", "//App:App", 0),
+            check("App/Login", "login-build", "//App/Login:Login", 2),
+            check("App/Profile", "profile-build", "//App/Profile:Profile", 2),
+        ]))
+        .unwrap();
+        assert_eq!(response.tasks.len(), 2);
+        for task in &response.tasks {
+            assert!(
+                task.satisfies.contains(&"root/app-build".to_string()),
+                "task `{}` should carry root/app-build in satisfies, got {:?}",
+                task.id,
+                task.satisfies
+            );
+        }
         assert_eq!(response.ignored_checks.len(), 1);
         assert_eq!(response.ignored_checks[0].id, "root/app-build");
     }
