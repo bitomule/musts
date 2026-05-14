@@ -1,0 +1,7 @@
+# release-plz mutates these on every release PR. Keeping them in scope
+# forces a manual ledger refresh per release for no real safety win:
+# the cargo CI jobs (fmt/clippy/test) run on every PR independently of
+# the dogfood loop, so dep changes are still validated end-to-end.
+**/CHANGELOG.md
+**/Cargo.toml
+Cargo.lock
