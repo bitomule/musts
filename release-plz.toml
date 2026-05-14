@@ -4,8 +4,10 @@ changelog_update = true
 # Don't auto-bump pre-1.0 majors based on breaking changes — solo maintainer
 # decides when to ship a breaking minor.
 semver_check = false
-# Push the tag + create the GitHub Release as part of `release-plz release`.
-git_release_enable = true
+# Push the tag, but let cargo-dist create the GitHub Release with binaries
+# attached. Enabling both creators causes "a release with the same tag name
+# already exists" failures in the Release workflow.
+git_release_enable = false
 git_tag_enable = true
 # Crates are published in dependency order automatically.
 publish = true
