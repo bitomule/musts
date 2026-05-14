@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.1.3] - 2026-05-14
+
+### Added
+
+- Bundle cargo/bazel/mav reference extensions as built-in capabilities ([#29](https://github.com/bitomule/musts/pull/29))
+
 ## [0.1.2] - 2026-05-13
 
 ### Added
