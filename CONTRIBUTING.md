@@ -27,14 +27,11 @@ make all        # lint + test + e2e — run this before opening a PR
 
 ```bash
 cargo build --release
-
-# If you haven't already, symlink the cargo extension into the local workspace
-ln -sf "$(pwd)/target/release/cargo-extension" \
-       .musts/extensions/cargo/cargo-extension
-
 ./target/release/musts validate
 echo "exit=$?"   # must be 0
 ```
+
+The `cargo/{fmt,clippy,test}`, `bazel/build`, and `mav/expect` capabilities used here are built in to the `musts` binary, so no extension wiring is required.
 
 If `validate` returns pending tasks, capture the evidence using `musts evidence <task-id>` (see the [self-validation walkthrough in the README](README.md#self-validation)) until the loop converges. A PR that leaves `musts validate` red should not be merged — the project's whole premise is that the loop stays clean.
 
@@ -68,17 +65,18 @@ That means: the only thing you do per feature PR is write a clear Conventional C
 
 Pre-1.0: minor versions may break the CLI surface, the extension protocol, or the `MUSTS.yml` format. Patch versions are bug-fix only. SemVer becomes strict from `1.0` onwards.
 
-The four `musts-*` crates and the published extensions may release on independent cadences. Compatibility between `musts-core` and an extension is governed by the version of `musts-protocol` they both speak.
+The four `musts-*` crates release on a shared cadence driven by release-plz. Third-party extensions (out-of-tree) live on their own cadence; their compatibility with `musts-core` is governed by the version of `musts-protocol` they speak.
 
 ## Adding a capability or extension
 
-See [`docs/extensions.md`](docs/extensions.md) for the full contract. In short:
+The reference capabilities — `agent`, `cargo/{fmt,clippy,test}`, `bazel/build`, `mav/expect` — are built into `musts-core` under [`crates/musts-core/src/builtin/`](crates/musts-core/src/builtin/). New reference capabilities should follow the same pattern: one module per capability family, registered in [`builtin/mod.rs`](crates/musts-core/src/builtin/mod.rs).
+
+Third-party (out-of-tree) extensions speak the JSON-over-stdio protocol documented in [`docs/extensions.md`](docs/extensions.md). In short:
 
 1. Decide on the `uses: namespace/name` key.
 2. Decide what the `with:` keys mean and what counts as valid evidence.
-3. Implement the extension binary (it speaks JSON over stdio — see [`docs/architecture.md`](docs/architecture.md) and the existing extensions under `extensions/`).
+3. Implement the extension binary using [`musts-extension-util`](crates/musts-extension-util/) (4-line `main()`); ship it on `PATH` or via `.musts/extensions/<name>/extension.yml`.
 4. Add tests against the contract.
-5. If it's a new capability for an existing extension family, update the relevant `extension.yml`.
 
 If you're using Claude Code or a similar agent, install the bundled skill with `musts skill install` (source: [`skills/musts/SKILL.md`](skills/musts/SKILL.md)). It gives the agent the right mental model for the validation loop.
 

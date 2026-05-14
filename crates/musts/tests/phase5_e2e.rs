@@ -1,10 +1,13 @@
 //! Phase 5 end-to-end scenarios per `docs/PLAN.md` §7.3 and §9 Phase 5:
 //! scenario 6 (`bazel_picks_deepest_target`) and the build half of §15.
+//!
+//! `bazel/build` is a built-in capability — no extension descriptor or
+//! sidecar binary required.
 
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -13,47 +16,6 @@ use tempfile::TempDir;
 
 fn bin() -> Command {
     Command::cargo_bin("musts").expect("musts binary not built")
-}
-
-fn bazel_binary() -> PathBuf {
-    common::workspace_binary("bazel-build-extension", "bazel-extension")
-}
-
-fn project_root() -> PathBuf {
-    // crates/musts/tests/phase5_e2e.rs → ../../../
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .expect("workspace root")
-}
-
-fn install_bazel_descriptor(workspace: &Path) {
-    let dir = workspace.join(".musts/extensions/bazel");
-    let schemas = dir.join("schemas");
-    fs::create_dir_all(&schemas).unwrap();
-    let source_schema = project_root().join("extensions/bazel-build/schemas/build.schema.json");
-    fs::copy(&source_schema, schemas.join("build.schema.json")).unwrap();
-    let stub = bazel_binary();
-    fs::write(
-        dir.join("extension.yml"),
-        format!(
-            r#"name: bazel
-version: 0.1.0
-capabilities:
-  build:
-    uses: bazel/build
-    schema: schemas/build.schema.json
-    resolve:
-      command: [{bin:?}, "resolve"]
-    evidence:
-      command: [{bin:?}, "evidence"]
-"#,
-            bin = stub.display().to_string(),
-        ),
-    )
-    .unwrap();
 }
 
 fn write_manifest(path: &Path, body: &str) {
@@ -85,7 +47,6 @@ checks:
       target: //App/Login:Login
 "#,
     );
-    install_bazel_descriptor(dir.path());
 
     let out = bin()
         .arg("--workspace")
@@ -141,7 +102,6 @@ checks:
       target: //App:App
 "#,
     );
-    install_bazel_descriptor(dir.path());
     bin()
         .arg("--workspace")
         .arg(dir.path())
@@ -192,7 +152,6 @@ checks:
       target: //x
 "#,
     );
-    install_bazel_descriptor(dir.path());
     bin()
         .arg("--workspace")
         .arg(dir.path())

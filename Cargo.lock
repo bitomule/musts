@@ -121,16 +121,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
-name = "bazel-build-extension"
-version = "0.1.0"
-dependencies = [
- "musts-extension-util",
- "musts-protocol",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -193,17 +183,6 @@ name = "bytecount"
 version = "0.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
-
-[[package]]
-name = "cargo-extension"
-version = "0.1.0"
-dependencies = [
- "musts-extension-util",
- "musts-protocol",
- "serde",
- "serde_json",
- "tempfile",
-]
 
 [[package]]
 name = "cc"
@@ -872,17 +851,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
-]
-
-[[package]]
-name = "mav-expect-extension"
-version = "0.1.0"
-dependencies = [
- "musts-extension-util",
- "musts-protocol",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

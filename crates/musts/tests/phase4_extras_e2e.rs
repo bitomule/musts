@@ -29,21 +29,22 @@ fn write_manifest(path: &Path, body: &str) {
 fn scenario_19_missing_extension_binary() {
     // Descriptor points at a binary path that doesn't exist. Per
     // PLAN.md §5 / Error::ExtensionFailure the error should mention
-    // the descriptor and the missing program.
+    // the descriptor and the missing program. Use a `third-party/lint`
+    // capability so it doesn't collide with any built-in.
     let dir = TempDir::new().unwrap();
     write_manifest(
         &dir.path().join("MUSTS.yml"),
-        "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
+        "version: 1\nchecks:\n  c:\n    uses: third-party/lint\n    with: {}\n",
     );
-    let ext_dir = dir.path().join(".musts/extensions/bazel");
+    let ext_dir = dir.path().join(".musts/extensions/third-party");
     fs::create_dir_all(&ext_dir).unwrap();
     fs::write(
         ext_dir.join("extension.yml"),
-        r#"name: bazel
+        r#"name: third-party
 version: 0.1.0
 capabilities:
-  build:
-    uses: bazel/build
+  lint:
+    uses: third-party/lint
     resolve:
       command: ["does-not-exist-binary", "resolve"]
     evidence:
@@ -72,13 +73,13 @@ capabilities:
 #[test]
 #[serial]
 fn scenario_20_empty_extensions_dir() {
-    // `.musts/extensions/` exists but is empty; manifests with
-    // checks must fail with the scenario-18-style "no extension
-    // implements capability X" message.
+    // `.musts/extensions/` exists but is empty; manifests with a
+    // capability that has no matching built-in must fail with the
+    // scenario-18-style "no extension implements capability X" message.
     let dir = TempDir::new().unwrap();
     write_manifest(
         &dir.path().join("MUSTS.yml"),
-        "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
+        "version: 1\nchecks:\n  c:\n    uses: third-party/lint\n    with: {}\n",
     );
     fs::create_dir_all(dir.path().join(".musts/extensions")).unwrap();
 
@@ -90,7 +91,7 @@ fn scenario_20_empty_extensions_dir() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains(
-            "no extension implements capability `bazel/build`",
+            "no extension implements capability `third-party/lint`",
         ))
         .stderr(predicate::str::contains("root/c"));
 }

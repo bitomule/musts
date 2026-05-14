@@ -52,13 +52,13 @@ fn json_clean_shape_matches_contract() {
 #[test]
 fn missing_extension_capability_reports_clearly() {
     // Scenario 18 (missing_extension_capability): a manifest declares a
-    // capability with no installed extension. PLAN.md §9 Phase 1 says
-    // "no extension implements capability X" with the manifest path
-    // and offending check id.
+    // capability with no installed extension *and* no matching built-in.
+    // PLAN.md §9 Phase 1 says "no extension implements capability X"
+    // with the manifest path and offending check id.
     let dir = TempDir::new().unwrap();
     std::fs::write(
         dir.path().join("MUSTS.yml"),
-        "version: 1\nchecks:\n  app-build:\n    uses: bazel/build\n    with:\n      target: //App:App\n",
+        "version: 1\nchecks:\n  custom-check:\n    uses: third-party/lint\n    with: {}\n",
     )
     .unwrap();
 
@@ -70,9 +70,9 @@ fn missing_extension_capability_reports_clearly() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains(
-            "no extension implements capability `bazel/build`",
+            "no extension implements capability `third-party/lint`",
         ))
-        .stderr(predicate::str::contains("root/app-build"))
+        .stderr(predicate::str::contains("root/custom-check"))
         .stderr(predicate::str::contains("MUSTS.yml"));
 }
 

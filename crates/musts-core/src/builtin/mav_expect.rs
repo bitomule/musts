@@ -1,10 +1,12 @@
-//! Reference `mav/expect` extension.
+//! Built-in `mav/expect` capability per `docs/PLAN.md` §6.0 / §6.2 /
+//! §16.2.
 //!
-//! Implements the per-scope grouping policy from `docs/PLAN.md` §6.2 /
-//! §16.2 and the evidence contract documented in `docs/PLAN.md` §6.2:
-//! kind-by-kind validation by MIME plus a `mav-report` JSON parse.
+//! Bucket checks by `scope_path` so one MAV session validates every
+//! expectation declared in that scope. Cross-scope merging is left for
+//! future work — different scopes typically represent different
+//! features.
 //!
-//! `with` payload schema (loaded from `schemas/expect.schema.json`):
+//! `with` payload schema:
 //!
 //! ```json
 //! {
@@ -12,26 +14,57 @@
 //!   "evidence": ["screenshot" | "video" | "mav-report" | "accessibility-tree" | "logs"]
 //! }
 //! ```
+//!
+//! Evidence contract: text + the required asset kinds. Kinds are
+//! classified by MIME; `mav-report`/`accessibility-tree` must be
+//! parseable JSON.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
-use std::process::ExitCode;
+use std::sync::LazyLock;
 
-use musts_extension_util::{asset_kind, ipc_main};
 use musts_protocol::{
     AssetContract, EvidenceAsset, EvidenceContract, EvidenceValidationRequest,
     EvidenceValidationResponse, IgnoredCheck, MissingEvidence, NormalizedAsset, ResolveRequest,
     ResolveResponse, Task, TextContract, PROTOCOL_VERSION,
 };
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
-fn main() -> ExitCode {
-    ipc_main(resolve, evidence)
+use super::util::{is_image, is_json, is_log_or_text, is_video, scope_slug};
+use crate::error::Error;
+
+pub fn schema() -> &'static JsonValue {
+    static SCHEMA: LazyLock<JsonValue> = LazyLock::new(|| {
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "expectations": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "screenshot",
+                            "video",
+                            "mav-report",
+                            "accessibility-tree",
+                            "logs"
+                        ]
+                    }
+                }
+            }
+        })
+    });
+    &SCHEMA
 }
-
-// ---------------------------------------------------------------------------
-// Resolve
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 struct ExpectWith {
@@ -49,11 +82,7 @@ const VALID_KINDS: &[&str] = &[
     "logs",
 ];
 
-fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
-    // Bucket checks by scope_path so a single MAV session can validate
-    // every expectation declared in that scope. Cross-scope merging is
-    // future work — different scopes typically represent different
-    // features.
+pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
     let mut by_scope: BTreeMap<String, BucketAccum> = BTreeMap::new();
     let mut ignored = Vec::new();
     for check in &request.checks {
@@ -67,14 +96,11 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
                 continue;
             }
         };
-        let mut had_bad_kind = false;
-        for k in &payload.evidence {
-            if !VALID_KINDS.contains(&k.as_str()) {
-                had_bad_kind = true;
-                break;
-            }
-        }
-        if had_bad_kind {
+        if payload
+            .evidence
+            .iter()
+            .any(|k| !VALID_KINDS.contains(&k.as_str()))
+        {
             ignored.push(IgnoredCheck {
                 id: check.id.clone(),
                 reason: "evidence list contains an unknown asset kind".into(),
@@ -92,14 +118,9 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
         }
     }
 
-    let mut tasks = Vec::new();
+    let mut tasks = Vec::with_capacity(by_scope.len());
     for (scope, bucket) in by_scope {
-        let scope_slug = if scope.is_empty() || scope == "root" {
-            "root".to_string()
-        } else {
-            scope.replace('/', "-").to_lowercase()
-        };
-        let task_id = format!("mav-expect-{scope_slug}");
+        let task_id = format!("mav-expect-{}", scope_slug(&scope));
         let mut instructions = Vec::new();
         instructions.push("Use MAV to validate:".to_string());
         for e in &bucket.expectations {
@@ -156,11 +177,7 @@ struct BucketAccum {
     kinds: BTreeSet<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Evidence
-// ---------------------------------------------------------------------------
-
-fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResponse, String> {
+pub fn evidence(request: &EvidenceValidationRequest) -> Result<EvidenceValidationResponse, Error> {
     let text = request.submission.text.as_deref().unwrap_or("");
     let assets: &[EvidenceAsset] = &request.submission.assets;
     let required_kinds: Vec<String> = request
@@ -189,7 +206,7 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
 
     let workspace_root = Path::new(&request.workspace_root);
     for kind in &required_kinds {
-        let entries = classified.get(kind);
+        let entries = classified_for(&classified, kind);
         match entries {
             None => missing.push(MissingEvidence {
                 kind: kind.clone(),
@@ -204,37 +221,9 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
                     continue;
                 }
                 if kind == "mav-report" || kind == "accessibility-tree" {
-                    // PLAN.md §6.2: mav-report / accessibility-tree must
-                    // be parseable JSON. We read the file off disk
-                    // (workspace-relative path emitted by core's
-                    // evidence::store) and try a Value parse.
                     for asset in list {
-                        let abs = workspace_root.join(&asset.path);
-                        match std::fs::read(&abs) {
-                            Ok(bytes) => {
-                                if let Err(err) =
-                                    serde_json::from_slice::<serde_json::Value>(&bytes)
-                                {
-                                    missing.push(MissingEvidence {
-                                        kind: kind.clone(),
-                                        message: format!(
-                                            "{} asset `{}` is not parseable JSON: {err}",
-                                            human_kind(kind),
-                                            asset.path
-                                        ),
-                                    });
-                                }
-                            }
-                            Err(err) => {
-                                missing.push(MissingEvidence {
-                                    kind: kind.clone(),
-                                    message: format!(
-                                        "could not read {} asset `{}`: {err}",
-                                        human_kind(kind),
-                                        asset.path
-                                    ),
-                                });
-                            }
+                        if let Some(problem) = check_json_asset(workspace_root, kind, asset) {
+                            missing.push(problem);
                         }
                     }
                 }
@@ -283,25 +272,73 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
     })
 }
 
+/// Look up classified assets for a required kind, with the `mav-report`
+/// ↔ `accessibility-tree` alias from `classify_asset` applied so a JSON
+/// asset can satisfy either requirement.
+fn classified_for<'a>(
+    classified: &'a BTreeMap<String, Vec<&'a EvidenceAsset>>,
+    required: &str,
+) -> Option<&'a Vec<&'a EvidenceAsset>> {
+    if let Some(list) = classified.get(required) {
+        return Some(list);
+    }
+    if required == "accessibility-tree" {
+        return classified.get("mav-report");
+    }
+    None
+}
+
 fn classify_asset(asset: &EvidenceAsset) -> Option<String> {
-    if asset_kind::is_image(asset) {
+    if is_image(asset) {
         Some("screenshot".into())
-    } else if asset_kind::is_video(asset) {
+    } else if is_video(asset) {
         Some("video".into())
-    } else if asset_kind::is_json(asset) {
-        // Heuristic: callers attach the JSON report. Whether it's a
-        // mav-report or an accessibility-tree is unknowable from the
-        // MIME alone, so we tag both kinds — the required-kinds loop
-        // above will accept whichever one is asked for. We do this by
-        // returning two entries.
-        // To keep this function single-return, we map to "mav-report"
-        // and the caller adds an accessibility-tree alias below.
+    } else if is_json(asset) {
+        // Both `mav-report` and `accessibility-tree` ride on JSON; MIME
+        // alone can't distinguish them. We classify any JSON asset as
+        // `mav-report`, and the required-kinds loop accepts a
+        // `mav-report` asset against an `accessibility-tree` requirement
+        // via the alias in `classified_for`.
         Some("mav-report".into())
-    } else if asset_kind::is_log_or_text(asset) {
+    } else if is_log_or_text(asset) {
         Some("logs".into())
     } else {
         None
     }
+}
+
+/// Streamingly parse `asset` as JSON, returning a [`MissingEvidence`] with
+/// `kind` if either I/O or `serde_json` rejects it.
+fn check_json_asset(
+    workspace_root: &Path,
+    kind: &str,
+    asset: &EvidenceAsset,
+) -> Option<MissingEvidence> {
+    let abs = workspace_root.join(&asset.path);
+    let file = match File::open(&abs) {
+        Ok(f) => f,
+        Err(err) => {
+            return Some(MissingEvidence {
+                kind: kind.into(),
+                message: format!(
+                    "could not read {} asset `{}`: {err}",
+                    human_kind(kind),
+                    asset.path
+                ),
+            });
+        }
+    };
+    if let Err(err) = serde_json::from_reader::<_, JsonValue>(BufReader::new(file)) {
+        return Some(MissingEvidence {
+            kind: kind.into(),
+            message: format!(
+                "{} asset `{}` is not parseable JSON: {err}",
+                human_kind(kind),
+                asset.path
+            ),
+        });
+    }
+    None
 }
 
 fn human_kind(kind: &str) -> &'static str {
@@ -318,7 +355,7 @@ fn human_kind(kind: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use musts_protocol::{ResolveCheck, SnapshotHandle};
+    use musts_protocol::{EvidenceSubmission, EvidenceTaskRef, ResolveCheck, SnapshotHandle};
 
     fn req(checks: Vec<ResolveCheck>) -> ResolveRequest {
         ResolveRequest {
@@ -359,7 +396,7 @@ mod tests {
 
     #[test]
     fn groups_two_checks_in_one_scope_into_one_task() {
-        let response = resolve(req(vec![
+        let response = resolve(&req(vec![
             check(
                 "App/Login",
                 "valid",
@@ -398,7 +435,7 @@ mod tests {
 
     #[test]
     fn sibling_scopes_each_get_one_task() {
-        let response = resolve(req(vec![
+        let response = resolve(&req(vec![
             check("App/Login", "a", vec!["E1"], vec!["screenshot"]),
             check("App/Profile", "a", vec!["E2"], vec!["screenshot"]),
         ]))
@@ -410,7 +447,7 @@ mod tests {
     fn malformed_payload_is_ignored_with_reason() {
         let mut c = check("root", "x", vec!["E"], vec!["screenshot"]);
         c.with_payload = serde_json::json!({ "expectations": "not an array" });
-        let response = resolve(req(vec![c])).unwrap();
+        let response = resolve(&req(vec![c])).unwrap();
         assert!(response.tasks.is_empty());
         assert_eq!(response.ignored_checks.len(), 1);
     }
@@ -418,17 +455,13 @@ mod tests {
     #[test]
     fn unknown_evidence_kind_is_ignored() {
         let c = check("root", "x", vec!["E"], vec!["holographic"]);
-        let response = resolve(req(vec![c])).unwrap();
+        let response = resolve(&req(vec![c])).unwrap();
         assert!(response.tasks.is_empty());
         assert_eq!(response.ignored_checks.len(), 1);
         assert!(response.ignored_checks[0]
             .reason
             .contains("unknown asset kind"));
     }
-
-    // ---- Evidence ----
-
-    use musts_protocol::{EvidenceSubmission, EvidenceTaskRef};
 
     fn evidence_req(
         text: Option<&str>,
@@ -487,12 +520,10 @@ mod tests {
 
     #[test]
     fn evidence_accepts_all_required_kinds() {
-        // mav-report path needs a real file we can parse, so build a
-        // temp workspace and use workspace-relative asset paths.
         let workspace = tempfile::tempdir().unwrap();
         let report = workspace.path().join("c.json");
         std::fs::write(&report, br#"{"summary":"ok"}"#).unwrap();
-        let resp = evidence(evidence_req_with_root(
+        let resp = evidence(&evidence_req_with_root(
             Some("ok"),
             vec![
                 asset("a.png", "image/png", 100),
@@ -511,7 +542,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let report = workspace.path().join("report.json");
         std::fs::write(&report, b"not valid json").unwrap();
-        let resp = evidence(evidence_req_with_root(
+        let resp = evidence(&evidence_req_with_root(
             Some("ok"),
             vec![asset("report.json", "application/json", 14)],
             vec!["mav-report"],
@@ -527,7 +558,7 @@ mod tests {
 
     #[test]
     fn evidence_rejects_missing_kind() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             Some("ok"),
             vec![asset("a.png", "image/png", 100)],
             vec!["screenshot", "video"],
@@ -539,7 +570,7 @@ mod tests {
 
     #[test]
     fn evidence_rejects_zero_byte_asset() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             Some("ok"),
             vec![asset("a.png", "image/png", 0)],
             vec!["screenshot"],
@@ -554,7 +585,7 @@ mod tests {
 
     #[test]
     fn evidence_rejects_missing_text() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             Some(""),
             vec![asset("a.png", "image/png", 100)],
             vec!["screenshot"],

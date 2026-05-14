@@ -8,13 +8,11 @@
 |---|---|
 | `crates/musts-protocol` | Pure serde types for the JSON-over-stdio extension protocol. Zero behaviour. |
 | `crates/musts-extension-util` | Helpers for Rust extension authors: stdio framing (`ipc_main`, `read_request`, `write_response`), MIME-based asset classification (`asset_kind::*`). |
-| `crates/musts-core` | All domain logic — manifests, snapshots, state, extension runtime, validate orchestrator, evidence pipeline. |
+| `crates/musts-core` | All domain logic — manifests, snapshots, state, extension runtime, validate orchestrator, evidence pipeline. Also hosts the **built-in capabilities** under [`src/builtin/`](../crates/musts-core/src/builtin/): `agent`, `cargo/{fmt,clippy,test}`, `bazel/build`, `mav/expect`. |
 | `crates/musts` | The CLI binary. Argument parsing (`clap`), error rendering, exit codes. |
-| `extensions/bazel-build` | Reference `bazel/build` extension. Deepest-target policy. |
-| `extensions/mav-expect` | Reference `mav/expect` extension. Per-scope grouping + MIME-driven evidence validation with JSON-parse on `mav-report` / `accessibility-tree` assets. |
 | `tests/fixtures/stub_extension` | Configurable test stub used by the integration suite. Behaviour driven by `MUSTS_STUB_*` env vars (PLAN.md §7.2.1). |
 
-The protocol crate is the only dependency boundary between core and extensions. Third-party extensions ignore the Rust crates entirely; the JSON wire shape is the contract.
+The protocol crate is the only dependency boundary between core and external extensions. Third-party extensions ignore the Rust crates entirely; the JSON wire shape is the contract. The built-in capabilities live inside `musts-core` and skip the IPC hop — at lookup time, an external descriptor wins over the built-in registry so a workspace can override or replace a built-in by shipping its own `.musts/extensions/<name>/extension.yml`.
 
 ## The two pipelines
 

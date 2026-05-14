@@ -30,6 +30,7 @@ use musts_protocol::{
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
+use super::util::scope_slug;
 use crate::error::Error;
 
 pub fn schema() -> &'static JsonValue {
@@ -75,13 +76,9 @@ pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
         entry.facts.extend(payload.facts);
     }
 
-    let mut tasks = Vec::new();
+    let mut tasks = Vec::with_capacity(by_scope.len());
     for (scope, bucket) in by_scope {
-        let slug = if scope.is_empty() || scope == "root" {
-            "root".to_string()
-        } else {
-            scope.replace('/', "-").to_lowercase()
-        };
+        let slug = scope_slug(&scope);
         let title = if scope == "root" {
             "Agent: verify facts at the workspace root".to_string()
         } else {

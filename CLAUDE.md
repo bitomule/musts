@@ -43,10 +43,10 @@ Only the PR title matters.
 ```bash
 make all                                # fmt + clippy + test + e2e
 cargo build --release --locked
-ln -sf "$(pwd)/target/release/cargo-extension" \
-       .musts/extensions/cargo/cargo-extension
 ./target/release/musts validate         # must exit 0
 ```
+
+The reference capabilities (`agent`, `cargo/{fmt,clippy,test}`, `bazel/build`, `mav/expect`) are built into the `musts` binary — no `.musts/extensions/` wiring is needed for self-validation.
 
 If `musts validate` reports pending tasks, run the listed commands, capture
 logs **outside** the workspace (e.g. `$TMPDIR`), and submit evidence with
@@ -74,16 +74,15 @@ Pre-1.0: minor may break, patch is bug-fix only, `feat!:` ships as minor
 ## Workspace map
 
 - `crates/musts-protocol` — JSON-over-stdio wire types shared with
-  extensions
+  third-party extensions
 - `crates/musts-extension-util` — Rust helpers for extension authors
+  (third-party use; the in-tree built-ins don't go through this)
 - `crates/musts-core` — orchestrator: manifests, snapshots, scope hashes,
-  ledger
+  ledger; also home of the built-in capabilities under
+  [`src/builtin/`](crates/musts-core/src/builtin/) (`agent`,
+  `cargo/{fmt,clippy,test}`, `bazel/build`, `mav/expect`)
 - `crates/musts` — the `musts` CLI binary
-- `extensions/{cargo,bazel-build,mav-expect}` — reference extensions,
-  `publish = false`, ship inside the binary release
 - `tests/fixtures/stub_extension` — protocol test stub, `publish = false`
-- `.musts/extensions/cargo/` — runtime extension descriptor + symlinked
-  binary for self-validation
 - `.musts/ledger.lock.yaml` — committed validated-state lock; OS-portable
   (path hashes always lowercased — see
   `crates/musts-core/src/snapshot/paths.rs`)
