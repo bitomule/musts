@@ -283,11 +283,14 @@ fn evidence(req: EvidenceValidationRequest) -> Result<EvidenceValidationResponse
 
 The helper closes stdin before reading stdout (so your `serde_json::from_reader` won't deadlock), flushes stdout on response, surfaces any returned `String` error on stderr, and exits with code 2 on failure. Read [`crates/musts-extension-util/src/lib.rs`](../crates/musts-extension-util/src/lib.rs).
 
-Three Rust reference extensions are shipped:
+The reference `agent`, `cargo/{fmt,clippy,test}`, `bazel/build`, and `mav/expect` capabilities are **built into `musts-core`** rather than shipped as separate sidecar binaries, so they need no `.musts/extensions/<name>/` wiring on the consumer side. The implementations live next to each other under [`crates/musts-core/src/builtin/`](../crates/musts-core/src/builtin/) and are the canonical reference for each policy:
 
-- [`extensions/bazel-build`](../extensions/bazel-build/) — `bazel/build`, demonstrating the deepest-target subsumption policy across nested scopes.
-- [`extensions/mav-expect`](../extensions/mav-expect/) — `mav/expect`, demonstrating MIME-driven asset classification (screenshots, videos, JSON reports).
-- [`extensions/cargo`](../extensions/cargo/) — `cargo/{fmt,clippy,test}`, demonstrating capability-dispatched log-content heuristics (the same binary serves three capabilities). The repo uses it to validate itself; see the "Self-validation" section of the top-level README.
+- [`bazel_build.rs`](../crates/musts-core/src/builtin/bazel_build.rs) — `bazel/build`, demonstrating the deepest-target subsumption policy across nested scopes.
+- [`mav_expect.rs`](../crates/musts-core/src/builtin/mav_expect.rs) — `mav/expect`, demonstrating MIME-driven asset classification (screenshots, videos, JSON reports).
+- [`cargo.rs`](../crates/musts-core/src/builtin/cargo.rs) — `cargo/{fmt,clippy,test}`, demonstrating capability-dispatched log-content heuristics (one module serves three capabilities). The repo uses it to validate itself; see the "Self-validation" section of the top-level README.
+- [`agent.rs`](../crates/musts-core/src/builtin/agent.rs) — `agent`, demonstrating per-scope fact bundling with a text-only evidence contract.
+
+Built-in capabilities take the same `ResolveRequest`/`EvidenceValidationRequest` types described above; they just skip the IPC hop. Read them when you're about to author an out-of-tree extension binary — the contracts are identical. A workspace can override or replace any built-in by shipping its own `.musts/extensions/<name>/extension.yml` (external descriptors win at lookup time).
 
 ## Failure-injection matrix (stub-extension)
 

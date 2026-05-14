@@ -1,38 +1,191 @@
-//! Reference `cargo/{fmt,clippy,test}` extension.
+//! Built-in `cargo/{fmt,clippy,test}` capabilities per `docs/PLAN.md` §6.0.
 //!
-//! Evidence-only: this extension never spawns cargo. The agent runs the
-//! command, captures stdout/stderr to a log file, and submits it as an
-//! asset. The extension validates the log content with capability-
-//! specific heuristics:
+//! Evidence-only: the agent runs `cargo` itself, captures stdout/stderr
+//! to a log file, and submits it as an asset. The capability validates
+//! the log content with capability-specific heuristics:
 //!
-//! - `cargo/fmt` — log must not contain `Diff in `.
+//! - `cargo/fmt`    — log must not contain `Diff in `.
 //! - `cargo/clippy` — log must not contain a line starting with
 //!   `error:` or `warning:` (clippy with `-D warnings` surfaces both
 //!   as failures).
-//! - `cargo/test` — log must contain `test result: ok.` and must not
+//! - `cargo/test`   — log must contain `test result: ok.` and must not
 //!   contain `test result: FAILED`.
-//!
-//! `with` payloads are empty (validated by `schemas/<cap>.schema.json`).
-//! Tasks are flat — one task per check; cargo is workspace-wide so there
-//! is no deepest-target subsumption.
 
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::sync::LazyLock;
 
-use musts_extension_util::{asset_kind, ipc_main};
 use musts_protocol::{
-    AssetContract, EvidenceContract, EvidenceValidationRequest, EvidenceValidationResponse,
-    IgnoredCheck, MissingEvidence, NormalizedAsset, ResolveRequest, ResolveResponse, Task,
-    TextContract, PROTOCOL_VERSION,
+    AssetContract, EvidenceAsset, EvidenceContract, EvidenceValidationRequest,
+    EvidenceValidationResponse, IgnoredCheck, MissingEvidence, NormalizedAsset, ResolveRequest,
+    ResolveResponse, Task, TextContract, PROTOCOL_VERSION,
 };
+use serde_json::Value as JsonValue;
 
-fn main() -> ExitCode {
-    ipc_main(resolve, evidence)
+use super::util::{is_log_or_text, scope_slug};
+use crate::error::Error;
+
+pub fn schema() -> &'static JsonValue {
+    static SCHEMA: LazyLock<JsonValue> = LazyLock::new(|| {
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        })
+    });
+    &SCHEMA
 }
 
-// ---------------------------------------------------------------------------
-// Capability vocabulary
-// ---------------------------------------------------------------------------
+pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
+    let capability =
+        Capability::parse(&request.capability).ok_or_else(|| Error::ExtensionFailure {
+            capability: request.capability.clone(),
+            message: format!(
+                "built-in cargo capability dispatched with unknown id `{}` (expected cargo/fmt, \
+                 cargo/clippy or cargo/test)",
+                request.capability
+            ),
+        })?;
+
+    let mut tasks = Vec::with_capacity(request.checks.len());
+    let mut ignored = Vec::new();
+
+    for check in &request.checks {
+        if !is_empty_object(&check.with_payload) {
+            ignored.push(IgnoredCheck {
+                id: check.id.clone(),
+                reason: format!("cargo/{} takes no `with` parameters", capability.slug()),
+            });
+            continue;
+        }
+        let slug = scope_slug(&check.scope_path);
+        tasks.push(Task {
+            id: format!("cargo-{}-{}", capability.slug(), slug),
+            extension: request.capability.clone(),
+            title: format!("Run `{}`", capability.command()),
+            satisfies: vec![check.id.clone()],
+            parallelizable: true,
+            instructions: vec![
+                format!("Run `{}` from the workspace root.", capability.command()),
+                "Capture combined stdout/stderr to a file (outside the workspace so the snapshot \
+                 hash does not change while you submit)."
+                    .into(),
+                format!(
+                    "Record the result with `musts evidence cargo-{}-{} --text \"…\" --asset \
+                     <log>`.",
+                    capability.slug(),
+                    slug
+                ),
+            ],
+            evidence_contract: EvidenceContract {
+                text: TextContract {
+                    required: true,
+                    description: Some(capability.text_description().into()),
+                },
+                assets: vec![AssetContract {
+                    kind: "log".into(),
+                    required: true,
+                    description: Some(capability.log_description().into()),
+                }],
+            },
+        });
+    }
+
+    Ok(ResolveResponse {
+        protocol_version: PROTOCOL_VERSION,
+        tasks,
+        ignored_checks: ignored,
+        notes: Vec::new(),
+    })
+}
+
+pub fn evidence(request: &EvidenceValidationRequest) -> Result<EvidenceValidationResponse, Error> {
+    let capability =
+        Capability::parse(&request.task.extension).ok_or_else(|| Error::ExtensionFailure {
+            capability: request.task.extension.clone(),
+            message: format!(
+                "built-in cargo capability invoked with unknown id `{}` in task.extension",
+                request.task.extension
+            ),
+        })?;
+
+    let text = request.submission.text.as_deref().unwrap_or("");
+    let log_assets: Vec<&EvidenceAsset> = request
+        .submission
+        .assets
+        .iter()
+        .filter(|a| is_log_or_text(a))
+        .collect();
+
+    let mut missing = Vec::new();
+
+    if text.trim().is_empty() {
+        missing.push(MissingEvidence {
+            kind: "text".into(),
+            message: "Provide a one-line summary stating whether the command succeeded.".into(),
+        });
+    }
+    if log_assets.is_empty() {
+        missing.push(MissingEvidence {
+            kind: "log".into(),
+            message: format!(
+                "Attach the stdout/stderr of `{}` as a `text/*` or `application/octet-stream` \
+                 asset.",
+                capability.command()
+            ),
+        });
+    }
+    if let Some(empty) = log_assets.iter().find(|a| a.size == 0) {
+        missing.push(MissingEvidence {
+            kind: "log".into(),
+            message: format!(
+                "Log asset `{}` is empty; record the real command output.",
+                empty.path
+            ),
+        });
+    }
+
+    if missing.is_empty() {
+        if let Some(problem) = inspect_log(capability, &request.workspace_root, &log_assets) {
+            missing.push(problem);
+        }
+    }
+
+    if !missing.is_empty() {
+        return Ok(EvidenceValidationResponse {
+            protocol_version: PROTOCOL_VERSION,
+            accepted: false,
+            satisfies: Vec::new(),
+            summary: None,
+            normalized_assets: Vec::new(),
+            missing,
+            message: Some("Evidence is incomplete.".into()),
+        });
+    }
+
+    let normalized_assets = log_assets
+        .iter()
+        .map(|a| NormalizedAsset {
+            kind: "log".into(),
+            path: a.path.clone(),
+        })
+        .collect();
+
+    Ok(EvidenceValidationResponse {
+        protocol_version: PROTOCOL_VERSION,
+        accepted: true,
+        satisfies: request.task.satisfies.clone(),
+        summary: Some(format!(
+            "cargo/{} evidence accepted ({} log asset{}).",
+            capability.slug(),
+            log_assets.len(),
+            if log_assets.len() == 1 { "" } else { "s" },
+        )),
+        normalized_assets,
+        missing: Vec::new(),
+        message: None,
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Capability {
@@ -86,193 +239,34 @@ impl Capability {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Resolve
-// ---------------------------------------------------------------------------
-
-fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
-    let capability = Capability::parse(&request.capability).ok_or_else(|| {
-        format!(
-            "unknown capability `{}` (expected cargo/fmt, cargo/clippy or cargo/test)",
-            request.capability
-        )
-    })?;
-
-    let mut tasks = Vec::new();
-    let mut ignored = Vec::new();
-
-    for check in &request.checks {
-        if !is_empty_object(&check.with_payload) {
-            ignored.push(IgnoredCheck {
-                id: check.id.clone(),
-                reason: format!("cargo/{} takes no `with` parameters", capability.slug()),
-            });
-            continue;
-        }
-        let scope_slug = task_slug(&check.scope_path);
-        tasks.push(Task {
-            id: format!("cargo-{}-{}", capability.slug(), scope_slug),
-            extension: request.capability.clone(),
-            title: format!("Run `{}`", capability.command()),
-            satisfies: vec![check.id.clone()],
-            parallelizable: true,
-            instructions: vec![
-                format!("Run `{}` from the workspace root.", capability.command()),
-                "Capture combined stdout/stderr to a file (outside the workspace so the snapshot \
-                 hash does not change while you submit)."
-                    .into(),
-                format!(
-                    "Record the result with `musts evidence cargo-{}-{} --text \"…\" --asset \
-                     <log>`.",
-                    capability.slug(),
-                    scope_slug
-                ),
-            ],
-            evidence_contract: EvidenceContract {
-                text: TextContract {
-                    required: true,
-                    description: Some(capability.text_description().into()),
-                },
-                assets: vec![AssetContract {
-                    kind: "log".into(),
-                    required: true,
-                    description: Some(capability.log_description().into()),
-                }],
-            },
-        });
-    }
-
-    Ok(ResolveResponse {
-        protocol_version: PROTOCOL_VERSION,
-        tasks,
-        ignored_checks: ignored,
-        notes: Vec::new(),
-    })
-}
-
-fn task_slug(scope: &str) -> String {
-    if scope.is_empty() || scope == "root" {
-        "root".into()
-    } else {
-        scope.replace('/', "-").to_lowercase()
-    }
-}
-
-fn is_empty_object(value: &serde_json::Value) -> bool {
+fn is_empty_object(value: &JsonValue) -> bool {
     match value {
-        serde_json::Value::Object(map) => map.is_empty(),
-        serde_json::Value::Null => true,
+        JsonValue::Object(map) => map.is_empty(),
+        JsonValue::Null => true,
         _ => false,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Evidence
-// ---------------------------------------------------------------------------
-
-fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResponse, String> {
-    let capability = Capability::parse(&request.task.extension).ok_or_else(|| {
-        format!(
-            "unknown capability `{}` in task.extension",
-            request.task.extension
-        )
-    })?;
-
-    let text = request.submission.text.as_deref().unwrap_or("");
-    let log_assets: Vec<&_> = request
-        .submission
-        .assets
-        .iter()
-        .filter(|a| asset_kind::is_log_or_text(a))
-        .collect();
-
-    let mut missing = Vec::new();
-
-    if text.trim().is_empty() {
-        missing.push(MissingEvidence {
-            kind: "text".into(),
-            message: "Provide a one-line summary stating whether the command succeeded.".into(),
-        });
-    }
-    if log_assets.is_empty() {
-        missing.push(MissingEvidence {
+/// Read the first non-empty log asset and run the capability-specific
+/// failure heuristic against its contents. Returns `Some(MissingEvidence)`
+/// if the log is unreadable or the heuristic rejects it.
+fn inspect_log(
+    capability: Capability,
+    workspace_root: &str,
+    log_assets: &[&EvidenceAsset],
+) -> Option<MissingEvidence> {
+    let log = log_assets.iter().find(|a| a.size > 0)?;
+    let abs_path = PathBuf::from(workspace_root).join(&log.path);
+    match std::fs::read_to_string(&abs_path) {
+        Ok(contents) => capability_failure(capability, &contents).map(|problem| MissingEvidence {
             kind: "log".into(),
-            message: format!(
-                "Attach the stdout/stderr of `{}` as a `text/*` or `application/octet-stream` \
-                 asset.",
-                capability.command()
-            ),
-        });
-    }
-    if let Some(empty) = log_assets.iter().find(|a| a.size == 0) {
-        missing.push(MissingEvidence {
+            message: problem,
+        }),
+        Err(err) => Some(MissingEvidence {
             kind: "log".into(),
-            message: format!(
-                "Log asset `{}` is empty; record the real command output.",
-                empty.path
-            ),
-        });
+            message: format!("Could not read log asset `{}`: {err}", log.path),
+        }),
     }
-
-    if missing.is_empty() {
-        // Heuristics need the log content. Pick the first non-empty log.
-        let log = log_assets
-            .iter()
-            .find(|a| a.size > 0)
-            .expect("at least one non-empty log present at this point");
-        let abs_path = PathBuf::from(&request.workspace_root).join(&log.path);
-        match std::fs::read_to_string(&abs_path) {
-            Ok(contents) => {
-                if let Some(problem) = capability_failure(capability, &contents) {
-                    missing.push(MissingEvidence {
-                        kind: "log".into(),
-                        message: problem,
-                    });
-                }
-            }
-            Err(err) => {
-                missing.push(MissingEvidence {
-                    kind: "log".into(),
-                    message: format!("Could not read log asset `{}`: {err}", log.path),
-                });
-            }
-        }
-    }
-
-    if !missing.is_empty() {
-        return Ok(EvidenceValidationResponse {
-            protocol_version: PROTOCOL_VERSION,
-            accepted: false,
-            satisfies: Vec::new(),
-            summary: None,
-            normalized_assets: Vec::new(),
-            missing,
-            message: Some("Evidence is incomplete.".into()),
-        });
-    }
-
-    let normalized_assets = log_assets
-        .iter()
-        .map(|a| NormalizedAsset {
-            kind: "log".into(),
-            path: a.path.clone(),
-        })
-        .collect();
-
-    Ok(EvidenceValidationResponse {
-        protocol_version: PROTOCOL_VERSION,
-        accepted: true,
-        satisfies: request.task.satisfies.clone(),
-        summary: Some(format!(
-            "cargo/{} evidence accepted ({} log asset{}).",
-            capability.slug(),
-            log_assets.len(),
-            if log_assets.len() == 1 { "" } else { "s" },
-        )),
-        normalized_assets,
-        missing: Vec::new(),
-        message: None,
-    })
 }
 
 fn capability_failure(capability: Capability, log: &str) -> Option<String> {
@@ -320,9 +314,7 @@ fn capability_failure(capability: Capability, log: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use musts_protocol::{
-        EvidenceAsset, EvidenceSubmission, EvidenceTaskRef, ResolveCheck, SnapshotHandle,
-    };
+    use musts_protocol::{EvidenceSubmission, EvidenceTaskRef, ResolveCheck, SnapshotHandle};
 
     fn resolve_req(capability: &str, checks: Vec<ResolveCheck>) -> ResolveRequest {
         ResolveRequest {
@@ -359,7 +351,7 @@ mod tests {
 
     #[test]
     fn resolve_emits_one_task_per_check() {
-        let resp = resolve(resolve_req("cargo/test", vec![check("root", "test")])).unwrap();
+        let resp = resolve(&resolve_req("cargo/test", vec![check("root", "test")])).unwrap();
         assert_eq!(resp.tasks.len(), 1);
         assert_eq!(resp.tasks[0].id, "cargo-test-root");
         assert_eq!(resp.tasks[0].satisfies, vec!["root/test"]);
@@ -373,7 +365,7 @@ mod tests {
             ("cargo/clippy", "clippy"),
             ("cargo/test", "test"),
         ] {
-            let resp = resolve(resolve_req(cap, vec![check("root", slug)])).unwrap();
+            let resp = resolve(&resolve_req(cap, vec![check("root", slug)])).unwrap();
             assert_eq!(resp.tasks[0].id, format!("cargo-{slug}-root"));
             assert_eq!(resp.tasks[0].extension, cap);
         }
@@ -381,15 +373,15 @@ mod tests {
 
     #[test]
     fn resolve_rejects_unknown_capability() {
-        let err = resolve(resolve_req("cargo/audit", vec![])).unwrap_err();
-        assert!(err.contains("cargo/audit"));
+        let err = resolve(&resolve_req("cargo/audit", vec![])).unwrap_err();
+        assert!(format!("{err}").contains("cargo/audit"));
     }
 
     #[test]
     fn resolve_ignores_checks_with_unexpected_with_payload() {
         let mut c = check("root", "fmt");
         c.with_payload = serde_json::json!({ "stray": true });
-        let resp = resolve(resolve_req("cargo/fmt", vec![c])).unwrap();
+        let resp = resolve(&resolve_req("cargo/fmt", vec![c])).unwrap();
         assert!(resp.tasks.is_empty());
         assert_eq!(resp.ignored_checks.len(), 1);
         assert!(resp.ignored_checks[0].reason.contains("no `with`"));
@@ -457,7 +449,7 @@ mod tests {
     #[test]
     fn evidence_fmt_accepts_clean_log() {
         let (dir, rel) = write_log("");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/fmt",
             Some("cargo fmt --check sin diffs"),
             vec![asset(&rel, 1)],
@@ -471,7 +463,7 @@ mod tests {
     #[test]
     fn evidence_fmt_rejects_diff_in_marker() {
         let (dir, rel) = write_log("Diff in /repo/src/main.rs at line 12:\n-foo\n+bar\n");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/fmt",
             Some("ran fmt"),
             vec![asset(&rel, 64)],
@@ -485,7 +477,7 @@ mod tests {
     #[test]
     fn evidence_clippy_accepts_clean_log() {
         let (dir, rel) = write_log("    Checking foo v0.1.0\n    Finished dev profile in 1.23s\n");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/clippy",
             Some("clippy clean"),
             vec![asset(&rel, 64)],
@@ -498,7 +490,7 @@ mod tests {
     #[test]
     fn evidence_clippy_rejects_warning_line() {
         let (dir, rel) = write_log("warning: unused variable `x`\n  --> src/lib.rs:3:5\n");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/clippy",
             Some("ran clippy"),
             vec![asset(&rel, 64)],
@@ -515,7 +507,7 @@ mod tests {
     #[test]
     fn evidence_clippy_rejects_error_line() {
         let (dir, rel) = write_log("error: redundant clone\n");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/clippy",
             Some("ran clippy"),
             vec![asset(&rel, 32)],
@@ -528,7 +520,7 @@ mod tests {
     #[test]
     fn evidence_test_accepts_ok_summary() {
         let (dir, rel) = write_log("running 5 tests\ntest result: ok. 5 passed; 0 failed\n");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/test",
             Some("all green"),
             vec![asset(&rel, 64)],
@@ -542,7 +534,7 @@ mod tests {
     fn evidence_test_rejects_failed_summary() {
         let (dir, rel) =
             write_log("test foo ... FAILED\ntest result: FAILED. 4 passed; 1 failed\n");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/test",
             Some("oops"),
             vec![asset(&rel, 64)],
@@ -556,7 +548,7 @@ mod tests {
     #[test]
     fn evidence_test_rejects_missing_summary() {
         let (dir, rel) = write_log("running 1 test\n... output truncated\n");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/test",
             Some("partial"),
             vec![asset(&rel, 64)],
@@ -573,7 +565,7 @@ mod tests {
     #[test]
     fn evidence_rejects_empty_text() {
         let (dir, rel) = write_log("test result: ok. 1 passed\n");
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/test",
             Some("   "),
             vec![asset(&rel, 32)],
@@ -586,14 +578,14 @@ mod tests {
 
     #[test]
     fn evidence_rejects_missing_log() {
-        let resp = evidence(evidence_req("cargo/test", Some("ok"), vec![], "/repo")).unwrap();
+        let resp = evidence(&evidence_req("cargo/test", Some("ok"), vec![], "/repo")).unwrap();
         assert!(!resp.accepted);
         assert!(resp.missing.iter().any(|m| m.kind == "log"));
     }
 
     #[test]
     fn evidence_rejects_zero_byte_log() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/test",
             Some("ok"),
             vec![asset("empty.log", 0)],
@@ -606,7 +598,7 @@ mod tests {
 
     #[test]
     fn evidence_rejects_unreadable_log_path() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             "cargo/test",
             Some("ok"),
             vec![asset("does/not/exist.log", 10)],

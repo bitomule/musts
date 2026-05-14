@@ -14,6 +14,10 @@ use serde_json::Value as JsonValue;
 use crate::error::Error;
 
 pub mod agent;
+pub mod bazel_build;
+pub mod cargo;
+pub mod mav_expect;
+mod util;
 
 /// One built-in capability — same surface as an external extension,
 /// minus the IPC. Internal-only.
@@ -33,9 +37,41 @@ pub fn lookup(uses: &str) -> Option<&'static BuiltinCapability> {
     REGISTRY.iter().find(|c| c.uses == uses)
 }
 
-const REGISTRY: &[BuiltinCapability] = &[BuiltinCapability {
-    uses: "agent",
-    schema: agent::schema,
-    resolve: agent::resolve,
-    evidence: agent::evidence,
-}];
+const REGISTRY: &[BuiltinCapability] = &[
+    BuiltinCapability {
+        uses: "agent",
+        schema: agent::schema,
+        resolve: agent::resolve,
+        evidence: agent::evidence,
+    },
+    BuiltinCapability {
+        uses: "cargo/fmt",
+        schema: cargo::schema,
+        resolve: cargo::resolve,
+        evidence: cargo::evidence,
+    },
+    BuiltinCapability {
+        uses: "cargo/clippy",
+        schema: cargo::schema,
+        resolve: cargo::resolve,
+        evidence: cargo::evidence,
+    },
+    BuiltinCapability {
+        uses: "cargo/test",
+        schema: cargo::schema,
+        resolve: cargo::resolve,
+        evidence: cargo::evidence,
+    },
+    BuiltinCapability {
+        uses: "bazel/build",
+        schema: bazel_build::schema,
+        resolve: bazel_build::resolve,
+        evidence: bazel_build::evidence,
+    },
+    BuiltinCapability {
+        uses: "mav/expect",
+        schema: mav_expect::schema,
+        resolve: mav_expect::resolve,
+        evidence: mav_expect::evidence,
+    },
+];

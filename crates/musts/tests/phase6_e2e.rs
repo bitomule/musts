@@ -1,10 +1,13 @@
 //! Phase 6 end-to-end scenarios per `docs/PLAN.md` §7.3 and §9 Phase 6:
 //! scenario 7 (`mav_groups_expectations`) and the full §15 worked example.
+//!
+//! `bazel/build` and `mav/expect` are built-in capabilities — no
+//! extension descriptor or sidecar binary required.
 
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -13,79 +16,6 @@ use tempfile::TempDir;
 
 fn bin() -> Command {
     Command::cargo_bin("musts").expect("musts binary not built")
-}
-
-fn extension_binary(name: &str) -> PathBuf {
-    let package = match name {
-        "bazel-extension" => "bazel-build-extension",
-        "mav-extension" => "mav-expect-extension",
-        "stub-extension" => "stub-extension",
-        other => panic!("unknown extension binary `{other}`"),
-    };
-    common::workspace_binary(package, name)
-}
-
-fn project_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .expect("workspace root")
-}
-
-fn install_mav_descriptor(workspace: &Path) {
-    let dir = workspace.join(".musts/extensions/mav");
-    let schemas = dir.join("schemas");
-    fs::create_dir_all(&schemas).unwrap();
-    let source = project_root().join("extensions/mav-expect/schemas/expect.schema.json");
-    fs::copy(&source, schemas.join("expect.schema.json")).unwrap();
-    let bin = extension_binary("mav-extension");
-    fs::write(
-        dir.join("extension.yml"),
-        format!(
-            r#"name: mav
-version: 0.1.0
-capabilities:
-  expect:
-    uses: mav/expect
-    schema: schemas/expect.schema.json
-    resolve:
-      command: [{bin:?}, "resolve"]
-    evidence:
-      command: [{bin:?}, "evidence"]
-"#,
-            bin = bin.display().to_string(),
-        ),
-    )
-    .unwrap();
-}
-
-fn install_bazel_descriptor(workspace: &Path) {
-    let dir = workspace.join(".musts/extensions/bazel");
-    let schemas = dir.join("schemas");
-    fs::create_dir_all(&schemas).unwrap();
-    let source = project_root().join("extensions/bazel-build/schemas/build.schema.json");
-    fs::copy(&source, schemas.join("build.schema.json")).unwrap();
-    let bin = extension_binary("bazel-extension");
-    fs::write(
-        dir.join("extension.yml"),
-        format!(
-            r#"name: bazel
-version: 0.1.0
-capabilities:
-  build:
-    uses: bazel/build
-    schema: schemas/build.schema.json
-    resolve:
-      command: [{bin:?}, "resolve"]
-    evidence:
-      command: [{bin:?}, "evidence"]
-"#,
-            bin = bin.display().to_string(),
-        ),
-    )
-    .unwrap();
 }
 
 fn write_manifest(path: &Path, body: &str) {
@@ -123,7 +53,6 @@ checks:
         - mav-report
 "#,
     );
-    install_mav_descriptor(dir.path());
 
     let out = bin()
         .arg("--workspace")
@@ -180,7 +109,6 @@ checks:
         - mav-report
 "#,
     );
-    install_mav_descriptor(dir.path());
 
     let out = bin()
         .arg("--workspace")
@@ -258,8 +186,6 @@ checks:
         &dir.path().join("App/Login/LoginView.swift"),
         "struct LoginView { let v = 1 }\n",
     );
-    install_bazel_descriptor(dir.path());
-    install_mav_descriptor(dir.path());
 
     // First validate emits one task per capability for the App/Login scope.
     let out = bin()

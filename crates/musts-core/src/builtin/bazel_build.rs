@@ -1,43 +1,62 @@
-//! Reference `bazel/build` extension.
+//! Built-in `bazel/build` capability per `docs/PLAN.md` §6.0 / §6.1.
 //!
-//! Implements the deepest-applicable-target policy from `docs/PLAN.md`
-//! §6.1 and the evidence contract (text + at least one log asset).
+//! Implements the deepest-applicable-target policy: every scope gets a
+//! task, except when a *deeper* same-capability scope exists in the
+//! same run — in that case the deeper scope's task subsumes the
+//! ancestor. The ancestor's check_ids are merged into the deeper
+//! task's `satisfies` so recording evidence once converges both
+//! checks.
 //!
-//! `with` payload schema (loaded from `schemas/build.schema.json`):
+//! `with` payload schema:
 //!
 //! ```json
 //! { "target": "//path/to:target" }
 //! ```
+//!
+//! Evidence contract: text + one or more log assets (`text/*` or
+//! `application/octet-stream`).
 
 use std::collections::BTreeMap;
-use std::process::ExitCode;
+use std::sync::LazyLock;
 
-use musts_extension_util::{asset_kind, ipc_main};
 use musts_protocol::{
-    AssetContract, EvidenceContract, EvidenceValidationRequest, EvidenceValidationResponse,
-    IgnoredCheck, MissingEvidence, ResolveRequest, ResolveResponse, Task, TextContract,
-    PROTOCOL_VERSION,
+    AssetContract, EvidenceAsset, EvidenceContract, EvidenceValidationRequest,
+    EvidenceValidationResponse, IgnoredCheck, MissingEvidence, NormalizedAsset, ResolveRequest,
+    ResolveResponse, Task, TextContract, PROTOCOL_VERSION,
 };
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
-fn main() -> ExitCode {
-    ipc_main(resolve, evidence)
+use super::util::{is_log_or_text, scope_slug};
+use crate::error::Error;
+
+pub fn schema() -> &'static JsonValue {
+    static SCHEMA: LazyLock<JsonValue> = LazyLock::new(|| {
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["target"],
+            "additionalProperties": false,
+            "properties": {
+                "target": { "type": "string", "minLength": 1 }
+            }
+        })
+    });
+    &SCHEMA
 }
-
-// ---------------------------------------------------------------------------
-// Resolve
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 struct BuildWith {
     target: String,
 }
 
-fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
-    // Group checks by scope_path so we can pick the deepest one per
-    // scope. Within the same scope, all checks must agree on the
-    // target (we treat duplicates as redundant).
-    let mut by_scope: BTreeMap<String, (String, Vec<String>, u32)> = BTreeMap::new();
+struct Bucket {
+    target: String,
+    satisfies: Vec<String>,
+}
+
+pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
+    let mut by_scope: BTreeMap<String, Bucket> = BTreeMap::new();
     let mut malformed: Vec<String> = Vec::new();
     for check in &request.checks {
         let with: BuildWith = match serde_json::from_value(check.with_payload.clone()) {
@@ -49,55 +68,58 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
         };
         let entry = by_scope
             .entry(check.scope_path.clone())
-            .or_insert_with(|| (with.target.clone(), Vec::new(), check.depth));
-        entry.1.push(check.id.clone());
+            .or_insert_with(|| Bucket {
+                target: with.target.clone(),
+                satisfies: Vec::new(),
+            });
+        entry.satisfies.push(check.id.clone());
         // Pick lexicographically smaller target on collision so behaviour
         // is deterministic — duplicate same-scope same-capability checks
         // are unusual and we don't want to silently prefer one over
         // another based on iteration order.
-        if with.target < entry.0 {
-            entry.0 = with.target;
+        if with.target < entry.target {
+            entry.target = with.target;
         }
     }
 
-    // Now apply deepest-target policy: every scope owns a task, except
-    // when a *deeper* same-capability scope exists in the same run — in
-    // that case the deeper scope's task subsumes the ancestor. The
-    // ancestor's check_ids are appended to the deeper task's
-    // `satisfies` so that recording evidence once converges both
-    // checks (PLAN.md §4.2 partial-accept rule: extension's satisfies
-    // is authoritative).
-    let scopes: Vec<String> = by_scope.keys().cloned().collect();
+    // Partition every scope by whether some sibling scope is deeper.
+    // Losers (`has_deeper`) feed ignored_checks; winners drive tasks
+    // and absorb every shallower scope's satisfies (PLAN.md §4.2
+    // partial-accept rule).
+    let scope_keys: Vec<String> = by_scope.keys().cloned().collect();
+    let mut winners: Vec<String> = Vec::with_capacity(scope_keys.len());
     let mut ignored = Vec::new();
-    let mut tasks = Vec::new();
-    for (scope, (target, satisfies, _depth)) in &by_scope {
-        let has_deeper = scopes.iter().any(|other| is_deeper(other, scope));
-        if has_deeper {
-            for id in satisfies {
+    for scope in &scope_keys {
+        if scope_keys.iter().any(|other| is_deeper(other, scope)) {
+            for id in &by_scope[scope].satisfies {
                 ignored.push(IgnoredCheck {
                     id: id.clone(),
                     reason: "subsumed by a deeper bazel/build target in the same run".into(),
                 });
             }
-            continue;
+        } else {
+            winners.push(scope.clone());
         }
-        // Pull every strictly-ancestor scope's checks into this task's
-        // satisfies. They are still listed in ignored_checks above; the
-        // ledger writes one row per accepted check.
-        let mut merged_satisfies = satisfies.clone();
-        for (other_scope, (_t, other_satisfies, _d)) in &by_scope {
-            if is_deeper(scope, other_scope) {
-                for id in other_satisfies {
-                    merged_satisfies.push(id.clone());
-                }
+    }
+
+    let mut tasks = Vec::with_capacity(winners.len());
+    for scope in winners {
+        // Clone (don't drain) ancestor satisfies: every winning task must
+        // carry every shallower scope's check_ids so the partial-accept
+        // rule (PLAN.md §4.2) converges the ancestor as soon as evidence
+        // is recorded for ANY winner that subsumes it. Draining would
+        // attribute the ancestor's ids to only the first winner iterated.
+        let mut merged_satisfies = by_scope[&scope].satisfies.clone();
+        for other in &scope_keys {
+            if is_deeper(&scope, other) {
+                merged_satisfies.extend(by_scope[other].satisfies.iter().cloned());
             }
         }
-        let task_id = format!("bazel-build-{}", task_slug(scope));
-        let title = format!("Build {}", target);
+        let target = &by_scope[&scope].target;
         tasks.push(Task {
-            id: task_id,
+            id: format!("bazel-build-{}", scope_slug(&scope)),
             extension: "bazel/build".into(),
-            title,
+            title: format!("Build {target}"),
             satisfies: merged_satisfies,
             parallelizable: true,
             instructions: vec![
@@ -135,34 +157,13 @@ fn resolve(request: ResolveRequest) -> Result<ResolveResponse, String> {
     })
 }
 
-fn is_deeper(candidate: &str, scope: &str) -> bool {
-    if candidate == scope {
-        return false;
-    }
-    if scope.is_empty() || scope == "root" {
-        return !candidate.is_empty() && candidate != "root";
-    }
-    candidate.starts_with(scope) && candidate.as_bytes().get(scope.len()) == Some(&b'/')
-}
-
-fn task_slug(scope: &str) -> String {
-    if scope.is_empty() || scope == "root" {
-        return "root".into();
-    }
-    scope.replace('/', "-").to_lowercase()
-}
-
-// ---------------------------------------------------------------------------
-// Evidence
-// ---------------------------------------------------------------------------
-
-fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResponse, String> {
+pub fn evidence(request: &EvidenceValidationRequest) -> Result<EvidenceValidationResponse, Error> {
     let text = request.submission.text.as_deref().unwrap_or("");
-    let log_assets: Vec<&_> = request
+    let log_assets: Vec<&EvidenceAsset> = request
         .submission
         .assets
         .iter()
-        .filter(|a| asset_kind::is_log_or_text(a))
+        .filter(|a| is_log_or_text(a))
         .collect();
     let mut missing = Vec::new();
     if text.trim().is_empty() {
@@ -175,9 +176,9 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
     if log_assets.is_empty() {
         missing.push(MissingEvidence {
             kind: "log".into(),
-            message:
-                "Attach the bazel stdout/stderr as a log file (`text/*` or `application/octet-stream`)."
-                    .into(),
+            message: "Attach the bazel stdout/stderr as a log file (`text/*` or \
+                 `application/octet-stream`)."
+                .into(),
         });
     }
     if let Some(first_empty) = log_assets.iter().find(|a| a.size == 0) {
@@ -202,7 +203,7 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
     }
     let normalized_assets = log_assets
         .iter()
-        .map(|a| musts_protocol::NormalizedAsset {
+        .map(|a| NormalizedAsset {
             kind: "log".into(),
             path: a.path.clone(),
         })
@@ -222,10 +223,20 @@ fn evidence(request: EvidenceValidationRequest) -> Result<EvidenceValidationResp
     })
 }
 
+fn is_deeper(candidate: &str, scope: &str) -> bool {
+    if candidate == scope {
+        return false;
+    }
+    if scope.is_empty() || scope == "root" {
+        return !candidate.is_empty() && candidate != "root";
+    }
+    candidate.starts_with(scope) && candidate.as_bytes().get(scope.len()) == Some(&b'/')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use musts_protocol::{ResolveCheck, SnapshotHandle};
+    use musts_protocol::{EvidenceSubmission, EvidenceTaskRef, ResolveCheck, SnapshotHandle};
 
     fn req(checks: Vec<ResolveCheck>) -> ResolveRequest {
         ResolveRequest {
@@ -262,35 +273,59 @@ mod tests {
 
     #[test]
     fn deepest_target_subsumes_ancestor_check_into_one_task() {
-        let response = resolve(req(vec![
+        let response = resolve(&req(vec![
             check("root", "app-build", "//App:App", 0),
             check("App/Login", "login-build", "//App/Login:Login", 2),
         ]))
         .unwrap();
         assert_eq!(response.tasks.len(), 1);
         assert!(response.tasks[0].title.contains("//App/Login:Login"));
-        // The task subsumes both the deep check and the ancestor.
         assert!(response.tasks[0]
             .satisfies
             .contains(&"App/Login/login-build".to_string()));
         assert!(response.tasks[0]
             .satisfies
             .contains(&"root/app-build".to_string()));
-        // Ancestor still appears in ignored_checks as diagnostic info.
+        assert_eq!(response.ignored_checks.len(), 1);
+        assert_eq!(response.ignored_checks[0].id, "root/app-build");
+    }
+
+    #[test]
+    fn shared_ancestor_subsumes_into_every_winner() {
+        // Two sibling winners (`App/Login`, `App/Profile`) share an
+        // ancestor (`root`). Per PLAN.md §4.2 partial-accept, the
+        // ancestor's check id must appear in EVERY winner's `satisfies`
+        // so recording evidence for either deep target converges the
+        // ancestor — not just the first winner iterated.
+        let response = resolve(&req(vec![
+            check("root", "app-build", "//App:App", 0),
+            check("App/Login", "login-build", "//App/Login:Login", 2),
+            check("App/Profile", "profile-build", "//App/Profile:Profile", 2),
+        ]))
+        .unwrap();
+        assert_eq!(response.tasks.len(), 2);
+        for task in &response.tasks {
+            assert!(
+                task.satisfies.contains(&"root/app-build".to_string()),
+                "task `{}` should carry root/app-build in satisfies, got {:?}",
+                task.id,
+                task.satisfies
+            );
+        }
         assert_eq!(response.ignored_checks.len(), 1);
         assert_eq!(response.ignored_checks[0].id, "root/app-build");
     }
 
     #[test]
     fn only_root_present_emits_root_task() {
-        let response = resolve(req(vec![check("root", "app-build", "//App:App", 0)])).unwrap();
+        let response = resolve(&req(vec![check("root", "app-build", "//App:App", 0)])).unwrap();
         assert_eq!(response.tasks.len(), 1);
         assert!(response.ignored_checks.is_empty());
     }
 
     #[test]
     fn sibling_scopes_each_get_a_task() {
-        let response = resolve(req(vec![
+        let response = resolve(&req(vec![
             check("App/Login", "login-build", "//App/Login:Login", 2),
             check("App/Profile", "profile-build", "//App/Profile:Profile", 2),
         ]))
@@ -303,17 +338,13 @@ mod tests {
     fn malformed_with_payload_is_reported_as_ignored() {
         let mut c = check("root", "x", "//", 0);
         c.with_payload = serde_json::json!({ "not_target": 1 });
-        let response = resolve(req(vec![c])).unwrap();
+        let response = resolve(&req(vec![c])).unwrap();
         assert!(response.tasks.is_empty());
         assert_eq!(response.ignored_checks.len(), 1);
         assert!(response.ignored_checks[0].reason.contains("does not match"));
     }
 
-    fn evidence_req(
-        text: Option<&str>,
-        assets: Vec<musts_protocol::EvidenceAsset>,
-    ) -> EvidenceValidationRequest {
-        use musts_protocol::{EvidenceSubmission, EvidenceTaskRef};
+    fn evidence_req(text: Option<&str>, assets: Vec<EvidenceAsset>) -> EvidenceValidationRequest {
         EvidenceValidationRequest {
             protocol_version: PROTOCOL_VERSION,
             workspace_root: "/repo".into(),
@@ -344,8 +375,8 @@ mod tests {
         }
     }
 
-    fn asset(path: &str, mime: &str, size: u64) -> musts_protocol::EvidenceAsset {
-        musts_protocol::EvidenceAsset {
+    fn asset(path: &str, mime: &str, size: u64) -> EvidenceAsset {
+        EvidenceAsset {
             path: path.into(),
             mime: mime.into(),
             size,
@@ -354,7 +385,7 @@ mod tests {
 
     #[test]
     fn evidence_accepts_text_plus_log() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             Some("bazel build //App:App succeeded"),
             vec![asset("build.log", "text/plain", 4096)],
         ))
@@ -365,7 +396,7 @@ mod tests {
 
     #[test]
     fn evidence_accepts_octet_stream_log() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             Some("ok"),
             vec![asset("build.log", "application/octet-stream", 12)],
         ))
@@ -375,7 +406,7 @@ mod tests {
 
     #[test]
     fn evidence_rejects_empty_text() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             Some(""),
             vec![asset("a.log", "text/plain", 4)],
         ))
@@ -386,14 +417,14 @@ mod tests {
 
     #[test]
     fn evidence_rejects_missing_log() {
-        let resp = evidence(evidence_req(Some("ok"), vec![])).unwrap();
+        let resp = evidence(&evidence_req(Some("ok"), vec![])).unwrap();
         assert!(!resp.accepted);
         assert!(resp.missing.iter().any(|m| m.kind == "log"));
     }
 
     #[test]
     fn evidence_rejects_zero_byte_log() {
-        let resp = evidence(evidence_req(
+        let resp = evidence(&evidence_req(
             Some("ok"),
             vec![asset("a.log", "text/plain", 0)],
         ))

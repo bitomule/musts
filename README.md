@@ -81,14 +81,12 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor guide.
 
 ## Self-validation
 
-The repository validates itself with its own CLI. Three `cargo` capabilities (`cargo/fmt`, `cargo/clippy`, `cargo/test`) live in [`extensions/cargo`](extensions/cargo/) and validate evidence the agent collects; two scopes (`crates/musts-protocol/` and `extensions/cargo/`) carry `uses: agent` contracts that pin their responsibility as a checklist of facts.
+The repository validates itself with its own CLI. Three `cargo` capabilities (`cargo/fmt`, `cargo/clippy`, `cargo/test`) are built in to the `musts` binary alongside the [`agent`](crates/musts-core/src/builtin/agent.rs), [`bazel/build`](crates/musts-core/src/builtin/bazel_build.rs), and [`mav/expect`](crates/musts-core/src/builtin/mav_expect.rs) capabilities; one scope (`crates/musts-protocol/`) carries a `uses: agent` contract that pins its responsibility as a checklist of facts.
 
-Walk the loop end-to-end:
+Walk the loop end-to-end (no extension wiring — the cargo capabilities are bundled in the binary):
 
 ```bash
 cargo build --release
-ln -sf "$(pwd)/target/release/cargo-extension" \
-       .musts/extensions/cargo/cargo-extension
 
 # Touch something to dirty a scope
 echo "// touch" >> crates/musts-protocol/src/lib.rs
