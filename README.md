@@ -1,4 +1,4 @@
-<p align="center">
+<p align="left">
   <img src="assets/logo.png" alt="musts logo" width="240">
 </p>
 
@@ -17,7 +17,7 @@ An agent-first validation loop for code repositories.
 
 ## Status
 
-Pre-1.0. The CLI surface, the extension protocol, and the `MUSTS.yml` format may change between minor versions until `1.0`. The §19 success criterion runs end-to-end on [`fixtures/login-app/`](fixtures/login-app/) and is checked in as `phase6_e2e::full_section_15_worked_example`.
+Pre-1.0. The CLI surface, the extension protocol, and the `MUSTS.yml` format may change between minor versions until `1.0`. The §15 success criterion runs end-to-end on [`fixtures/login-app/`](fixtures/login-app/) and is checked in as `phase6_e2e::full_section_15_worked_example`.
 
 ## How it works (one paragraph)
 
@@ -122,7 +122,7 @@ cargo test --workspace 2>&1 | tee /tmp/musts-self-evidence/test.log >/dev/null
 ./target/release/musts validate ; echo "exit=$?"   # → 0
 ```
 
-The contract task lists its facts under `Instructions:` in the `validate` output — your evidence text should address each one. Empty text is rejected (`agent_builtin_e2e::text_required`).
+The contract task lists its facts under `Instructions:` in the `validate` output — your evidence text should address each one. Empty text is rejected (`agent_builtin_e2e::agent_text_required`).
 
 ## Docs
 
