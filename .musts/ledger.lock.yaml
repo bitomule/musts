@@ -67,6 +67,8 @@ satisfied:
 - check: root/clippy
   scope_hash: dd561543e54b919f82391d8cd8f912b69e79103d5021450303813e9d424123ef
 - check: root/clippy
+  scope_hash: e09d0e88588e2c3484e41aef3e886456c50f5f40c24b5104d0330842306e1568
+- check: root/clippy
   scope_hash: f33743ab35536dadb7565693ecbf42beafb5950e1b43b99d34e9395ff2c4f519
 - check: root/clippy
   scope_hash: f59a1fc8b378417bf372128f156b416edd7a86cbfba2a02ecf6fd33fa04b553b
@@ -130,6 +132,8 @@ satisfied:
   scope_hash: d5287356815862b3835cf5b58eb20f5482d3556bf8f053ce4264df058086d8b4
 - check: root/fmt
   scope_hash: dd561543e54b919f82391d8cd8f912b69e79103d5021450303813e9d424123ef
+- check: root/fmt
+  scope_hash: e09d0e88588e2c3484e41aef3e886456c50f5f40c24b5104d0330842306e1568
 - check: root/fmt
   scope_hash: f33743ab35536dadb7565693ecbf42beafb5950e1b43b99d34e9395ff2c4f519
 - check: root/fmt
@@ -196,6 +200,8 @@ satisfied:
   scope_hash: d5287356815862b3835cf5b58eb20f5482d3556bf8f053ce4264df058086d8b4
 - check: root/test
   scope_hash: dd561543e54b919f82391d8cd8f912b69e79103d5021450303813e9d424123ef
+- check: root/test
+  scope_hash: e09d0e88588e2c3484e41aef3e886456c50f5f40c24b5104d0330842306e1568
 - check: root/test
   scope_hash: f33743ab35536dadb7565693ecbf42beafb5950e1b43b99d34e9395ff2c4f519
 - check: root/test
