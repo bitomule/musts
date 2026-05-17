@@ -65,9 +65,8 @@ Pre-1.0. The CLI surface, the extension protocol, and the `MUSTS.yml` format may
 `musts` validates itself on every PR — the dogfood loop is a required CI check. It also runs in production on:
 
 - [Undolly](https://undolly.app) — finding duplicate photos
-- [Boxy](https://boxyapp.com) — organising physical items
+- [Boxy](https://boxy-app.com/) — organising physical items
 - [HiddenFace](https://hiddenface.app) — privacy-first face blur
-- [Nokoru](https://nokoru.app) — quick voice memo capture
 
 ## Commands
 
