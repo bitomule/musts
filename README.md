@@ -9,19 +9,65 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.88-blue.svg)](rust-toolchain.toml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-An agent-first validation loop for code repositories.
+The validation loop that stops your AI coding agent from claiming the work is done before it actually is.
 
 > The task is not done until `musts validate` is empty.
 
-`musts` is a small CLI that tells an agent **what must be validated after a change, how to produce evidence, and when the work is allowed to be called done**. It is not a test runner, not CI, not another `CLAUDE.md` — it is the missing validation loop between agent work and trustworthy completion.
+<p align="center">
+  <img src="assets/hero.png" alt="A musts validate output showing two pending tasks with the exact cargo commands needed to resolve them" width="820">
+</p>
+
+## 30-second quickstart
+
+```bash
+brew install bitomule/tap/musts        # or: cargo install musts --locked
+musts validate                          # exits 1 with the list of pending tasks
+```
+
+Drop a `MUSTS.yml` next to the code you care about, list the checks the agent must run after a change, and `musts validate` becomes the contract that closes the turn.
+
+## How it works
+
+You drop `MUSTS.yml` files anywhere in your repo. Each one declares validation *checks* (build this target, validate this user flow with MAV, run this Playwright check…). When the agent finishes a change, it runs `musts validate`. The CLI looks at what changed (using content fingerprints, not git), groups checks by capability, and asks each extension *"given these checks and this dirty scope, what tasks does the agent actually need to do?"*. The extension answers with concrete tasks. The agent runs them, captures evidence (text + assets), and submits it through `musts evidence <task-id>`. The extension decides whether the evidence is good enough. Repeat until `musts validate` is empty.
+
+<p align="center">
+  <img src="assets/loop.png" alt="The musts loop: agent edits code, musts validate, run tasks and capture evidence, submit evidence, repeat until empty" width="720">
+</p>
+
+## Why `musts`?
+
+### Why not just run `cargo test` or a Makefile?
+
+Because the agent has to remember to do it. `make all` is a *suggestion*; `musts validate` is a *contract the turn cannot close around*. The list is generated from what actually changed, not from a fixed script — so it scales with the repo without growing one giant Makefile.
+
+### Why not a pre-commit hook or CI-only check?
+
+Pre-commit hooks get skipped with `--no-verify`. CI runs after you've moved on, after the agent has produced three more responses, after you've started believing the feature shipped. `musts` runs at the right moment: between the agent saying "done" and you trusting it.
+
+### Why not just trust the agent?
+
+Agents are good at finishing turns. They are not always good at finishing work. The model is optimising for "produce a confident closing message"; nothing in the loop punishes a false "done". An external check makes that false done expensive again.
+
+<p align="center">
+  <img src="assets/before-after.png" alt="A comparison of two terminal sessions: on the left, an agent says 'done' without running any checks. On the right, the same agent runs musts validate, sees a cargo test task is still pending, runs it, and only then closes the turn." width="820">
+</p>
+
+### How `musts` is different from MCP servers
+
+MCP servers extend what the agent *can do*. `musts` constrains what counts as *done*. They're complementary, not competing — your MCP setup can call `musts validate` like any other tool.
 
 ## Status
 
 Pre-1.0. The CLI surface, the extension protocol, and the `MUSTS.yml` format may change between minor versions until `1.0`. The §15 success criterion runs end-to-end on [`fixtures/login-app/`](fixtures/login-app/) and is checked in as `phase6_e2e::full_section_15_worked_example`.
 
-## How it works (one paragraph)
+## Used at
 
-You drop `MUSTS.yml` files anywhere in your repo. Each one declares validation *checks* (build this target, validate this user flow with MAV, run this Playwright check…). When the agent finishes a change, it runs `musts validate`. The CLI looks at what changed (using content fingerprints, not git), groups checks by capability, and asks each extension *"given these checks and this dirty scope, what tasks does the agent actually need to do?"*. The extension answers with concrete tasks. The agent runs them, captures evidence (text + assets), and submits it through `musts evidence <task-id>`. The extension decides whether the evidence is good enough. Repeat until `musts validate` is empty.
+`musts` validates itself on every PR — the dogfood loop is a required CI check. It also runs in production on:
+
+- [Undolly](https://undolly.app) — finding duplicate photos
+- [Boxy](https://boxyapp.com) — organising physical items
+- [HiddenFace](https://hiddenface.app) — privacy-first face blur
+- [Nokoru](https://nokoru.app) — quick voice memo capture
 
 ## Commands
 
@@ -124,13 +170,35 @@ cargo test --workspace 2>&1 | tee /tmp/musts-self-evidence/test.log >/dev/null
 
 The contract task lists its facts under `Instructions:` in the `validate` output — your evidence text should address each one. Empty text is rejected (`agent_builtin_e2e::agent_text_required`).
 
+## FAQ
+
+**Does this replace CI?**
+No. CI is still the boundary that stops bad code from merging. `musts` is the loop the agent has to clear *before* CI. Think of it as moving the verification three minutes earlier in the cycle, where the agent can still react.
+
+**Does this only work with Claude Code?**
+No. `musts` is a CLI. Anything that can call a CLI — Claude Code, Cursor, Aider, Continue, a plain shell — can use it. The output is plain text designed to be read by humans and LLMs alike.
+
+**What's the difference vs an MCP server?**
+MCP exposes capabilities to the agent. `musts` constrains what counts as "done". The two can compose: an MCP setup can call `musts validate` like any other tool.
+
+**Do I need to write `MUSTS.yml` files everywhere?**
+No. Start with one at the workspace root listing the checks you care about. Add nested ones only when a subdirectory needs different rules. Empty scopes are fine — the loop just stays empty.
+
+**How do I add a custom check?**
+For most cases, point at one of the built-in capabilities (`cargo/test`, `bazel/build`, `mav/expect`, `agent`). For anything else, write a third-party extension — there's a worked bash example in [`docs/examples/eslint-check/`](docs/examples/eslint-check/) and a protocol guide in [`docs/extensions.md`](docs/extensions.md).
+
+**Is it stable enough to use?**
+Pre-1.0 — the CLI surface, protocol, and `MUSTS.yml` schema may shift between minor releases. The validation loop is stable and runs on the project itself on every PR.
+
 ## Docs
+
+Start at [`docs/README.md`](docs/README.md) for the documentation index.
 
 - [`docs/musts-design.md`](docs/musts-design.md) — the v0.2 design spec.
 - [`docs/PLAN.md`](docs/PLAN.md) — the implementation plan, ~30 review rounds applied; the source of contract decisions.
-- [`skills/musts/SKILL.md`](skills/musts/SKILL.md) — the agent skill (install with `musts skill install`).
 - [`docs/architecture.md`](docs/architecture.md) — bird's-eye view of the crates.
 - [`docs/extensions.md`](docs/extensions.md) — how to write a third-party extension.
+- [`skills/musts/SKILL.md`](skills/musts/SKILL.md) — the agent skill (install with `musts skill install`).
 
 ## License
 
