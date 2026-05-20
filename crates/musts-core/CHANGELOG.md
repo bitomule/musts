@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.1.5] - 2026-05-20
+
+### Fixed
+
+- Compact validate task batches
+
 ## [0.1.4] - 2026-05-15
 
 ### Fixed
