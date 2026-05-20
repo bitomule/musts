@@ -14,9 +14,12 @@ set -uo pipefail
 input="$(cat)"
 
 # Avoid recursive blocking if Claude is already responding to a hook block.
-case "$input" in
-  *'"stop_hook_active"'*':'*'true'*) exit 0 ;;
-esac
+# Match the `"stop_hook_active": true` field directly — a loose glob would
+# false-positive on payloads that happen to contain the literal `true` later
+# (e.g. a cwd path with `true` in it).
+if printf '%s' "$input" | grep -Eq '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+  exit 0
+fi
 
 # Extract cwd from the event payload. Falls back to $PWD if absent.
 cwd="$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
