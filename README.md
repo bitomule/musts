@@ -106,6 +106,17 @@ cargo install musts --locked
 cargo binstall musts        # or download directly from GitHub Releases
 ```
 
+### Claude Code plugin
+
+The repo also ships a Claude Code plugin that bundles the `musts` skill **and** a `Stop` hook that runs `musts validate` on every Claude turn and re-injects the task list until the loop is clean.
+
+```text
+/plugin marketplace add bitomule/musts
+/plugin install musts@musts
+```
+
+See [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) for the full install / uninstall / private-fork guide.
+
 ### From source (contributors only)
 
 ```bash
@@ -198,6 +209,7 @@ Start at [`docs/README.md`](docs/README.md) for the documentation index.
 - [`docs/architecture.md`](docs/architecture.md) — bird's-eye view of the crates.
 - [`docs/extensions.md`](docs/extensions.md) — how to write a third-party extension.
 - [`skills/musts/SKILL.md`](skills/musts/SKILL.md) — the agent skill (install with `musts skill install`).
+- [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) — the Claude Code plugin (skill + Stop hook).
 
 ## License
 
