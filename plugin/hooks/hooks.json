@@ -1,0 +1,14 @@
+{
+  "Stop": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"${CLAUDE_PLUGIN_ROOT}\"/plugin/scripts/stop-validate.sh",
+          "timeout": 60000
+        }
+      ]
+    }
+  ]
+}

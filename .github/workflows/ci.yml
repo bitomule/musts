@@ -98,3 +98,23 @@ jobs:
         run: cargo build --release --locked
       - name: musts validate
         run: ./target/release/musts validate
+
+  plugin:
+    name: Claude Code plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: JSON-parse plugin manifests
+        run: |
+          set -euo pipefail
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json plugin/hooks/hooks.json; do
+            echo "::group::$f"
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f"
+            echo "::endgroup::"
+          done
+      - name: Shellcheck the Stop hook
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: plugin/scripts
+      - name: Skill symlink resolves
+        run: test -f plugin/skills/musts/SKILL.md

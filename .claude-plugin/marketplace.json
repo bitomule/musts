@@ -1,0 +1,14 @@
+{
+  "name": "musts",
+  "owner": {
+    "name": "bitomule"
+  },
+  "description": "Musts validation-loop plugin for Claude Code.",
+  "plugins": [
+    {
+      "name": "musts",
+      "source": "./",
+      "description": "Bundles the musts skill and a Stop hook that runs `musts validate` and re-injects pending tasks until the loop is clean."
+    }
+  ]
+}
