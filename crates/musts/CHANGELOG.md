@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.1.6] - 2026-05-20
+
+### Added
+
+- Add Claude Code plugin (skill + Stop hook) ([#42](https://github.com/bitomule/musts/pull/42))
+
 ## [0.1.5] - 2026-05-20
 
 ### Fixed
