@@ -32,6 +32,13 @@ use crate::snapshot::{
     compute_scope_hash, hash_bytes, hash_file, normalise_rel_path, FileFingerprint, ScopeInput,
 };
 
+/// Maximum number of pending tasks issued by one `musts validate` run.
+///
+/// Agents should work in small batches: validate emits up to this many
+/// evidence targets, the agent records those evidences, then the next
+/// validate emits the next batch.
+pub const MAX_VALIDATE_TASKS: usize = 5;
+
 /// Configuration for one validate run. Built by the CLI layer; tests
 /// pass an explicit value.
 pub struct ValidateOptions {
@@ -326,6 +333,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         }
     }
 
+    truncate_task_batch(&mut tasks, &mut tasks_to_persist);
     persist_tasks(&mut session.db, &tasks_to_persist, &notes, now_unix)?;
 
     if let Some(err) = first_error {
@@ -338,6 +346,11 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         ignored_checks,
         notes,
     })
+}
+
+fn truncate_task_batch(tasks: &mut Vec<musts_protocol::Task>, persisted: &mut Vec<PersistedTask>) {
+    tasks.truncate(MAX_VALIDATE_TASKS);
+    persisted.truncate(MAX_VALIDATE_TASKS);
 }
 
 // ---------------------------------------------------------------------------
@@ -956,6 +969,45 @@ mod tests {
         assert_eq!(scope_depth(ROOT_SCOPE), 0);
         assert_eq!(scope_depth("App"), 1);
         assert_eq!(scope_depth("App/Login"), 2);
+    }
+
+    #[test]
+    fn truncate_task_batch_keeps_report_and_persisted_tasks_aligned() {
+        let mut tasks: Vec<musts_protocol::Task> = (0..7)
+            .map(|i| musts_protocol::Task {
+                id: format!("task-{i}"),
+                extension: "agent".into(),
+                title: format!("Task {i}"),
+                satisfies: vec![format!("root/check-{i}")],
+                parallelizable: true,
+                instructions: vec![],
+                evidence_contract: musts_protocol::EvidenceContract {
+                    text: musts_protocol::TextContract {
+                        required: true,
+                        description: None,
+                    },
+                    assets: vec![],
+                },
+            })
+            .collect();
+        let mut persisted: Vec<PersistedTask> = (0..7)
+            .map(|i| PersistedTask {
+                id: format!("task-{i}"),
+                capability: "agent".into(),
+                title: format!("Task {i}"),
+                satisfies_json: "[]".into(),
+                scope_hashes_json: "{}".into(),
+                task_snapshot_hash: format!("hash-{i}"),
+                payload_json: "{}".into(),
+            })
+            .collect();
+
+        truncate_task_batch(&mut tasks, &mut persisted);
+
+        assert_eq!(tasks.len(), MAX_VALIDATE_TASKS);
+        assert_eq!(persisted.len(), MAX_VALIDATE_TASKS);
+        assert_eq!(tasks.last().unwrap().id, "task-4");
+        assert_eq!(persisted.last().unwrap().id, "task-4");
     }
 
     fn make_check(local_id: &str, paths: Vec<&str>) -> Check {

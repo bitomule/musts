@@ -132,7 +132,7 @@ fn scenario_4_modify_file_reopens_task() {
     run_validate(dir.path())
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
 }
 
 // ---------------------------------------------------------------------------
@@ -258,12 +258,21 @@ fn scenario_11_partial_accept_leaves_unlisted_pending() {
         .success();
 
     // Next validate must still emit a task for the unlisted check.
-    let out = run_validate(dir.path())
+    let out = bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .arg("--json")
+        .assert()
         .failure()
-        .code(1)
-        .stdout(predicate::str::contains("Musts validation pending."));
+        .code(1);
     let stdout = std::str::from_utf8(&out.get_output().stdout).unwrap();
-    assert!(stdout.contains("root/a") || stdout.contains("root/b"));
+    let v: serde_json::Value = serde_json::from_str(stdout).expect("valid JSON");
+    let satisfies = v["tasks"][0]["satisfies"].as_array().unwrap();
+    assert!(
+        satisfies.contains(&serde_json::json!("root/a"))
+            || satisfies.contains(&serde_json::json!("root/b"))
+    );
 }
 
 // ---------------------------------------------------------------------------

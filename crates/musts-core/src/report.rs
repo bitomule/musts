@@ -8,7 +8,7 @@
 //! Both are pure functions over [`ValidateReport`]; the orchestrator
 //! builds the report and lets the CLI pick a renderer.
 
-use musts_protocol::{AssetContract, EvidenceContract, IgnoredCheck, Task, TextContract};
+use musts_protocol::{EvidenceContract, IgnoredCheck, Task};
 use serde::Serialize;
 use serde_json::{json, Value as JsonValue};
 
@@ -35,84 +35,96 @@ impl ValidateReport {
     }
 }
 
-/// Render the text representation per spec §11.2.
+/// Render the compact text representation for agents.
 pub fn render_text(report: &ValidateReport) -> String {
     let mut out = String::new();
     if report.is_clean() {
         out.push_str("Musts validation clean.\n");
-        out.push_str("No pending validation tasks for the current workspace snapshot.\n");
         push_notes_section(&mut out, &report.notes);
         push_ignored_section(&mut out, &report.ignored_checks);
         return out;
     }
-    out.push_str("Musts validation pending.\n\n");
+    out.push_str(&format!(
+        "Musts validation pending: {} task{}.\n\n",
+        report.tasks.len(),
+        if report.tasks.len() == 1 { "" } else { "s" }
+    ));
     for (i, task) in report.tasks.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        push_task(&mut out, task);
+        push_task(&mut out, i + 1, task);
     }
     out.push('\n');
     push_ignored_section(&mut out, &report.ignored_checks);
     push_notes_section(&mut out, &report.notes);
-    out.push_str("Completion rule:\n");
-    out.push_str("  Repeat `musts validate` after recording evidence.\n");
-    out.push_str("  The task is not done until this report is empty.\n");
+    out.push_str("Capture logs outside the workspace. Record evidence, then rerun `musts validate` until clean.\n");
     out
 }
 
-fn push_task(out: &mut String, task: &Task) {
-    out.push_str(&format!("Task: {}\n", task.id));
-    out.push_str(&format!("Title: {}\n", task.title));
-    out.push_str(&format!("Extension: {}\n", task.extension));
-    if !task.satisfies.is_empty() {
-        out.push_str("Satisfies:\n");
-        for s in &task.satisfies {
-            out.push_str(&format!("  - {s}\n"));
-        }
-    }
-    if task.parallelizable {
-        out.push_str("Parallelizable: yes\n");
-    }
-    if !task.instructions.is_empty() {
-        out.push_str("Instructions:\n");
-        for (idx, line) in task.instructions.iter().enumerate() {
-            out.push_str(&format!("  {}. {line}\n", idx + 1));
-        }
-    }
-    push_evidence_contract(out, &task.evidence_contract);
+fn push_task(out: &mut String, index: usize, task: &Task) {
+    out.push_str(&format!("{}. {}\n", index, task.id));
+    out.push_str(&format!("   do: {}\n", task_action(task)));
+    out.push_str(&format!(
+        "   evidence: {}\n",
+        evidence_contract_summary(&task.evidence_contract)
+    ));
+    out.push_str(&format!(
+        "   submit: musts evidence {}{}\n",
+        task.id,
+        evidence_submit_args(&task.evidence_contract)
+    ));
 }
 
-fn push_evidence_contract(out: &mut String, contract: &EvidenceContract) {
-    out.push_str("Evidence required:\n");
-    push_text_contract(out, &contract.text);
-    for asset in &contract.assets {
-        push_asset_contract(out, asset);
-    }
-}
-
-fn push_text_contract(out: &mut String, text: &TextContract) {
-    if text.required {
-        let desc = text
-            .description
-            .as_deref()
-            .unwrap_or("State the validation result.");
-        out.push_str(&format!("  - text (required): {desc}\n"));
-    }
-}
-
-fn push_asset_contract(out: &mut String, asset: &AssetContract) {
-    let required = if asset.required {
-        "required"
+fn task_action(task: &Task) -> String {
+    let useful: Vec<&str> = task
+        .instructions
+        .iter()
+        .map(String::as_str)
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with("Record evidence")
+                && !trimmed.starts_with("Record the result")
+                && !trimmed.starts_with("Capture combined stdout/stderr")
+        })
+        .collect();
+    if useful.is_empty() {
+        task.title.clone()
     } else {
-        "optional"
-    };
-    let desc = asset
-        .description
-        .as_deref()
-        .map(|d| format!(": {d}"))
-        .unwrap_or_default();
-    out.push_str(&format!("  - {} ({required}){desc}\n", asset.kind));
+        useful.join(" ")
+    }
+}
+
+fn evidence_contract_summary(contract: &EvidenceContract) -> String {
+    let mut parts = Vec::new();
+    if contract.text.required {
+        parts.push("text".to_string());
+    }
+    for asset in &contract.assets {
+        if asset.required {
+            parts.push(asset.kind.clone());
+        } else {
+            parts.push(format!("{} optional", asset.kind));
+        }
+    }
+    if parts.is_empty() {
+        "none".into()
+    } else {
+        parts.join(" + ")
+    }
+}
+
+fn evidence_submit_args(contract: &EvidenceContract) -> String {
+    let mut args = String::new();
+    if contract.text.required {
+        args.push_str(" --text \"...\"");
+    }
+    for asset in &contract.assets {
+        if asset.required {
+            args.push_str(&format!(" --asset <{}>", asset.kind));
+        }
+    }
+    args
 }
 
 fn push_ignored_section(out: &mut String, ignored: &[IgnoredCheck]) {
@@ -207,23 +219,26 @@ mod tests {
     fn text_clean_render() {
         let out = render_text(&clean_report());
         assert!(out.starts_with("Musts validation clean."));
-        assert!(out.contains("No pending validation tasks"));
+        assert!(!out.contains("No pending validation tasks"));
     }
 
     #[test]
-    fn text_pending_render_contains_task_and_completion_rule() {
+    fn text_pending_render_is_compact_and_actionable() {
         let out = render_text(&pending_report());
-        assert!(out.contains("Musts validation pending."));
-        assert!(out.contains("Task: bazel-build-login"));
-        assert!(out.contains("Extension: bazel/build"));
-        assert!(out.contains("Satisfies:"));
-        assert!(out.contains("- App/Login/login-build"));
+        assert!(out.contains("Musts validation pending: 1 task."));
+        assert!(out.contains("1. bazel-build-login"));
+        assert!(out.contains("do: Run `bazel build //App/Login:Login`."));
+        assert!(out.contains("evidence: text + log"));
+        assert!(
+            out.contains("submit: musts evidence bazel-build-login --text \"...\" --asset <log>")
+        );
+        assert!(!out.contains("Extension: bazel/build"));
+        assert!(!out.contains("Satisfies:"));
         assert!(out.contains("Ignored checks:"));
         assert!(out.contains("- root/app-build:"));
         assert!(out.contains("Notes:"));
         assert!(out.contains("[bazel/build]"));
-        assert!(out.contains("Completion rule:"));
-        assert!(out.contains("until this report is empty"));
+        assert!(out.contains("rerun `musts validate` until clean"));
     }
 
     #[test]

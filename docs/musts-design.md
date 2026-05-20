@@ -1074,59 +1074,31 @@ It does not execute those tasks.
 4. Collect checks from applicable manifests.
 5. Group checks by `uses`.
 6. Call each extension resolver with all applicable checks for that capability.
-7. Store returned task metadata internally.
-8. Render an agent-readable validation report.
+7. Store up to 5 returned tasks internally for the current evidence batch.
+8. Render an agent-readable validation report for that batch.
 
 #### Example Output
 
 ```text
-Musts validation pending.
+Musts validation pending: 2 tasks.
 
-Task: bazel-build-login
-Title: Build Login module
-Extension: bazel/build
-Satisfies:
-  - App/Login/login-build
+1. bazel-build-login
+   do: Run `bazel build //App/Login:Login`.
+   evidence: text + log
+   submit: musts evidence bazel-build-login --text "..." --asset <log>
 
-Instructions:
-  1. Run `bazel build //App/Login:Login`.
-  2. Save stdout/stderr to a log file.
-  3. Record evidence:
-     musts evidence bazel-build-login \
-       --text "bazel build //App/Login:Login succeeded" \
-       --asset <build-log>
+2. mav-login-flow
+   do: Use MAV to validate the login expectations.
+   evidence: text + screenshot + video + mav-report
+   submit: musts evidence mav-login-flow --text "..." --asset <screenshot> --asset <video> --asset <mav-report>
 
-Task: mav-login-flow
-Title: Validate Login flow with MAV
-Extension: mav/expect
-Satisfies:
-  - App/Login/login-flow
-
-Instructions:
-  1. Use MAV to validate:
-     - Login works with multiple valid emails.
-     - Invalid email text shows an error when used as email.
-  2. Produce required evidence:
-     - screenshot
-     - video
-     - mav-report
-  3. Record evidence:
-     musts evidence mav-login-flow \
-       --text "<summary>" \
-       --asset <screenshot> \
-       --asset <video> \
-       --asset <mav-report>
-
-Completion rule:
-  Repeat `musts validate` after recording evidence.
-  The task is not done until this report is empty.
+Capture logs outside the workspace. Record evidence, then rerun `musts validate` until clean.
 ```
 
 #### Clean Output
 
 ```text
 Musts validation clean.
-No pending validation tasks for the current workspace snapshot.
 ```
 
 ### 11.3 `musts evidence`
@@ -1556,7 +1528,6 @@ Expected:
 
 ```text
 Musts validation clean.
-No pending validation tasks for the current workspace snapshot.
 ```
 
 ---
@@ -1645,18 +1616,10 @@ checks:
 The extension may return one task:
 
 ```text
-Task: mav-login-session
-Satisfies:
-  - login-valid
-  - login-invalid
-
-Instructions:
-  Use MAV to validate both valid email login and invalid email error behavior in one session.
-
-Evidence:
-  - screenshot
-  - video
-  - mav-report
+1. mav-login-session
+   do: Use MAV to validate both valid email login and invalid email error behavior in one session.
+   evidence: text + screenshot + video + mav-report
+   submit: musts evidence mav-login-session --text "..." --asset <screenshot> --asset <video> --asset <mav-report>
 ```
 
 The user did not configure grouping. The extension decided.
@@ -2021,7 +1984,6 @@ musts validate
 
 ```text
 Musts validation clean.
-No pending validation tasks for the current workspace snapshot.
 ```
 
 This must work without:
@@ -2118,4 +2080,3 @@ The CLI decides whether the produced evidence is accepted.
 The most important product sentence:
 
 > The task is not done until `musts validate` is empty.
-

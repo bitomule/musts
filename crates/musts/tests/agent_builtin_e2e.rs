@@ -5,6 +5,8 @@
 //! scenarios — the whole point of the built-in is that a fresh
 //! workspace with one manifest can run the loop straight away.
 
+mod common;
+
 use std::fs;
 use std::path::Path;
 
@@ -47,7 +49,7 @@ checks:
         .assert()
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: agent-root"))
+        .stdout(predicate::str::contains("1. agent-root"))
         .stdout(predicate::str::contains("Login form shows an error"))
         .stdout(predicate::str::contains("Password field is masked"));
 
@@ -206,17 +208,7 @@ checks:
 
     // Point the descriptor at the stub-extension binary which emits
     // a task id of "stub-task" (built-in would emit "agent-root").
-    let test_bin = std::env::current_exe().unwrap();
-    let profile = test_bin.parent().unwrap().parent().unwrap();
-    let stub = profile.join("stub-extension");
-    if !stub.exists() {
-        // Build it on demand for clean-tree runs.
-        let status = std::process::Command::new(env!("CARGO"))
-            .args(["build", "-p", "stub-extension", "--bin", "stub-extension"])
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
+    let stub = common::workspace_binary("stub-extension", "stub-extension");
     let ext = dir.path().join(".musts/extensions/agent");
     fs::create_dir_all(&ext).unwrap();
     fs::write(

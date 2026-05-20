@@ -159,7 +159,7 @@ cargo test --workspace 2>&1 | tee /tmp/musts-self-evidence/test.log >/dev/null
   --text "cargo test --workspace all green" \
   --asset /tmp/musts-self-evidence/test.log
 
-# Agent contract: answer each fact in your --text
+# Agent contract: answer each fact listed on the task's `do:` line in your --text
 ./target/release/musts evidence agent-crates-musts-protocol \
   --text "Fact 1: …  Fact 2: …  Fact 3: …  Fact 4: …"
 
@@ -167,7 +167,7 @@ cargo test --workspace 2>&1 | tee /tmp/musts-self-evidence/test.log >/dev/null
 ./target/release/musts validate ; echo "exit=$?"   # → 0
 ```
 
-The contract task lists its facts under `Instructions:` in the `validate` output — your evidence text should address each one. Empty text is rejected (`agent_builtin_e2e::agent_text_required`).
+The contract task lists its facts on the `do:` line in the `validate` output — your evidence text should address each one. Empty text is rejected (`agent_builtin_e2e::agent_text_required`).
 
 ## FAQ
 
