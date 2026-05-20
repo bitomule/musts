@@ -84,7 +84,7 @@ fn shell_extension_drives_full_validate_evidence_loop() {
         .assert()
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: eslint-root"))
+        .stdout(predicate::str::contains("1. eslint-root"))
         .stdout(predicate::str::contains("npx eslint"));
 
     // Stage a log outside the workspace so the scope hash stays stable.

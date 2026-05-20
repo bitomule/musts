@@ -15,10 +15,10 @@ The single hard rule of musts:
 ## Protocol
 
 1. **Run `musts validate`** at the start of every task that touches code and any time you are about to declare work complete.
-2. Treat the returned task list as the validation todo list.
-3. If multiple tasks can be executed independently (`parallelizable: true`), use subagents in parallel — but **not** when the underlying tool is single-resource (simulators, local servers, build locks, shared databases). When in doubt, run sequentially.
+2. Treat the returned task list as the validation todo list. `validate` issues at most 5 tasks per run; finish that batch, then run it again for the next batch.
+3. If multiple tasks can be executed independently, use subagents in parallel — but **not** when the underlying tool is single-resource (simulators, local servers, build locks, shared databases). When in doubt, run sequentially.
 4. If one task `satisfies` multiple checks, execute it **once**. Do not split.
-5. **Do not invent evidence requirements.** Use the `Evidence required:` section in the task report. Asset kinds, MIME types, and the `text` requirement are extension-defined.
+5. **Do not invent evidence requirements.** Use the `evidence:` and `submit:` lines in the task report. Asset kinds and the `text` requirement are extension-defined.
 6. For each task, perform the requested validation using the right tool (Bazel, MAV, Playwright, the system under test).
 7. **Record evidence** with:
 
@@ -81,36 +81,23 @@ musts validate
 ## What the report looks like
 
 ```text
-Musts validation pending.
+Musts validation pending: 2 tasks.
 
-Task: bazel-build-login
-Title: Build //App/Login:Login
-Extension: bazel/build
-Satisfies:
-  - App/Login/login-build
-Parallelizable: yes
-Instructions:
-  1. Run `bazel build //App/Login:Login`.
-  2. Capture stdout/stderr as a log asset.
-  3. Record the result with `musts evidence <task-id> --text "…" --asset <log>`.
-Evidence required:
-  - text (required): State the command that was run and whether it succeeded.
-  - log (required): Bazel stdout/stderr log.
+1. bazel-build-login
+   do: Run `bazel build //App/Login:Login`.
+   evidence: text + log
+   submit: musts evidence bazel-build-login --text "..." --asset <log>
 
-Task: mav-expect-app-login
-Title: Validate MAV expectations for App/Login
+2. mav-expect-app-login
 …
 
-Completion rule:
-  Repeat `musts validate` after recording evidence.
-  The task is not done until this report is empty.
+Capture logs outside the workspace. Record evidence, then rerun `musts validate` until clean.
 ```
 
 When clean:
 
 ```text
 Musts validation clean.
-No pending validation tasks for the current workspace snapshot.
 ```
 
 ## When you should NOT use this skill

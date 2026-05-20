@@ -223,11 +223,11 @@ checks:
     // Only the sub-scope check must reappear; root-scope stays clean
     // because its scope_hash didn't change.
     assert!(
-        stdout.contains("Task: agent-sub"),
+        stdout.contains("1. agent-sub"),
         "expected agent-sub in report:\n{stdout}"
     );
     assert!(
-        !stdout.contains("Task: agent-root"),
+        !stdout.contains("1. agent-root"),
         "agent-root should still be satisfied by the lock; got:\n{stdout}"
     );
 }

@@ -107,7 +107,7 @@ checks:
     run_validate(root)
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
 
     // Submit evidence to drive it green.
     run_evidence(root, "stub-task").assert().success();
@@ -126,7 +126,7 @@ checks:
     run_validate(root)
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
 }
 
 // ---------------------------------------------------------------------------
@@ -166,5 +166,5 @@ checks:
     run_validate(root)
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
 }

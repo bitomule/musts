@@ -85,10 +85,11 @@ fn scenario_2_first_run_emits_tasks() {
     run_validate(dir.path())
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Musts validation pending."))
-        .stdout(predicate::str::contains("Task: stub-task"))
-        .stdout(predicate::str::contains("Extension: bazel/build"))
-        .stdout(predicate::str::contains("Completion rule:"));
+        .stdout(predicate::str::contains(
+            "Musts validation pending: 1 task.",
+        ))
+        .stdout(predicate::str::contains("1. stub-task"))
+        .stdout(predicate::str::contains("submit: musts evidence stub-task"));
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +262,48 @@ fn scenario_10_json_output_pending_shape() {
     assert!(v["notes"].as_array().is_some());
 }
 
+#[test]
+#[serial]
+fn scenario_10_validate_issues_at_most_five_tasks() {
+    let dir = TempDir::new().unwrap();
+    let mut manifest = String::from("version: 1\nchecks:\n");
+    for i in 0..6 {
+        manifest.push_str(&format!(
+            "  c{i}:\n    uses: bazel/build\n    with:\n      target: //x:{i}\n"
+        ));
+    }
+    write_manifest(&dir.path().join("MUSTS.yml"), &manifest);
+    install_stub_descriptor(dir.path(), "bazel/build");
+
+    let out = bin()
+        .env("MUSTS_STUB_RESOLVE_SHAPE", "multi_task")
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .arg("--json")
+        .assert()
+        .failure()
+        .code(1);
+    let stdout = std::str::from_utf8(&out.get_output().stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout).expect("valid JSON");
+    let tasks = v["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 5);
+    assert_eq!(tasks[0]["id"], "stub-task-0");
+    assert_eq!(tasks[4]["id"], "stub-task-4");
+
+    bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("evidence")
+        .arg("stub-task-5")
+        .arg("--text")
+        .arg("not issued in this batch")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("no longer applies"));
+}
+
 // ---------------------------------------------------------------------------
 // Scenario 15: concurrent_validate_locks
 // ---------------------------------------------------------------------------
@@ -385,6 +428,8 @@ fn scenario_17_submodule_workspace_root() {
         .assert()
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Musts validation pending."))
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains(
+            "Musts validation pending: 1 task.",
+        ))
+        .stdout(predicate::str::contains("1. stub-task"));
 }

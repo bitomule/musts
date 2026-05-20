@@ -107,7 +107,7 @@ fn mustsignore_excludes_files_from_scope_hash() {
     run_validate(root)
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
     run_evidence(root, "stub-task").assert().success();
     run_validate(root)
         .success()
@@ -126,7 +126,7 @@ fn mustsignore_excludes_files_from_scope_hash() {
     run_validate(root)
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ fn removing_mustsignore_re_includes_files() {
     run_validate(root)
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ fn nested_mustsignore_scopes_to_subtree() {
     run_validate(root)
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
 }
 
 // ---------------------------------------------------------------------------
@@ -231,5 +231,5 @@ fn mustsignore_negation_re_includes_specific_files() {
     run_validate(root)
         .failure()
         .code(1)
-        .stdout(predicate::str::contains("Task: stub-task"));
+        .stdout(predicate::str::contains("1. stub-task"));
 }
