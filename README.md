@@ -201,12 +201,6 @@ external, repo-owned loop.
   <img src="assets/before-after.png" alt="A comparison of two terminal sessions: on the left, an agent says 'done' without running any checks. On the right, the same agent runs musts validate, sees a cargo test task is still pending, runs it, and only then closes the turn." width="820">
 </p>
 
-### How is this different from MCP servers?
-
-MCP servers extend what the agent can do. `musts` constrains what counts as
-done. They compose: an MCP setup can call `musts validate` like any other
-tool.
-
 ## Built-In Capabilities
 
 The reference capabilities are built into the `musts` binary:
