@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.1.9] - 2026-07-04
+
+### Added
+
+- Add musts run, tighten evidence, drop the evidence archive ([#55](https://github.com/bitomule/musts/pull/55))
+
 ## [0.1.8] - 2026-07-04
 
 ### Added

@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "musts"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "musts-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "blake3",
  "fs2",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "musts-extension-util"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "musts-protocol",
  "serde",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "musts-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "insta",
  "serde",

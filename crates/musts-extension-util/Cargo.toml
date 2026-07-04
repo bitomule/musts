@@ -1,6 +1,6 @@
 [package]
 name = "musts-extension-util"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ keywords = ["musts", "validation", "agents", "extension"]
 categories = ["development-tools"]
 
 [dependencies]
-musts-protocol = { path = "../musts-protocol", version = "0.1.0" }
+musts-protocol = { path = "../musts-protocol", version = "0.1.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
