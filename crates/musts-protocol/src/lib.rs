@@ -74,6 +74,15 @@ pub struct Task {
     pub parallelizable: bool,
     pub instructions: Vec<String>,
     pub evidence_contract: EvidenceContract,
+    /// Optional machine-runnable command (argv, e.g. `["cargo", "test",
+    /// "--workspace"]`). Deterministic built-in capabilities populate this
+    /// so `musts run <task-id>` can execute the check itself, observe the
+    /// real exit code, and record evidence without the agent re-running it.
+    /// `None` for judgment tasks (`agent`, `mav`) that need agent-produced
+    /// evidence. Absent on the wire when `None`, so extensions that don't
+    /// set it keep the frozen JSON shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -203,6 +212,7 @@ mod tests {
                 title: "Build Login module".into(),
                 satisfies: vec!["App/Login/login-build".into()],
                 parallelizable: true,
+                command: None,
                 instructions: vec!["Run `bazel build //App/Login:Login`.".into()],
                 evidence_contract: EvidenceContract {
                     text: TextContract {

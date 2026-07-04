@@ -4,5 +4,4 @@ pub mod ledger;
 pub mod store;
 pub mod submit;
 
-pub use store::{EvidenceStore, SubmissionAsset};
 pub use submit::{submit, EvidenceSubmissionResult};

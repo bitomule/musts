@@ -32,13 +32,6 @@ use crate::snapshot::{
     compute_scope_hash, hash_bytes, hash_file, normalise_rel_path, FileFingerprint, ScopeInput,
 };
 
-/// Maximum number of pending tasks issued by one `musts validate` run.
-///
-/// Agents should work in small batches: validate emits up to this many
-/// evidence targets, the agent records those evidences, then the next
-/// validate emits the next batch.
-pub const MAX_VALIDATE_TASKS: usize = 5;
-
 /// Configuration for one validate run. Built by the CLI layer; tests
 /// pass an explicit value.
 pub struct ValidateOptions {
@@ -105,73 +98,11 @@ pub fn compute_current_scope_hashes(
     Ok(out)
 }
 
-/// Best-effort GC of `.musts/evidence/<task>/submission-NNN/` directories
-/// per `docs/PLAN.md` §4.4.1:
-///
-/// - missing `evidence.json` → aborted submission, delete.
-/// - present `evidence.json` but no matching `evidence_records` row → the
-///   ledger transaction never committed, delete.
-///
-/// Submissions whose ledger row exists are kept as history.
-fn gc_orphan_submissions(session: &StateSession) {
-    let evidence_root = session.musts_dir.join("evidence");
-    let Ok(read) = std::fs::read_dir(&evidence_root) else {
-        return;
-    };
-    for task_entry in read.flatten() {
-        if !task_entry.path().is_dir() {
-            continue;
-        }
-        let Ok(submissions) = std::fs::read_dir(task_entry.path()) else {
-            continue;
-        };
-        for sub in submissions.flatten() {
-            let sub_path = sub.path();
-            if !sub_path.is_dir() {
-                continue;
-            }
-            let evidence_json = sub_path.join("evidence.json");
-            let task_id = task_entry.file_name().to_string_lossy().to_string();
-            let submission_id = sub_path
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let keep = if evidence_json.is_file() {
-                ledger_has_submission(&session.db, &task_id, &submission_id).unwrap_or(false)
-            } else {
-                false
-            };
-            if !keep {
-                if let Err(err) = std::fs::remove_dir_all(&sub_path) {
-                    tracing::warn!(path = ?sub_path, %err, "could not GC orphan submission");
-                }
-            }
-        }
-    }
-}
-
-fn ledger_has_submission(
-    db: &crate::state::Db,
-    task_id: &str,
-    submission_id: &str,
-) -> Result<bool> {
-    let mut stmt = db.conn().prepare(
-        "SELECT 1 FROM evidence_records WHERE task_id = ?1 AND submission_id = ?2 LIMIT 1",
-    )?;
-    let exists = stmt.exists(params![task_id, submission_id])?;
-    Ok(exists)
-}
-
 /// Run the orchestrator and return the rendered report. Persists tasks
 /// + notes into the state DB held by `session`.
 pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<ValidateReport> {
     let workspace_root = &opts.workspace_root;
     let now_unix = unix_seconds_now();
-
-    // 0. Best-effort cleanup of orphan submission dirs from interrupted
-    //    earlier evidence calls (PLAN.md §4.4.1).
-    gc_orphan_submissions(session);
 
     // 0b. Load the portable, repo-committed ledger lock. Empty when the
     //    file doesn't exist (fresh workspace) — the local
@@ -300,6 +231,11 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         // own `.musts/extensions/<name>/extension.yml`. Only when no
         // external implementor is installed do we fall back to the
         // built-in registry.
+        // A built-in resolve is the only trusted source of a runnable
+        // `command`; an external descriptor's tasks have their command
+        // stripped at ingest so `musts run` never executes extension-
+        // supplied argv.
+        let command_trusted = !cap_index.contains_key(capability.as_str());
         let outcome: Result<musts_protocol::ResolveResponse> =
             if let Some((descriptor, cap)) = cap_index.get(capability.as_str()).copied() {
                 let runner = ExtensionRunner {
@@ -317,6 +253,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 ingest_resolve_response(
                     response,
                     capability,
+                    command_trusted,
                     checks_for_cap,
                     &mut tasks,
                     &mut ignored_checks,
@@ -333,7 +270,17 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         }
     }
 
-    truncate_task_batch(&mut tasks, &mut tasks_to_persist);
+    // Which tasks are byte-identical requests to the previous validate run
+    // (same id + same task_snapshot_hash)? Load the prior snapshot hashes
+    // BEFORE persist_tasks overwrites the table so the renderer can print
+    // unchanged tasks compactly instead of re-injecting the full body.
+    let prior = load_prior_task_snapshot_hashes(&session.db)?;
+    let repeated_task_ids: Vec<String> = tasks_to_persist
+        .iter()
+        .filter(|t| prior.get(&t.id).is_some_and(|h| h == &t.task_snapshot_hash))
+        .map(|t| t.id.clone())
+        .collect();
+
     persist_tasks(&mut session.db, &tasks_to_persist, &notes, now_unix)?;
 
     if let Some(err) = first_error {
@@ -345,12 +292,26 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         tasks,
         ignored_checks,
         notes,
+        repeated_task_ids,
     })
 }
 
-fn truncate_task_batch(tasks: &mut Vec<musts_protocol::Task>, persisted: &mut Vec<PersistedTask>) {
-    tasks.truncate(MAX_VALIDATE_TASKS);
-    persisted.truncate(MAX_VALIDATE_TASKS);
+/// Load `task_id → task_snapshot_hash` for the tasks persisted by the
+/// previous `musts validate`. Used to flag unchanged tasks for compact
+/// rendering. Returns an empty map on a fresh workspace.
+fn load_prior_task_snapshot_hashes(db: &crate::state::Db) -> Result<BTreeMap<String, String>> {
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT task_id, task_snapshot_hash FROM tasks")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out = BTreeMap::new();
+    for r in rows {
+        let (id, hash) = r?;
+        out.insert(id, hash);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -873,9 +834,11 @@ fn build_resolve_request(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_resolve_response(
     response: ResolveResponse,
     capability: &str,
+    command_trusted: bool,
     dirty: &[&PreparedCheck],
     tasks: &mut Vec<musts_protocol::Task>,
     ignored_checks: &mut Vec<musts_protocol::IgnoredCheck>,
@@ -884,7 +847,16 @@ fn ingest_resolve_response(
 ) {
     let by_id: BTreeMap<&str, &PreparedCheck> =
         dirty.iter().map(|c| (c.check_id.as_str(), *c)).collect();
-    for task in response.tasks {
+    for mut task in response.tasks {
+        // `musts run` executes a task's `command`. Only trust it when the
+        // task came from a built-in capability — an external extension
+        // (even one claiming a built-in's name) could otherwise inject an
+        // arbitrary argv that survives in the persisted payload and runs
+        // later, after the extension is gone. Strip it so a `command` in
+        // the ledger is always built-in-authored.
+        if !command_trusted {
+            task.command = None;
+        }
         let mut scope_hashes: BTreeMap<String, String> = BTreeMap::new();
         for s in &task.satisfies {
             if let Some(c) = by_id.get(s.as_str()) {
@@ -1006,43 +978,99 @@ mod tests {
         assert_eq!(scope_depth("App/Login"), 2);
     }
 
-    #[test]
-    fn truncate_task_batch_keeps_report_and_persisted_tasks_aligned() {
-        let mut tasks: Vec<musts_protocol::Task> = (0..7)
-            .map(|i| musts_protocol::Task {
-                id: format!("task-{i}"),
-                extension: "agent".into(),
-                title: format!("Task {i}"),
-                satisfies: vec![format!("root/check-{i}")],
-                parallelizable: true,
-                instructions: vec![],
-                evidence_contract: musts_protocol::EvidenceContract {
-                    text: musts_protocol::TextContract {
-                        required: true,
-                        description: None,
-                    },
-                    assets: vec![],
+    fn prepared(check_id: &str) -> PreparedCheck {
+        PreparedCheck {
+            check_id: check_id.into(),
+            local_id: "x".into(),
+            manifest_rel: PathBuf::from("MUSTS.yml"),
+            scope_path: "root".into(),
+            depth: 0,
+            capability: "cargo/test".into(),
+            with_payload: serde_json::json!({}),
+            scope_hash: "h".into(),
+            dirty: true,
+            effective_files: vec![],
+        }
+    }
+
+    fn task_with_command(id: &str, satisfies: &str) -> musts_protocol::Task {
+        musts_protocol::Task {
+            id: id.into(),
+            extension: "cargo/test".into(),
+            title: "t".into(),
+            satisfies: vec![satisfies.into()],
+            parallelizable: true,
+            command: Some(vec!["cargo".into(), "test".into()]),
+            instructions: vec![],
+            evidence_contract: musts_protocol::EvidenceContract {
+                text: musts_protocol::TextContract {
+                    required: true,
+                    description: None,
                 },
-            })
-            .collect();
-        let mut persisted: Vec<PersistedTask> = (0..7)
-            .map(|i| PersistedTask {
-                id: format!("task-{i}"),
-                capability: "agent".into(),
-                title: format!("Task {i}"),
-                satisfies_json: "[]".into(),
-                scope_hashes_json: "{}".into(),
-                task_snapshot_hash: format!("hash-{i}"),
-                payload_json: "{}".into(),
-            })
-            .collect();
+                assets: vec![],
+            },
+        }
+    }
 
-        truncate_task_batch(&mut tasks, &mut persisted);
+    #[test]
+    fn ingest_strips_command_when_untrusted() {
+        // A task whose command came from an external extension must not
+        // survive into the report or the persisted payload — otherwise
+        // `musts run` could execute extension-supplied argv.
+        let dirty = prepared("root/test");
+        let dirty_refs = [&dirty];
+        let resp = ResolveResponse {
+            protocol_version: PROTOCOL_VERSION,
+            tasks: vec![task_with_command("evil", "root/test")],
+            ignored_checks: vec![],
+            notes: vec![],
+        };
+        let mut tasks = Vec::new();
+        let mut ignored = Vec::new();
+        let mut notes = Vec::new();
+        let mut persist = Vec::new();
+        ingest_resolve_response(
+            resp,
+            "cargo/test",
+            false, // untrusted (external)
+            &dirty_refs,
+            &mut tasks,
+            &mut ignored,
+            &mut notes,
+            &mut persist,
+        );
+        assert_eq!(tasks[0].command, None, "untrusted command must be stripped");
+        assert!(
+            !persist[0].payload_json.contains("command"),
+            "stripped command must not persist in the payload"
+        );
+    }
 
-        assert_eq!(tasks.len(), MAX_VALIDATE_TASKS);
-        assert_eq!(persisted.len(), MAX_VALIDATE_TASKS);
-        assert_eq!(tasks.last().unwrap().id, "task-4");
-        assert_eq!(persisted.last().unwrap().id, "task-4");
+    #[test]
+    fn ingest_keeps_command_when_trusted() {
+        let dirty = prepared("root/test");
+        let dirty_refs = [&dirty];
+        let resp = ResolveResponse {
+            protocol_version: PROTOCOL_VERSION,
+            tasks: vec![task_with_command("cargo-test-root", "root/test")],
+            ignored_checks: vec![],
+            notes: vec![],
+        };
+        let mut tasks = Vec::new();
+        let mut ignored = Vec::new();
+        let mut notes = Vec::new();
+        let mut persist = Vec::new();
+        ingest_resolve_response(
+            resp,
+            "cargo/test",
+            true, // trusted (built-in)
+            &dirty_refs,
+            &mut tasks,
+            &mut ignored,
+            &mut notes,
+            &mut persist,
+        );
+        assert_eq!(tasks[0].command, Some(vec!["cargo".into(), "test".into()]));
     }
 
     fn make_check(local_id: &str, paths: Vec<&str>) -> Check {

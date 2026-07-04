@@ -1082,8 +1082,8 @@ It does not execute those tasks.
 4. Collect checks from applicable manifests.
 5. Group checks by `uses`.
 6. Call each extension resolver with all applicable checks for that capability.
-7. Store up to 5 returned tasks internally for the current evidence batch.
-8. Render an agent-readable validation report for that batch.
+7. Store every returned dirty task internally (no truncation).
+8. Render an agent-readable validation report; tasks unchanged since the previous run render compactly when they are runnable.
 
 #### Example Output
 

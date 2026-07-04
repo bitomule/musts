@@ -15,29 +15,30 @@ The single hard rule of musts:
 ## Protocol
 
 1. **Run `musts validate`** at the start of every task that touches code and any time you are about to declare work complete.
-2. Treat the returned task list as the validation todo list. `validate` issues at most 5 tasks per run; finish that batch, then run it again for the next batch.
-3. If multiple tasks can be executed independently, use subagents in parallel — but **not** when the underlying tool is single-resource (simulators, local servers, build locks, shared databases). When in doubt, run sequentially.
-4. If one task `satisfies` multiple checks, execute it **once**. Do not split.
-5. **Do not invent evidence requirements.** Use the `evidence:` and `submit:` lines in the task report. Asset kinds and the `text` requirement are extension-defined.
-6. For each task, perform the requested validation using the right tool (Bazel, MAV, Playwright, the system under test).
-7. **Record evidence** with:
+2. Treat the returned task list as the validation todo list. `validate` emits **every** dirty task (no batching) and is idempotent — re-running it never invalidates the ids it just issued.
+3. Close each task by kind:
+   - **Deterministic** (`do:` is a plain command — `cargo/*`, `bazel/build`): run `musts run <task-id>`. musts executes the command, checks the real exit code, and records evidence for you — no re-running to satisfy the loop. A non-zero exit prints the output and records nothing; fix and re-run.
+   - **Judgment** (`agent`, `mav`): perform the validation yourself and record evidence (step 7).
+4. If multiple judgment tasks are independent, use subagents in parallel — but **not** when the underlying tool is single-resource (simulators, local servers, build locks, shared databases). When in doubt, run sequentially.
+5. If one task `satisfies` multiple checks, execute it **once**. Do not split.
+6. **Do not invent evidence requirements.** Use the `evidence:` and `submit:` lines in the task report. Asset kinds and the `text` requirement are extension-defined.
+7. **Record evidence** (judgment checks) with:
 
    ```bash
    musts evidence <task-id> --text "<one-line summary>" --asset <path>...
    ```
 
-   The `<task-id>` comes from the report. `--asset` may repeat. Asset paths can point anywhere on disk; musts copies them into `.musts/evidence/<task-id>/submission-NNN/` so workspace edits between evidence calls do not affect them.
-8. If `musts evidence` exits non-zero, **read the error**:
-   - Exit **1** = the extension rejected the evidence (e.g. missing kind, zero-byte file, non-parseable JSON). Fix and re-submit.
-   - Exit **2 with "stale"** = files inside this task's scopes changed after the task was issued. Re-run `musts validate` and follow the new task list.
-   - Exit **2 with "no longer applies"** = a subsequent `musts validate` truncated the previous task list. Re-run `validate` and use the new ids.
+   The `<task-id>` comes from the report. `--asset` may repeat. Assets are validated **in place** — musts no longer archives them; the committed `.musts/ledger.lock.yaml` is the record. Keep logs outside the workspace so edits don't perturb the scope hash.
+8. If `musts run`/`musts evidence` exits non-zero, **read the error**:
+   - Exit **1** = the command failed (`musts run`) or the extension rejected the evidence (missing kind, zero-byte file, failure markers in the log). Fix and re-run.
+   - Exit **2 with "stale"** = files inside this task's scopes changed after the task was issued. Re-run `musts validate` and follow the fresh task list.
+   - Exit **2 with "no longer applies"** = that task id isn't in the current report (its check is already green, or a fresh `validate` changed the set). Re-run `validate` and use the current ids.
 9. **Re-run `musts validate`.** If new tasks appear, repeat the loop.
 10. If `musts validate` reports clean, the work can be reported as complete.
 
 ## Hard rules
 
-- **Record evidence for every task from the current `musts validate` output before re-running `musts validate`.** Re-running `validate` replaces the previous task table — un-recorded task ids from the prior run will be rejected with "no longer applies" (PLAN.md §4.2). This is the single most common agent-loop bug.
-- **Do not silence the loop.** If a task feels redundant or already-satisfied, that's the extension's call, not yours: every task in the report is dirty per the ledger. Submit evidence or fix the underlying issue.
+- **Do not silence the loop.** If a task feels redundant or already-satisfied, that's the extension's call, not yours: every task in the report is dirty per the ledger. Run it, submit evidence, or fix the underlying issue.
 - **Snapshot assets outside the workspace** when you can, especially logs you produce while running the task. Writing them inside the workspace mutates the scope hash and can stale the task you're about to submit evidence for.
 - **Run the validation loop after your last edit, before you commit.** Any change to any file in a scope — including a comment, whitespace, or a `.gitignore` rule that doesn't actually move files in or out — re-hashes that scope and invalidates the matching entries in `.musts/ledger.lock.yaml`. Order: **edit → validate → submit → commit**. "Submit → edit → commit" looks fine locally (the SQLite ledger still has the old `scope_hash`) but ships a stale lock to every clone.
 
@@ -85,14 +86,17 @@ Musts validation pending: 2 tasks.
 
 1. bazel-build-login
    do: Run `bazel build //App/Login:Login`.
-   evidence: text + log
-   submit: musts evidence bazel-build-login --text "..." --asset <log>
+   run: musts run bazel-build-login
 
 2. mav-expect-app-login
-…
+   do: Validate MAV expectations for App/Login …
+   evidence: screenshot + video + mav-report
+   submit: musts evidence mav-expect-app-login --text "..." --asset <screenshot> …
 
-Capture logs outside the workspace. Record evidence, then rerun `musts validate` until clean.
+Run runnable checks with `musts run <task-id>`; record judgment checks with `musts evidence`. Then rerun `musts validate` until clean.
 ```
+
+Deterministic checks (`cargo/*`, `bazel/build`) show a `run:` line — `musts run` executes them and records evidence for you. Judgment checks (`agent`, `mav`) show `evidence:` + `submit:`.
 
 When clean:
 

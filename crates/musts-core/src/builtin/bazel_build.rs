@@ -22,6 +22,7 @@
 //! `application/octet-stream`).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use musts_protocol::{
@@ -146,6 +147,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
             title: format!("Build {target}"),
             satisfies: merged_satisfies,
             parallelizable: true,
+            command: Some(vec!["bazel".into(), "build".into(), target.clone()]),
             instructions: vec![
                 format!("Run `bazel build {target}`."),
                 "Capture stdout/stderr as a log asset.".into(),
@@ -214,6 +216,15 @@ pub fn evidence(request: &EvidenceValidationRequest) -> Result<EvidenceValidatio
             ),
         });
     }
+    // Content check: a non-empty log that records a bazel failure must not
+    // be accepted as green. Previously any non-empty log passed, so a log
+    // that literally said the build failed (or "disk full … exit 50")
+    // sailed through. Mirrors the cargo capability's log inspection.
+    if missing.is_empty() {
+        if let Some(problem) = inspect_build_log(&request.workspace_root, &log_assets) {
+            missing.push(problem);
+        }
+    }
     if !missing.is_empty() {
         return Ok(EvidenceValidationResponse {
             protocol_version: PROTOCOL_VERSION,
@@ -245,6 +256,48 @@ pub fn evidence(request: &EvidenceValidationRequest) -> Result<EvidenceValidatio
         missing: Vec::new(),
         message: None,
     })
+}
+
+/// Read the first non-empty log asset and reject it if it records a bazel
+/// build failure. Returns `Some(MissingEvidence)` when the log is
+/// unreadable or shows a failure marker.
+///
+/// bazel ends a failed invocation with a `Build did NOT complete
+/// successfully` line — prefixed `FAILED:` for action failures and
+/// `ERROR:` for loading/analysis failures. That exact phrase never
+/// appears in a green build, so we key on it rather than on bare
+/// `ERROR:` lines (which legitimate wrappers/subtools can emit on a
+/// successful build) or a positive success marker (whose wording varies
+/// across bazel versions and wrappers like `make build`).
+fn inspect_build_log(
+    workspace_root: &str,
+    log_assets: &[&EvidenceAsset],
+) -> Option<MissingEvidence> {
+    let log = log_assets.iter().find(|a| a.size > 0)?;
+    let abs_path = PathBuf::from(workspace_root).join(&log.path);
+    match std::fs::read_to_string(&abs_path) {
+        Ok(contents) => build_log_failure(&contents).map(|message| MissingEvidence {
+            kind: "log".into(),
+            message,
+        }),
+        Err(err) => Some(MissingEvidence {
+            kind: "log".into(),
+            message: format!("Could not read log asset `{}`: {err}", log.path),
+        }),
+    }
+}
+
+/// Failure heuristic for a bazel build log. Returns a rejection message
+/// when the log records a build that did not complete, `None` otherwise.
+fn build_log_failure(log: &str) -> Option<String> {
+    if log.contains("Build did NOT complete successfully") {
+        return Some(
+            "Log contains `Build did NOT complete successfully` — the build failed. Fix it and \
+             re-capture."
+                .into(),
+        );
+    }
+    None
 }
 
 /// Turn a bazel target label into a slug safe to embed in a task id.
@@ -458,10 +511,14 @@ mod tests {
         assert!(response.ignored_checks[0].reason.contains("does not match"));
     }
 
-    fn evidence_req(text: Option<&str>, assets: Vec<EvidenceAsset>) -> EvidenceValidationRequest {
+    fn evidence_req_at(
+        text: Option<&str>,
+        assets: Vec<EvidenceAsset>,
+        workspace_root: &str,
+    ) -> EvidenceValidationRequest {
         EvidenceValidationRequest {
             protocol_version: PROTOCOL_VERSION,
-            workspace_root: "/repo".into(),
+            workspace_root: workspace_root.into(),
             task: EvidenceTaskRef {
                 id: "bazel-build-root".into(),
                 extension: "bazel/build".into(),
@@ -497,32 +554,108 @@ mod tests {
         }
     }
 
+    /// Write a log file into a fresh tempdir and return the dir plus the
+    /// workspace-relative path the evidence request should carry.
+    fn write_log(contents: &str) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("build.log");
+        std::fs::write(&path, contents).expect("write log");
+        (dir, "build.log".to_string())
+    }
+
     #[test]
-    fn evidence_accepts_text_plus_log() {
-        let resp = evidence(&evidence_req(
+    fn evidence_accepts_text_plus_clean_log() {
+        let (dir, rel) = write_log("INFO: Build completed successfully, 12 total actions\n");
+        let resp = evidence(&evidence_req_at(
             Some("bazel build //App:App succeeded"),
-            vec![asset("build.log", "text/plain", 4096)],
+            vec![asset(&rel, "text/plain", 48)],
+            dir.path().to_str().unwrap(),
         ))
         .unwrap();
-        assert!(resp.accepted);
+        assert!(resp.accepted, "expected accept, got {resp:?}");
         assert_eq!(resp.satisfies, vec!["root/app-build"]);
     }
 
     #[test]
     fn evidence_accepts_octet_stream_log() {
-        let resp = evidence(&evidence_req(
+        let (dir, rel) = write_log("Target //App:App up-to-date\n");
+        let resp = evidence(&evidence_req_at(
             Some("ok"),
-            vec![asset("build.log", "application/octet-stream", 12)],
+            vec![asset(&rel, "application/octet-stream", 28)],
+            dir.path().to_str().unwrap(),
         ))
         .unwrap();
         assert!(resp.accepted);
     }
 
     #[test]
+    fn evidence_rejects_failed_build_log() {
+        let (dir, rel) = write_log(
+            "ERROR: /repo/App/BUILD:3:11: Compiling failed\nFAILED: Build did NOT complete \
+             successfully\n",
+        );
+        let resp = evidence(&evidence_req_at(
+            Some("bazel build ran"),
+            vec![asset(&rel, "text/plain", 96)],
+            dir.path().to_str().unwrap(),
+        ))
+        .unwrap();
+        assert!(!resp.accepted, "a failed build log must not be green");
+        assert!(resp
+            .missing
+            .iter()
+            .any(|m| m.message.contains("did NOT complete") || m.message.contains("bazel error")));
+    }
+
+    #[test]
+    fn evidence_rejects_loading_error_terminal_line() {
+        // A loading error ends with an `ERROR:`-prefixed "Build did NOT
+        // complete successfully" line — reject it.
+        let (dir, rel) = write_log(
+            "ERROR: no such target '//App:Ghost'\nERROR: Build did NOT complete successfully\n",
+        );
+        let resp = evidence(&evidence_req_at(
+            Some("tried to build"),
+            vec![asset(&rel, "text/plain", 80)],
+            dir.path().to_str().unwrap(),
+        ))
+        .unwrap();
+        assert!(!resp.accepted);
+        assert!(resp
+            .missing
+            .iter()
+            .any(|m| m.message.contains("did NOT complete")));
+    }
+
+    #[test]
+    fn evidence_accepts_green_build_with_stray_error_line() {
+        // A successful build whose log happens to contain an `ERROR:`-
+        // prefixed diagnostic (e.g. from a wrapper/subtool) must NOT be
+        // rejected — only "Build did NOT complete successfully" means
+        // failure.
+        let (dir, rel) = write_log(
+            "ERROR: some non-fatal subtool note\nINFO: Build completed successfully, 3 total \
+             actions\n",
+        );
+        let resp = evidence(&evidence_req_at(
+            Some("build ok"),
+            vec![asset(&rel, "text/plain", 80)],
+            dir.path().to_str().unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            resp.accepted,
+            "stray ERROR: on a green build is not a failure"
+        );
+    }
+
+    #[test]
     fn evidence_rejects_empty_text() {
-        let resp = evidence(&evidence_req(
+        let (dir, rel) = write_log("INFO: Build completed successfully\n");
+        let resp = evidence(&evidence_req_at(
             Some(""),
-            vec![asset("a.log", "text/plain", 4)],
+            vec![asset(&rel, "text/plain", 36)],
+            dir.path().to_str().unwrap(),
         ))
         .unwrap();
         assert!(!resp.accepted);
@@ -531,20 +664,36 @@ mod tests {
 
     #[test]
     fn evidence_rejects_missing_log() {
-        let resp = evidence(&evidence_req(Some("ok"), vec![])).unwrap();
+        let resp = evidence(&evidence_req_at(Some("ok"), vec![], "/repo")).unwrap();
         assert!(!resp.accepted);
         assert!(resp.missing.iter().any(|m| m.kind == "log"));
     }
 
     #[test]
     fn evidence_rejects_zero_byte_log() {
-        let resp = evidence(&evidence_req(
+        let resp = evidence(&evidence_req_at(
             Some("ok"),
             vec![asset("a.log", "text/plain", 0)],
+            "/repo",
         ))
         .unwrap();
         assert!(!resp.accepted);
         assert!(resp.missing.iter().any(|m| m.kind == "log"));
+    }
+
+    #[test]
+    fn evidence_rejects_unreadable_log() {
+        let resp = evidence(&evidence_req_at(
+            Some("ok"),
+            vec![asset("does/not/exist.log", "text/plain", 10)],
+            "/repo",
+        ))
+        .unwrap();
+        assert!(!resp.accepted);
+        assert!(resp
+            .missing
+            .iter()
+            .any(|m| m.message.contains("Could not read log")));
     }
 
     #[test]

@@ -5,14 +5,14 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use musts_protocol::{
-    EvidenceAsset, EvidenceSubmission, EvidenceTaskRef, EvidenceValidationRequest, SnapshotHandle,
-    Task, PROTOCOL_VERSION,
+    EvidenceSubmission, EvidenceTaskRef, EvidenceValidationRequest, SnapshotHandle, Task,
+    PROTOCOL_VERSION,
 };
 
 use crate::bootstrap::StateSession;
 use crate::error::{Error, Result};
 use crate::evidence::ledger::{fetch_task, insert_atomic, EvidenceRow};
-use crate::evidence::store::EvidenceStore;
+use crate::evidence::store::{describe_asset, new_submission_id};
 use crate::extension::descriptor::{discover_descriptors, Capability, ExtensionDescriptor};
 use crate::extension::runtime::{ExtensionRunner, RuntimeOptions};
 use crate::validate::compute_current_scope_hashes;
@@ -74,17 +74,15 @@ pub fn submit(
         });
     }
 
-    // 3. Allocate a submission directory and copy assets.
-    let evidence_root = session.musts_dir.join("evidence");
-    let store = EvidenceStore::allocate(workspace_root, &evidence_root, inputs.task_id)?;
+    // 3. Describe each asset in place — evidence is no longer archived into
+    //    `.musts/evidence/`; the ledger (`evidence_records` + the committed
+    //    lock) is the durable record, and the asset is validated where it
+    //    lives. `describe_asset` returns an absolute path so the capability
+    //    validator resolves it via `workspace_root.join(path)`.
+    let submission_id = new_submission_id();
     let mut wire_assets = Vec::with_capacity(inputs.asset_paths.len());
     for path in inputs.asset_paths {
-        let asset = store.add_asset(path)?;
-        wire_assets.push(EvidenceAsset {
-            path: asset.workspace_rel,
-            mime: asset.mime,
-            size: asset.size,
-        });
+        wire_assets.push(describe_asset(path)?);
     }
 
     // 4. Locate the implementor. Built-in capabilities are checked
@@ -195,7 +193,7 @@ pub fn submit(
         .zip(resolved_hashes.iter())
         .map(|(cid, scope_hash)| EvidenceRow {
             task_id: inputs.task_id,
-            submission_id: &store.submission_id,
+            submission_id: &submission_id,
             check_id: cid,
             scope_hash,
             accepted: true,
@@ -224,26 +222,9 @@ pub fn submit(
         }
     }
 
-    // 9. Write evidence.json LAST so a crashed submit leaves
-    //    identifiable garbage (cleaned up by validate's orphan GC).
-    let marker = serde_json::json!({
-        "task_id": inputs.task_id,
-        "submission_id": store.submission_id,
-        "submitted_at": now_unix,
-        "satisfies": accepted_now,
-        "summary": response.summary,
-        "submission": submission,
-        "extension_result": response,
-    });
-    store.write_marker(
-        serde_json::to_string_pretty(&marker)
-            .unwrap_or_default()
-            .as_bytes(),
-    )?;
-
     Ok(EvidenceSubmissionResult {
         task_id: inputs.task_id.to_string(),
-        submission_id: store.submission_id,
+        submission_id,
         satisfied: accepted_now,
         summary: response.summary,
     })

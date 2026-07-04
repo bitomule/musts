@@ -13,6 +13,7 @@ pub mod evidence;
 pub mod extension;
 pub mod manifest;
 pub mod report;
+pub mod run;
 pub mod snapshot;
 pub mod state;
 pub mod validate;
