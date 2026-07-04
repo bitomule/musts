@@ -101,6 +101,25 @@ Semantics:
 - A check whose `paths` currently matches **no** file is "not applicable" and is dropped from the task list. When a matching file is added later, the next `musts validate` picks it up automatically.
 - An invalid glob is a manifest error (exit 2) — surfaced at parse time, with the check id and the offending pattern.
 
+### Carving files back out: `exclude_paths`
+
+`exclude_paths` takes the same shape as `paths` and subtracts matching files from the effective scope **after** `paths` is applied. Use it when a file lives inside a check's folder but shouldn't re-open the check when it changes — for example a version file bumped by release automation, or generated sources:
+
+```yaml
+checks:
+  app-build:
+    uses: bazel/build
+    exclude_paths:
+      - "tools/config.bzl"      # release automation bumps build_number here
+      - "**/*.generated.swift"
+    with:
+      target: //App:App
+```
+
+- Applies after `paths`: with both set, a file must match `paths` (or `paths` is absent) **and not** match `exclude_paths`.
+- A check whose combined filter matches no file is "not applicable" and dropped, same as `paths`.
+- **No `!` negation.** musts does not implement gitignore-style negation. `globset` treats a leading `!` as a literal character, so `paths: ["!foo"]` used to silently match nothing. A leading `!` in `paths` or `exclude_paths` is now a manifest error (exit 2) telling you to use `exclude_paths` instead.
+
 ## What a workspace expects
 
 ```text

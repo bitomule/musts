@@ -83,14 +83,14 @@ pub fn compute_current_scope_hashes(
                     &normalise_prefix(&m.scope_prefix),
                     &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
                 ),
-                path_filter.as_ref(),
+                &path_filter,
             );
-            // A check with an explicit `paths:` filter that currently
-            // matches nothing is "not applicable" — it has no effective
-            // scope to validate, so don't record a hash for it. The
-            // task list excludes it the same way; if files appear later
-            // the next `validate` will pick it up.
-            if path_filter.is_some() && effective_files.is_empty() {
+            // A check with an explicit `paths:`/`exclude_paths:` filter
+            // that currently matches nothing is "not applicable" — it has
+            // no effective scope to validate, so don't record a hash for
+            // it. The task list excludes it the same way; if files appear
+            // later the next `validate` will pick it up.
+            if path_filter.is_active() && effective_files.is_empty() {
                 continue;
             }
             let scope_hash = compute_scope_hash(&ScopeInput {
@@ -236,13 +236,13 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                     &normalise_prefix(&m.scope_prefix),
                     &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
                 ),
-                path_filter.as_ref(),
+                &path_filter,
             );
-            // Skip checks whose `paths:` filter matches no current
-            // files: there is nothing for the extension to validate
-            // and emitting a task would dead-end. The check rejoins
-            // the loop automatically when a matching file appears.
-            if path_filter.is_some() && effective_files.is_empty() {
+            // Skip checks whose `paths:`/`exclude_paths:` filter matches
+            // no current files: there is nothing for the extension to
+            // validate and emitting a task would dead-end. The check
+            // rejoins the loop automatically when a matching file appears.
+            if path_filter.is_active() && effective_files.is_empty() {
                 continue;
             }
             let effective_file_paths: Vec<String> =
@@ -675,31 +675,64 @@ fn descendant_same_capability_manifest_paths(
     out
 }
 
-/// Compile the check's `paths:` patterns into a `GlobSet` for fast
-/// matching. Returns `Ok(None)` when the check declares no patterns
-/// (the legacy "apply to everything in scope" path). Returns an error
-/// when a pattern fails to compile here — the parser already validates
-/// each pattern individually, so this only fires on a pathological
+/// A check's compiled effective-scope filter: an optional `paths:`
+/// include set and an optional `exclude_paths:` subtract set. Both are
+/// `None` when the corresponding manifest field is empty.
+#[derive(Default)]
+struct PathFilter {
+    include: Option<GlobSet>,
+    exclude: Option<GlobSet>,
+}
+
+impl PathFilter {
+    /// True when the check declares any `paths:` or `exclude_paths:`
+    /// filtering at all. A check with an active filter that matches no
+    /// files is treated as "not applicable" and dropped from the run.
+    fn is_active(&self) -> bool {
+        self.include.is_some() || self.exclude.is_some()
+    }
+}
+
+/// Compile the check's `paths:` and `exclude_paths:` patterns into
+/// `GlobSet`s for fast matching. Each field is `None` when empty (the
+/// legacy "apply to everything in scope" path for `paths`; "subtract
+/// nothing" for `exclude_paths`). Returns an error when a pattern fails
+/// to compile here — the parser already validates each pattern
+/// individually, so this only fires on a pathological
 /// `GlobSetBuilder::build` failure.
 ///
 /// Globs are compiled case-insensitively because `normalise_rel_path`
 /// always lowercases the scope-file map keys for OS-portable scope
 /// hashes. Writing `**/Tracking*.swift` keeps matching regardless of
 /// the file's on-disk case.
-fn compile_path_filter(manifest_rel: &std::path::Path, check: &Check) -> Result<Option<GlobSet>> {
-    if check.paths.is_empty() {
+fn compile_path_filter(manifest_rel: &std::path::Path, check: &Check) -> Result<PathFilter> {
+    Ok(PathFilter {
+        include: compile_glob_set(manifest_rel, check, "paths", &check.paths)?,
+        exclude: compile_glob_set(manifest_rel, check, "exclude_paths", &check.exclude_paths)?,
+    })
+}
+
+/// Build a case-insensitive `GlobSet` from `patterns`, or `None` when
+/// there are none. `field` is used only for error messages.
+fn compile_glob_set(
+    manifest_rel: &std::path::Path,
+    check: &Check,
+    field: &str,
+    patterns: &[String],
+) -> Result<Option<GlobSet>> {
+    if patterns.is_empty() {
         return Ok(None);
     }
     let mut builder = GlobSetBuilder::new();
-    for pat in &check.paths {
+    for pat in patterns {
         let glob = GlobBuilder::new(pat)
             .case_insensitive(true)
             .build()
             .map_err(|err| Error::Manifest {
                 path: manifest_rel.to_path_buf(),
                 message: format!(
-                    "check `{}`: invalid glob `{}`: {}",
-                    check.local_id, pat, err
+                    "check `{}`: `{}`: invalid glob `{}`: {}",
+                    check.local_id, field, pat, err
                 ),
             })?;
         builder.add(glob);
@@ -707,27 +740,29 @@ fn compile_path_filter(manifest_rel: &std::path::Path, check: &Check) -> Result<
     let set = builder.build().map_err(|err| Error::Manifest {
         path: manifest_rel.to_path_buf(),
         message: format!(
-            "check `{}`: could not build glob set: {}",
-            check.local_id, err
+            "check `{}`: `{}`: could not build glob set: {}",
+            check.local_id, field, err
         ),
     })?;
     Ok(Some(set))
 }
 
-/// Narrow `files` to entries matching the supplied filter. Passing
-/// `None` is a no-op (legacy "all files in scope"). The match is
-/// against the workspace-relative path string, so a pattern like
-/// `**/Tracking*.swift` works regardless of how deep the file is.
+/// Narrow `files` to the check's effective scope: keep entries matching
+/// the `include` set (or all when `include` is `None`), then drop any
+/// entry matching the `exclude` set. Matching is against the
+/// workspace-relative path string, so a pattern like `**/Tracking*.swift`
+/// works regardless of how deep the file is.
 fn filter_effective_files(
     files: Vec<(String, String)>,
-    filter: Option<&GlobSet>,
+    filter: &PathFilter,
 ) -> Vec<(String, String)> {
-    let Some(set) = filter else {
-        return files;
-    };
     files
         .into_iter()
-        .filter(|(rel, _)| set.is_match(rel))
+        .filter(|(rel, _)| {
+            let included = filter.include.as_ref().is_none_or(|set| set.is_match(rel));
+            let excluded = filter.exclude.as_ref().is_some_and(|set| set.is_match(rel));
+            included && !excluded
+        })
         .collect()
 }
 
@@ -1011,11 +1046,16 @@ mod tests {
     }
 
     fn make_check(local_id: &str, paths: Vec<&str>) -> Check {
+        make_check_ex(local_id, paths, vec![])
+    }
+
+    fn make_check_ex(local_id: &str, paths: Vec<&str>, exclude_paths: Vec<&str>) -> Check {
         Check {
             local_id: local_id.into(),
             uses: "cargo/test".into(),
             with_payload: serde_json::Value::Object(Default::default()),
             paths: paths.into_iter().map(String::from).collect(),
+            exclude_paths: exclude_paths.into_iter().map(String::from).collect(),
         }
     }
 
@@ -1025,7 +1065,7 @@ mod tests {
             ("a.rs".into(), "h1".into()),
             ("b.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files.clone(), None);
+        let out = filter_effective_files(files.clone(), &PathFilter::default());
         assert_eq!(out, files);
     }
 
@@ -1038,7 +1078,7 @@ mod tests {
             ("App/OtherFile.swift".into(), "h2".into()),
             ("Tests/TrackingEventsTests.swift".into(), "h3".into()),
         ];
-        let out = filter_effective_files(files, filter.as_ref());
+        let out = filter_effective_files(files, &filter);
         assert_eq!(
             out,
             vec![
@@ -1060,7 +1100,7 @@ mod tests {
             ("tests/it.rs".into(), "h2".into()),
             ("src/main.rs".into(), "h3".into()),
         ];
-        let out = filter_effective_files(files, filter.as_ref());
+        let out = filter_effective_files(files, &filter);
         assert_eq!(
             out,
             vec![
@@ -1078,7 +1118,7 @@ mod tests {
             ("App/A.swift".into(), "h1".into()),
             ("App/B.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files, filter.as_ref());
+        let out = filter_effective_files(files, &filter);
         assert!(out.is_empty());
     }
 
@@ -1093,10 +1133,38 @@ mod tests {
             ("app/trackingevents.swift".into(), "h1".into()),
             ("app/other.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files, filter.as_ref());
+        let out = filter_effective_files(files, &filter);
         assert_eq!(
             out,
             vec![("app/trackingevents.swift".to_string(), "h1".to_string())]
         );
+    }
+
+    #[test]
+    fn exclude_paths_subtracts_from_all_files_when_no_include() {
+        // No `paths:` → start from every file, then drop excludes.
+        let check = make_check_ex("build", vec![], vec!["tools/config.bzl"]);
+        let filter = compile_path_filter(std::path::Path::new("MUSTS.yml"), &check).unwrap();
+        assert!(filter.is_active());
+        let files = vec![
+            ("app/main.swift".into(), "h1".into()),
+            ("tools/config.bzl".into(), "h2".into()),
+        ];
+        let out = filter_effective_files(files, &filter);
+        assert_eq!(out, vec![("app/main.swift".to_string(), "h1".to_string())]);
+    }
+
+    #[test]
+    fn exclude_paths_applies_after_include() {
+        // Include the swift files, then carve out the generated one.
+        let check = make_check_ex("unit", vec!["**/*.swift"], vec!["**/*.generated.swift"]);
+        let filter = compile_path_filter(std::path::Path::new("MUSTS.yml"), &check).unwrap();
+        let files = vec![
+            ("app/a.swift".into(), "h1".into()),
+            ("app/b.generated.swift".into(), "h2".into()),
+            ("app/notes.md".into(), "h3".into()),
+        ];
+        let out = filter_effective_files(files, &filter);
+        assert_eq!(out, vec![("app/a.swift".to_string(), "h1".to_string())]);
     }
 }

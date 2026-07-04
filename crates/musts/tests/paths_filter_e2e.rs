@@ -130,6 +130,92 @@ checks:
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: `exclude_paths` carves a file out of scope so editing it does
+// not re-open the check (the /beta version-bump churn the maintainer hit).
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial]
+fn exclude_paths_isolates_check_from_excluded_file_changes() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    write_file(
+        &root.join("MUSTS.yml"),
+        br#"version: 1
+checks:
+  build:
+    uses: bazel/build
+    exclude_paths:
+      - "tools/config.bzl"
+    with:
+      target: //x
+"#,
+    );
+    install_stub_descriptor(root, "bazel/build");
+    write_file(&root.join("App/Main.swift"), b"// app\n");
+    write_file(&root.join("tools/config.bzl"), b"build_number = 35\n");
+
+    // Initial run: in-scope files exist, so the check is dirty.
+    run_validate(root)
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("1. stub-task"));
+
+    // Drive it green.
+    run_evidence(root, "stub-task").assert().success();
+    run_validate(root).success().code(0);
+
+    // Bump the excluded file (simulates the /beta build_number bump) —
+    // the check stays green because it's outside the scope hash.
+    fs::write(root.join("tools/config.bzl"), b"build_number = 36\n").unwrap();
+    run_validate(root)
+        .success()
+        .code(0)
+        .stdout(predicate::str::contains("Musts validation clean."));
+
+    // Editing an in-scope file still reopens the check.
+    fs::write(root.join("App/Main.swift"), b"// app changed\n").unwrap();
+    run_validate(root)
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("1. stub-task"));
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: a `!`-negation pattern is rejected loudly at parse time rather
+// than silently matching nothing.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial]
+fn bang_negation_pattern_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    write_file(
+        &root.join("MUSTS.yml"),
+        br#"version: 1
+checks:
+  build:
+    uses: bazel/build
+    paths:
+      - "**/*.swift"
+      - "!**/*Snapshot*.swift"
+    with:
+      target: //x
+"#,
+    );
+    install_stub_descriptor(root, "bazel/build");
+    write_file(&root.join("App/Main.swift"), b"// app\n");
+
+    run_validate(root)
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("exclude_paths"));
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: a check whose `paths` matches no files is skipped entirely.
 // ---------------------------------------------------------------------------
 

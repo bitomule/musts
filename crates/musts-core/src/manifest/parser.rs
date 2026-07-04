@@ -10,6 +10,14 @@
 //!   narrow the check's effective scope to files matching at least one
 //!   pattern. Patterns are validated at parse time so a malformed glob
 //!   becomes a manifest error.
+//! - `exclude_paths` is an optional list of the same shape that carves
+//!   files back **out** of the effective scope (applied after `paths`).
+//!   A file in scope for `exclude_paths` never contributes to the check's
+//!   scope hash, so edits to it don't re-open the check.
+//! - Leading-`!` patterns (gitignore negation) are **rejected** in both
+//!   fields: `globset::Glob` treats `!` as a literal, so an author writing
+//!   `!foo` used to get a pattern that silently matched nothing. Use
+//!   `exclude_paths` for exclusions instead.
 //! - Duplicate local IDs **inside the same manifest** are rejected with a
 //!   clear error pointing at the offending id.
 
@@ -48,6 +56,10 @@ pub struct Check {
     /// means "no filter — apply to every file under the declaring
     /// manifest's folder, modulo the standard same-capability carve-out".
     pub paths: Vec<String>,
+    /// Optional gitignore-style glob patterns that subtract files from
+    /// the effective scope after `paths` has been applied. An empty
+    /// vector means "subtract nothing".
+    pub exclude_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +80,8 @@ struct RawCheck {
     with: serde_yaml::Value,
     #[serde(default)]
     paths: RawPaths,
+    #[serde(default)]
+    exclude_paths: RawPaths,
 }
 
 /// `paths:` accepts either a single string or a list of strings. Absent
@@ -145,7 +159,9 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
         })?;
 
         let paths = raw_check.paths.into_vec();
-        validate_path_patterns(path, &local_id, &paths)?;
+        validate_path_patterns(path, &local_id, "paths", &paths)?;
+        let exclude_paths = raw_check.exclude_paths.into_vec();
+        validate_path_patterns(path, &local_id, "exclude_paths", &exclude_paths)?;
 
         if checks
             .insert(
@@ -155,6 +171,7 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
                     uses: raw_check.uses,
                     with_payload,
                     paths,
+                    exclude_paths,
                 },
             )
             .is_some()
@@ -173,16 +190,35 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
     })
 }
 
-/// Validate every path pattern as a gitignore-style glob. Returns a
-/// manifest error pointing at the offending check + pattern on the
-/// first failure. Empty patterns are rejected — they would otherwise
-/// match nothing and silently disable the check.
-fn validate_path_patterns(manifest_path: &Path, local_id: &str, paths: &[String]) -> Result<()> {
+/// Validate every path pattern as a gitignore-style glob. `field` names
+/// the manifest key (`paths` / `exclude_paths`) so errors point at the
+/// right place. Returns a manifest error naming the offending check and
+/// pattern on the first failure. Empty patterns are rejected because they
+/// would otherwise match nothing and silently disable the check. A leading
+/// `!` is rejected too: `globset::Glob` treats it as a literal character
+/// rather than gitignore negation, so `!foo` silently matched nothing;
+/// authors who want exclusions must use `exclude_paths`.
+fn validate_path_patterns(
+    manifest_path: &Path,
+    local_id: &str,
+    field: &str,
+    paths: &[String],
+) -> Result<()> {
     for pat in paths {
         if pat.trim().is_empty() {
             return Err(Error::Manifest {
                 path: manifest_path.to_path_buf(),
-                message: format!("check `{local_id}`: `paths` contains an empty pattern"),
+                message: format!("check `{local_id}`: `{field}` contains an empty pattern"),
+            });
+        }
+        if pat.starts_with('!') {
+            return Err(Error::Manifest {
+                path: manifest_path.to_path_buf(),
+                message: format!(
+                    "check `{local_id}`: `{field}` pattern `{pat}` uses `!` negation, which musts \
+                     does not support (it would silently match nothing). Move the exclusion into \
+                     an `exclude_paths:` entry without the `!`."
+                ),
             });
         }
         globset::Glob::new(pat).map_err(|err| Error::Manifest {
@@ -447,5 +483,106 @@ checks:
             panic!("expected Manifest error");
         };
         assert!(message.contains("empty pattern"));
+    }
+
+    #[test]
+    fn exclude_paths_defaults_to_empty() {
+        let yaml = br#"
+version: 1
+checks:
+  free:
+    uses: custom/noop
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
+        assert!(manifest.checks["free"].exclude_paths.is_empty());
+    }
+
+    #[test]
+    fn parses_exclude_paths_list_and_single() {
+        let yaml = br#"
+version: 1
+checks:
+  build:
+    uses: bazel/build
+    with: { target: //x }
+    exclude_paths:
+      - "tools/config.bzl"
+      - "**/*.generated.swift"
+  unit:
+    uses: cargo/test
+    paths: "**/*.swift"
+    exclude_paths: "**/*Snapshot*.swift"
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
+        assert_eq!(
+            manifest.checks["build"].exclude_paths,
+            vec![
+                "tools/config.bzl".to_string(),
+                "**/*.generated.swift".to_string(),
+            ]
+        );
+        assert_eq!(
+            manifest.checks["unit"].paths,
+            vec!["**/*.swift".to_string()]
+        );
+        assert_eq!(
+            manifest.checks["unit"].exclude_paths,
+            vec!["**/*Snapshot*.swift".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_bang_negation_in_paths_with_guidance() {
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    paths:
+      - "**/*.swift"
+      - "!**/*Snapshot*.swift"
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("bad"));
+        assert!(message.contains('!'));
+        assert!(message.contains("exclude_paths"));
+    }
+
+    #[test]
+    fn rejects_bang_negation_in_exclude_paths() {
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    exclude_paths:
+      - "!keep.swift"
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("exclude_paths"));
+    }
+
+    #[test]
+    fn rejects_empty_exclude_pattern() {
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    exclude_paths:
+      - ""
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("empty pattern"));
+        assert!(message.contains("exclude_paths"));
     }
 }
