@@ -64,6 +64,15 @@ cmd="$(json_field tool_input.command)"
 # `git log --grep="… commit"` stops at the `log` subcommand, and a quoted
 # operator inside a real commit message still leaves `git commit` as the
 # first segment.
+#
+# Known limits (CI's required `musts validate` is the backstop for these):
+# - A commit run through a wrapper whose argv0 isn't `git` — `sudo git
+#   commit`, `command git commit`, `env git commit`, `eval "git commit"` —
+#   is not detected. Agents commit with plain `git`, so this is exotic.
+# - A shell operator that appears *inside a quoted argument* of a non-git
+#   command (`echo "a; git commit"`) can over-match. That only ever
+#   over-validates (blocks a benign command while the loop is dirty); it
+#   never lets an unvalidated commit through.
 command_runs_git_commit() {
   printf '%s' "$1" | awk '
     function is_commit(n, w,    i) {
@@ -87,7 +96,7 @@ command_runs_git_commit() {
       return 0
     }
     {
-      gsub(/&&|\|\||[;&|()]/, "\n", $0)                          # operators -> segment breaks
+      gsub(/&&|\|\||[;&|(){}]/, "\n", $0)                        # operators/groups -> segment breaks
       m = split($0, lines, /\n/)
       for (li = 1; li <= m; li++) {
         n = split(lines[li], words, /[ \t]+/)
