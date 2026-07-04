@@ -211,7 +211,7 @@ fn validate_path_patterns(
                 message: format!("check `{local_id}`: `{field}` contains an empty pattern"),
             });
         }
-        if pat.starts_with('!') {
+        if pat.trim_start().starts_with('!') {
             return Err(Error::Manifest {
                 path: manifest_path.to_path_buf(),
                 message: format!(
@@ -548,6 +548,25 @@ checks:
         };
         assert!(message.contains("bad"));
         assert!(message.contains('!'));
+        assert!(message.contains("exclude_paths"));
+    }
+
+    #[test]
+    fn rejects_bang_negation_with_leading_whitespace() {
+        // A stray leading space must not sneak a `!` pattern past the
+        // guard (it would compile to a literal glob that matches nothing).
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    paths:
+      - " !**/*Snapshot*.swift"
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
         assert!(message.contains("exclude_paths"));
     }
 
