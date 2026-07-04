@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.1.8] - 2026-07-04
+
+### Added
+
+- Validate before git commit instead of on Stop, add exclude_paths ([#53](https://github.com/bitomule/musts/pull/53))
+
 ## [0.1.7] - 2026-05-23
 
 ### Internal
