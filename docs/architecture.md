@@ -46,17 +46,15 @@ workspace::resolve → bootstrap →
 fetch_task(task_id) → TaskNotFound (exit 2) if missing →
 compute_current_scope_hashes → recompute task_snapshot_hash →
   EvidenceStale (exit 2) if drifted →
-EvidenceStore::allocate(submission-NNN) →
-copy assets, MIME-detect, build EvidenceSubmission →
+describe_asset(path) in place (MIME-detect, size; no copy) → build EvidenceSubmission →
 extension.evidence → EvidenceValidationResponse →
   if !accepted: EvidenceRejected (exit 1, message + missing list) →
   reject over-claims (EvidenceOverclaim, exit 2) →
 insert atomic ledger rows (one per accepted-now check, keyed by declaring-manifest scope_hash) →
-write evidence.json LAST →
 exit 0.
 ```
 
-Atomic: every accept is one SQLite transaction. The `evidence.json` marker file is written *after* the commit so an interrupted submission leaves an identifiable orphan that the next `validate`'s GC reclaims.
+Atomic: every accept is one SQLite transaction. Evidence is **not** archived — assets are validated where they live and the committed `.musts/ledger.lock.yaml` (plus the per-machine `evidence_records` table) is the durable record. `musts run <task-id>` wraps this: it executes a deterministic built-in's command, captures the log outside the workspace, and drives the same pipeline from the real exit code.
 
 ## Snapshots
 

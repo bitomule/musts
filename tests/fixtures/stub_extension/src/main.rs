@@ -153,6 +153,7 @@ fn emit_resolve_ok(input: &[u8]) -> ExitCode {
                     title: format!("Stub task for {}", c.id),
                     satisfies: vec![c.id.clone()],
                     parallelizable: true,
+                    command: None,
                     instructions: vec![format!("Pretend to validate {}.", c.id)],
                     evidence_contract: default_evidence_contract(),
                 })
@@ -180,6 +181,7 @@ fn emit_resolve_ok(input: &[u8]) -> ExitCode {
                     title,
                     satisfies,
                     parallelizable: true,
+                    command: None,
                     instructions: vec!["Stub task: no real work required.".into()],
                     evidence_contract: default_evidence_contract(),
                 }],

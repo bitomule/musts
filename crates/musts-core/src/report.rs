@@ -8,6 +8,8 @@
 //! Both are pure functions over [`ValidateReport`]; the orchestrator
 //! builds the report and lets the CLI pick a renderer.
 
+use std::collections::BTreeSet;
+
 use musts_protocol::{EvidenceContract, IgnoredCheck, Task};
 use serde::Serialize;
 use serde_json::{json, Value as JsonValue};
@@ -27,6 +29,13 @@ pub struct ValidateReport {
     pub tasks: Vec<Task>,
     pub ignored_checks: Vec<IgnoredCheck>,
     pub notes: Vec<CapabilityNote>,
+    /// Ids of tasks that are byte-for-byte the same request as the previous
+    /// `musts validate` run (same `satisfies`, same scope hashes). The text
+    /// renderer prints these compactly instead of repeating the full body,
+    /// so a loop that re-runs `validate` doesn't re-inject identical task
+    /// specs every time. Not part of the frozen JSON shape.
+    #[serde(skip)]
+    pub repeated_task_ids: Vec<String>,
 }
 
 impl ValidateReport {
@@ -49,11 +58,20 @@ pub fn render_text(report: &ValidateReport) -> String {
         report.tasks.len(),
         if report.tasks.len() == 1 { "" } else { "s" }
     ));
+    let repeated: BTreeSet<&str> = report
+        .repeated_task_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
     for (i, task) in report.tasks.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        push_task(&mut out, i + 1, task);
+        if repeated.contains(task.id.as_str()) {
+            push_repeated_task(&mut out, i + 1, task);
+        } else {
+            push_task(&mut out, i + 1, task);
+        }
     }
     out.push('\n');
     push_ignored_section(&mut out, &report.ignored_checks);
@@ -68,6 +86,22 @@ fn push_task(out: &mut String, index: usize, task: &Task) {
     out.push_str(&format!(
         "   evidence: {}\n",
         evidence_contract_summary(&task.evidence_contract)
+    ));
+    out.push_str(&format!(
+        "   submit: musts evidence {}{}\n",
+        task.id,
+        evidence_submit_args(&task.evidence_contract)
+    ));
+}
+
+/// Compact form for a task whose request is unchanged since the previous
+/// `musts validate`. The agent already saw the full `do:` and `evidence:`
+/// lines last time; repeating them burns context for no new information.
+/// We still print the `submit:` line so the exact command stays at hand.
+fn push_repeated_task(out: &mut String, index: usize, task: &Task) {
+    out.push_str(&format!(
+        "{}. {} (unchanged since last validate — see the previous report for details)\n",
+        index, task.id
     ));
     out.push_str(&format!(
         "   submit: musts evidence {}{}\n",
@@ -173,6 +207,7 @@ mod tests {
             title: "Build Login module".into(),
             satisfies: vec!["App/Login/login-build".into()],
             parallelizable: true,
+            command: None,
             instructions: vec![
                 "Run `bazel build //App/Login:Login`.".into(),
                 "Capture stdout/stderr as a log asset.".into(),
@@ -203,6 +238,7 @@ mod tests {
                 capability: "bazel/build".into(),
                 note: "selected deepest applicable target".into(),
             }],
+            repeated_task_ids: vec![],
         }
     }
 
@@ -212,6 +248,7 @@ mod tests {
             tasks: vec![],
             ignored_checks: vec![],
             notes: vec![],
+            repeated_task_ids: vec![],
         }
     }
 
@@ -239,6 +276,25 @@ mod tests {
         assert!(out.contains("Notes:"));
         assert!(out.contains("[bazel/build]"));
         assert!(out.contains("rerun `musts validate` until clean"));
+    }
+
+    #[test]
+    fn text_repeated_task_is_compact() {
+        let mut report = pending_report();
+        report.repeated_task_ids = vec!["bazel-build-login".into()];
+        let out = render_text(&report);
+        // The compact form keeps the id + submit line but drops the full
+        // do:/evidence: body.
+        assert!(out.contains("bazel-build-login (unchanged since last validate"));
+        assert!(out.contains("submit: musts evidence bazel-build-login"));
+        assert!(!out.contains("do: Run `bazel build //App/Login:Login`."));
+    }
+
+    #[test]
+    fn text_non_repeated_task_shows_full_body() {
+        // Sanity: without the id in repeated_task_ids, the full body prints.
+        let out = render_text(&pending_report());
+        assert!(out.contains("do: Run `bazel build //App/Login:Login`."));
     }
 
     #[test]

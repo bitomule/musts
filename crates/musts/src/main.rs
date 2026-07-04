@@ -15,6 +15,7 @@ use musts_core::evidence::{submit, EvidenceSubmissionResult};
 use musts_core::extension::runtime::RuntimeOptions;
 use musts_core::manifest::discover as discover_manifests;
 use musts_core::report::{render_json, render_text, ValidateReport};
+use musts_core::run::RunOutcome;
 use musts_core::validate::{self, ValidateOptions};
 use musts_core::workspace;
 use musts_core::Error;
@@ -41,6 +42,14 @@ enum Command {
         /// Emit a machine-readable JSON report (shape frozen at first ship).
         #[arg(long)]
         json: bool,
+    },
+    /// Execute a deterministic task's command and record evidence from
+    /// the real result — no need to re-run the check yourself. Works only
+    /// for runnable built-in checks (`cargo/*`, `bazel/build`); judgment
+    /// tasks (`agent`, `mav`) still use `musts evidence`.
+    Run {
+        /// Task id from the validate report.
+        task_id: String,
     },
     /// Record evidence for a task issued by the most recent `musts validate`.
     Evidence {
@@ -91,6 +100,7 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     match &cli.command {
         Command::Validate { json } => validate_command(cli.workspace.as_deref(), *json),
+        Command::Run { task_id } => run_command(cli.workspace.as_deref(), task_id),
         Command::Evidence {
             task_id,
             text,
@@ -123,6 +133,7 @@ fn validate_command(
             tasks: vec![],
             ignored_checks: vec![],
             notes: vec![],
+            repeated_task_ids: vec![],
         };
         if json {
             println!("{}", serde_json::to_string_pretty(&render_json(&report))?);
@@ -183,6 +194,55 @@ fn evidence_command(
     };
     match submit(&mut session, &root, &runtime_options, &inputs) {
         Ok(result) => {
+            print_evidence_result(&result);
+            Ok(ExitCode::from(0))
+        }
+        Err(err) => Ok(report_error(err)),
+    }
+}
+
+fn run_command(
+    explicit_workspace: Option<&std::path::Path>,
+    task_id: &str,
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let mut session = match StateSession::acquire(&root) {
+        Ok(s) => s,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let runtime_options = RuntimeOptions::from_env(root.clone());
+    match musts_core::run::execute(&mut session, &root, &runtime_options, task_id) {
+        Ok(RunOutcome::NotRunnable { reason }) => {
+            eprintln!("error: {reason}");
+            Ok(ExitCode::from(2))
+        }
+        Ok(RunOutcome::Failed {
+            command,
+            code,
+            output,
+            log_path,
+        }) => {
+            // Surface the failing command's output so the agent can act on
+            // it — this is exactly when the tokens are worth spending.
+            print!("{output}");
+            if !output.ends_with('\n') {
+                println!();
+            }
+            let code_str = code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string());
+            eprintln!(
+                "`{command}` failed (exit {code_str}). Full log: {}. Fix it and re-run `musts run {task_id}`.",
+                log_path.display()
+            );
+            Ok(ExitCode::from(1))
+        }
+        Ok(RunOutcome::Recorded { command, result }) => {
+            println!("`{command}` exited 0.");
             print_evidence_result(&result);
             Ok(ExitCode::from(0))
         }
