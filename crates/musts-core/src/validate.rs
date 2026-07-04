@@ -231,6 +231,11 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         // own `.musts/extensions/<name>/extension.yml`. Only when no
         // external implementor is installed do we fall back to the
         // built-in registry.
+        // A built-in resolve is the only trusted source of a runnable
+        // `command`; an external descriptor's tasks have their command
+        // stripped at ingest so `musts run` never executes extension-
+        // supplied argv.
+        let command_trusted = !cap_index.contains_key(capability.as_str());
         let outcome: Result<musts_protocol::ResolveResponse> =
             if let Some((descriptor, cap)) = cap_index.get(capability.as_str()).copied() {
                 let runner = ExtensionRunner {
@@ -248,6 +253,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 ingest_resolve_response(
                     response,
                     capability,
+                    command_trusted,
                     checks_for_cap,
                     &mut tasks,
                     &mut ignored_checks,
@@ -828,9 +834,11 @@ fn build_resolve_request(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_resolve_response(
     response: ResolveResponse,
     capability: &str,
+    command_trusted: bool,
     dirty: &[&PreparedCheck],
     tasks: &mut Vec<musts_protocol::Task>,
     ignored_checks: &mut Vec<musts_protocol::IgnoredCheck>,
@@ -839,7 +847,16 @@ fn ingest_resolve_response(
 ) {
     let by_id: BTreeMap<&str, &PreparedCheck> =
         dirty.iter().map(|c| (c.check_id.as_str(), *c)).collect();
-    for task in response.tasks {
+    for mut task in response.tasks {
+        // `musts run` executes a task's `command`. Only trust it when the
+        // task came from a built-in capability — an external extension
+        // (even one claiming a built-in's name) could otherwise inject an
+        // arbitrary argv that survives in the persisted payload and runs
+        // later, after the extension is gone. Strip it so a `command` in
+        // the ledger is always built-in-authored.
+        if !command_trusted {
+            task.command = None;
+        }
         let mut scope_hashes: BTreeMap<String, String> = BTreeMap::new();
         for s in &task.satisfies {
             if let Some(c) = by_id.get(s.as_str()) {
@@ -959,6 +976,101 @@ mod tests {
         assert_eq!(scope_depth(ROOT_SCOPE), 0);
         assert_eq!(scope_depth("App"), 1);
         assert_eq!(scope_depth("App/Login"), 2);
+    }
+
+    fn prepared(check_id: &str) -> PreparedCheck {
+        PreparedCheck {
+            check_id: check_id.into(),
+            local_id: "x".into(),
+            manifest_rel: PathBuf::from("MUSTS.yml"),
+            scope_path: "root".into(),
+            depth: 0,
+            capability: "cargo/test".into(),
+            with_payload: serde_json::json!({}),
+            scope_hash: "h".into(),
+            dirty: true,
+            effective_files: vec![],
+        }
+    }
+
+    fn task_with_command(id: &str, satisfies: &str) -> musts_protocol::Task {
+        musts_protocol::Task {
+            id: id.into(),
+            extension: "cargo/test".into(),
+            title: "t".into(),
+            satisfies: vec![satisfies.into()],
+            parallelizable: true,
+            command: Some(vec!["cargo".into(), "test".into()]),
+            instructions: vec![],
+            evidence_contract: musts_protocol::EvidenceContract {
+                text: musts_protocol::TextContract {
+                    required: true,
+                    description: None,
+                },
+                assets: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn ingest_strips_command_when_untrusted() {
+        // A task whose command came from an external extension must not
+        // survive into the report or the persisted payload — otherwise
+        // `musts run` could execute extension-supplied argv.
+        let dirty = prepared("root/test");
+        let dirty_refs = [&dirty];
+        let resp = ResolveResponse {
+            protocol_version: PROTOCOL_VERSION,
+            tasks: vec![task_with_command("evil", "root/test")],
+            ignored_checks: vec![],
+            notes: vec![],
+        };
+        let mut tasks = Vec::new();
+        let mut ignored = Vec::new();
+        let mut notes = Vec::new();
+        let mut persist = Vec::new();
+        ingest_resolve_response(
+            resp,
+            "cargo/test",
+            false, // untrusted (external)
+            &dirty_refs,
+            &mut tasks,
+            &mut ignored,
+            &mut notes,
+            &mut persist,
+        );
+        assert_eq!(tasks[0].command, None, "untrusted command must be stripped");
+        assert!(
+            !persist[0].payload_json.contains("command"),
+            "stripped command must not persist in the payload"
+        );
+    }
+
+    #[test]
+    fn ingest_keeps_command_when_trusted() {
+        let dirty = prepared("root/test");
+        let dirty_refs = [&dirty];
+        let resp = ResolveResponse {
+            protocol_version: PROTOCOL_VERSION,
+            tasks: vec![task_with_command("cargo-test-root", "root/test")],
+            ignored_checks: vec![],
+            notes: vec![],
+        };
+        let mut tasks = Vec::new();
+        let mut ignored = Vec::new();
+        let mut notes = Vec::new();
+        let mut persist = Vec::new();
+        ingest_resolve_response(
+            resp,
+            "cargo/test",
+            true, // trusted (built-in)
+            &dirty_refs,
+            &mut tasks,
+            &mut ignored,
+            &mut notes,
+            &mut persist,
+        );
+        assert_eq!(tasks[0].command, Some(vec!["cargo".into(), "test".into()]));
     }
 
     fn make_check(local_id: &str, paths: Vec<&str>) -> Check {

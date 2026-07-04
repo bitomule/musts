@@ -86,14 +86,17 @@ Musts validation pending: 2 tasks.
 
 1. bazel-build-login
    do: Run `bazel build //App/Login:Login`.
-   evidence: text + log
-   submit: musts evidence bazel-build-login --text "..." --asset <log>
+   run: musts run bazel-build-login
 
 2. mav-expect-app-login
-…
+   do: Validate MAV expectations for App/Login …
+   evidence: screenshot + video + mav-report
+   submit: musts evidence mav-expect-app-login --text "..." --asset <screenshot> …
 
-Capture logs outside the workspace. Record evidence, then rerun `musts validate` until clean.
+Run runnable checks with `musts run <task-id>`; record judgment checks with `musts evidence`. Then rerun `musts validate` until clean.
 ```
+
+Deterministic checks (`cargo/*`, `bazel/build`) show a `run:` line — `musts run` executes them and records evidence for you. Judgment checks (`agent`, `mav`) show `evidence:` + `submit:`.
 
 When clean:
 

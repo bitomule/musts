@@ -262,11 +262,13 @@ pub fn evidence(request: &EvidenceValidationRequest) -> Result<EvidenceValidatio
 /// build failure. Returns `Some(MissingEvidence)` when the log is
 /// unreadable or shows a failure marker.
 ///
-/// bazel prints `ERROR:` lines and `FAILED: Build did NOT complete
-/// successfully` on failure (via bazel or bazelisk); a genuinely green
-/// build never contains these. We reject on their presence rather than
-/// requiring a positive success marker, because the exact success line
-/// varies across bazel versions and wrapper scripts (`make build`, etc.).
+/// bazel ends a failed invocation with a `Build did NOT complete
+/// successfully` line — prefixed `FAILED:` for action failures and
+/// `ERROR:` for loading/analysis failures. That exact phrase never
+/// appears in a green build, so we key on it rather than on bare
+/// `ERROR:` lines (which legitimate wrappers/subtools can emit on a
+/// successful build) or a positive success marker (whose wording varies
+/// across bazel versions and wrappers like `make build`).
 fn inspect_build_log(
     workspace_root: &str,
     log_assets: &[&EvidenceAsset],
@@ -286,23 +288,14 @@ fn inspect_build_log(
 }
 
 /// Failure heuristic for a bazel build log. Returns a rejection message
-/// when the log records a failure, `None` when it looks clean.
+/// when the log records a build that did not complete, `None` otherwise.
 fn build_log_failure(log: &str) -> Option<String> {
-    if log.contains("FAILED: Build did NOT complete successfully") {
+    if log.contains("Build did NOT complete successfully") {
         return Some(
-            "Log contains `FAILED: Build did NOT complete successfully` — the build failed. Fix \
-             it and re-capture."
+            "Log contains `Build did NOT complete successfully` — the build failed. Fix it and \
+             re-capture."
                 .into(),
         );
-    }
-    if let Some(line) = log
-        .lines()
-        .find(|line| line.trim_start().starts_with("ERROR:"))
-    {
-        return Some(format!(
-            "Log contains a bazel error ({}). Resolve it before evidence is accepted.",
-            line.trim()
-        ));
     }
     None
 }
@@ -615,11 +608,15 @@ mod tests {
     }
 
     #[test]
-    fn evidence_rejects_error_line_only() {
-        let (dir, rel) = write_log("ERROR: no such target '//App:Ghost'\n");
+    fn evidence_rejects_loading_error_terminal_line() {
+        // A loading error ends with an `ERROR:`-prefixed "Build did NOT
+        // complete successfully" line — reject it.
+        let (dir, rel) = write_log(
+            "ERROR: no such target '//App:Ghost'\nERROR: Build did NOT complete successfully\n",
+        );
         let resp = evidence(&evidence_req_at(
             Some("tried to build"),
-            vec![asset(&rel, "text/plain", 40)],
+            vec![asset(&rel, "text/plain", 80)],
             dir.path().to_str().unwrap(),
         ))
         .unwrap();
@@ -627,7 +624,29 @@ mod tests {
         assert!(resp
             .missing
             .iter()
-            .any(|m| m.message.contains("bazel error")));
+            .any(|m| m.message.contains("did NOT complete")));
+    }
+
+    #[test]
+    fn evidence_accepts_green_build_with_stray_error_line() {
+        // A successful build whose log happens to contain an `ERROR:`-
+        // prefixed diagnostic (e.g. from a wrapper/subtool) must NOT be
+        // rejected — only "Build did NOT complete successfully" means
+        // failure.
+        let (dir, rel) = write_log(
+            "ERROR: some non-fatal subtool note\nINFO: Build completed successfully, 3 total \
+             actions\n",
+        );
+        let resp = evidence(&evidence_req_at(
+            Some("build ok"),
+            vec![asset(&rel, "text/plain", 80)],
+            dir.path().to_str().unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            resp.accepted,
+            "stray ERROR: on a green build is not a failure"
+        );
     }
 
     #[test]
