@@ -127,6 +127,24 @@ checks:
       target: //App:App
 ```
 
+Use `exclude_paths` to carve files out of a check's scope so editing them
+doesn't re-open it — for example a version file bumped by release automation:
+
+```yaml
+checks:
+  app-build:
+    uses: bazel/build
+    exclude_paths:
+      - "tools/config.bzl"   # release automation bumps build_number here
+    with:
+      target: //App:App
+```
+
+`exclude_paths` applies after `paths`. Note that musts does **not** support
+gitignore-style `!` negation inside `paths:` (it would silently match
+nothing) — a leading `!` is now rejected with a manifest error pointing you
+at `exclude_paths`.
+
 ### Product or architecture contracts
 
 Use the built-in `agent` capability when the validation is a judgement call
@@ -270,7 +288,7 @@ some API movement while the format settles.
 
 Start at [`docs/README.md`](docs/README.md) for the documentation index.
 
-- [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) - Claude Code plugin and Stop hook.
+- [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) - Claude Code plugin and pre-commit validation hook.
 - [`docs/skill.md`](docs/skill.md) - copyable agent instructions for the validation loop.
 - [`docs/extensions.md`](docs/extensions.md) - how to write a third-party extension.
 - [`docs/architecture.md`](docs/architecture.md) - bird's-eye view of the crates.

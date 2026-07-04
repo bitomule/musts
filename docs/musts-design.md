@@ -410,6 +410,13 @@ checks:
       # dropped from the task list. See `docs/extensions.md` →
       # "Narrowing a check to specific files: `paths`".
       - "**/Tracking*.swift"
+    exclude_paths:
+      # Optional. Same shape as `paths`. Subtracts matching files
+      # from the effective scope after `paths` is applied, so edits
+      # to them never re-open the check. A leading `!` in either
+      # field is rejected (musts has no gitignore-style negation;
+      # use `exclude_paths` instead of `!pattern`).
+      - "**/*.generated.swift"
 ```
 
 ### 5.3 Root Manifest Example
@@ -469,7 +476,8 @@ Precedence — applied in this order during the walk:
    `compute_scope_file_inputs` → does not contribute to `scope_hash` →
    edits to it never re-invalidate dependent checks.
 4. Per-check `paths:` filter (narrows an already-walked scope to the
-   matching subset).
+   matching subset), then per-check `exclude_paths:` (subtracts matching
+   files from that subset).
 
 `.mustsignore` is committed to the repo. Divergent files across clones
 produce different `scope_hash` values for the same code and break lock
