@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.1.8] - 2026-07-31
+
+### Fixed
+
+- Guard the commit's own repo, and make the ledger survive merges ([#60](https://github.com/bitomule/musts/pull/60))
+
 ## [0.1.7] - 2026-07-04
 
 ### Added
