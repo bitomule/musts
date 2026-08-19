@@ -111,6 +111,38 @@ musts evidence <task-id> \
 - Don't hand-edit `.musts/ledger.lock.yaml`. `musts run` / `musts evidence`
   are the only writers.
 
+## Writing or editing a `MUSTS.yml`
+
+Run `musts lint` afterwards — it enforces everything below and reports each
+glob against the files actually in the tree.
+
+One question decides where a check goes: **does satisfying it need judgment,
+or does it need a command run?**
+
+| Don't write this | Write this instead |
+|---|---|
+| ``uses: agent`` with ``Run `bazelisk test //T:T` and confirm it exited 0`` | ``uses: bazel/test`` with ``targets: ["//T:T"]`` — then `musts run` executes it and records the real exit code, and no agent reads the log |
+| A fact saying "If changes touch `src/Foo/**` …" | `paths: ["src/Foo/**"]` — the check then does not fire at all on unrelated changes |
+| A fact saying "if unrelated, this is trivially satisfied" | Delete it; that sentence *is* a missing `paths:` filter |
+| `"build_number was not edited manually"` | Nothing. Automation edits that file on every release, so the check reopens forever and can never fail. Enforce it in CI against the diff |
+| One broad `paths:` with `exclude_paths:` carved out | Two disjoint sets of positive globs |
+
+No `paths:` means the check fires on **every** change under the manifest's
+folder. Fine for a runnable capability; expensive under `uses: agent`.
+
+### Glob semantics — these are not `.gitignore` rules
+
+- **Case-insensitive.** `*View.swift` also matches `RequestReview.swift`.
+- **`*` and `**` both cross `/`.** `UI/*View.swift` also matches
+  `UI/Deep/Nested/FooView.swift`. There is no single-level wildcard.
+- **Leading `!` is rejected** at parse time. Use `exclude_paths:`.
+
+### Auditing an existing manifest
+
+`musts stats` lists each check's reopens and how often it was ever red. A
+check with many reopens and zero reds costs validation work and has never
+objected to anything — rewrite it or delete it.
+
 ## Adding a `.mustsignore`
 
 `.mustsignore` is `.gitignore` for musts: files it matches are excluded
