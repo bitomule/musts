@@ -269,14 +269,22 @@ sequence, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 ```bash
 musts validate                                 # report pending validation tasks
 musts validate --json                          # machine-readable report
-musts evidence <task-id> --text "..." \        # record evidence for a task
+musts run <task-id>                            # execute a deterministic task and record it
+musts evidence <task-id> --text "..." \        # record evidence for a judgment task
     --asset path/to/log --asset path/to/screen.png
+musts lint                                     # authoring checks on every MUSTS.yml
+musts stats                                    # what each check has cost, and caught
 ```
 
 Exit codes:
 
 - `validate`: 0 clean, 1 pending tasks, 2 configuration / stale / lock error, 70 internal error.
 - `evidence`: 0 accepted, 1 rejected by extension, 2 unknown task / stale snapshot / over-claim, 70 internal error.
+- `lint`: 0 clean or advice only, 1 an error-level finding (the manifest does not do what it says).
+- `stats`: always 0 — it reports, it does not judge.
+
+`lint` and `stats` are read-only and take no workspace lock, so neither
+blocks on (or blocks) a running `validate`.
 
 ## Stability
 

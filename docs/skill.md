@@ -49,10 +49,67 @@ The single hard rule of musts:
 What this means for your workflow:
 
 - **A scope's hash changes any time any file inside it changes.** Comments, doc tweaks, `.gitignore` edits, reordering imports — none of them change the underlying tool's behaviour, but all of them re-hash the scope and detach it from the prior `(check_id, scope_hash)` entries. musts chooses conservative invalidation over guessing what's "semantic" vs "cosmetic"; it has no way to tell the difference. If you must edit late in the cycle, run the loop again before you commit.
+- **A check is only invalidated by what it depends on.** Its own declaration (`uses`, `with`, `paths`, `exclude_paths`), the files in its effective scope, and the extension implementing its capability. Editing a *sibling* check in the same `MUSTS.yml`, adding a comment to the file, or registering an unrelated extension does **not** reopen it. Narrow `paths:` is therefore the main lever you control over how often a check comes back.
 - **The lock is a union, not a snapshot.** Multiple `(check, scope_hash)` entries can accumulate per check as the codebase evolves. That's by design — a clone is green if its current scope hash matches *any* of them. Don't hand-prune the file; musts writes it monotonically and a future cleanup pass will retire dead entries.
 - **Sub-workspaces (fixtures, demos, examples) often gitignore their own lock** so the canonical walkthrough starts with nothing validated. If you're working on one of those and `validate` keeps reporting pending tasks despite a clean run, check the project's `.gitignore` before assuming musts is broken.
 - **Commit `.musts/.gitattributes`.** musts writes it next to the lock with `ledger.lock.yaml merge=union`, which is what stops two branches that both recorded evidence from conflicting on the lock. It only works once it is committed. If you ever *do* see conflict markers in the lock, keep every entry from both sides — the ledger is append-only, so the union is always the right resolution.
 - **A merge whose result nobody validated reopens the checks covering it, and that is correct.** If `main` moved while your branch was open, the tree that lands carries both sets of edits and neither side ever checked that combination. Nothing was lost from the ledger — the tree is genuinely new. To avoid paying for an expensive check twice, bring `main` into the branch and re-close the loop *before* merging, so the branch validates the tree that actually lands. Narrower `paths:` and nested manifests are the other lever: they keep unrelated churn from touching an expensive check's scope.
+
+## Authoring a `MUSTS.yml`
+
+Run `musts lint` after writing one. Everything below is a rule it enforces,
+and every rule exists because a real manifest got it wrong and quietly cost
+an agent's reasoning on every change for months.
+
+The single question to ask of each check: **does satisfying this need
+judgment, or does it need a command run?** Only judgment belongs under
+`uses: agent`.
+
+- **"The command exited 0" is not judgment.** A fact like ``Run `bazelisk
+  test //T:T` and confirm all tests pass (exit 0)`` forces an agent to run
+  the command, read the output, and write prose about it — every time. Use a
+  runnable capability (`bazel/test`, `cargo/*`) instead and `musts run
+  <task-id>` executes it, checks the real exit code, and records the
+  evidence for you. The agent never reads the log.
+- **"If changes touch X…" is a `paths:` entry, not a fact.** Written as
+  prose, every *unrelated* change pays an agent to read the condition,
+  decide it does not apply, and submit evidence saying so. Written in
+  `paths:`, the check does not fire at all. Same for "if changes are
+  unrelated, this is trivially satisfied" — that sentence is the absence of
+  a `paths:` filter, spelled out.
+- **No `paths:` means every change in the manifest's folder.** For a runnable
+  capability that is usually right. For `uses: agent` it means an agent
+  re-reasons about the whole folder because someone fixed a typo in it.
+- **Do not assert negatives about files that automation edits.** "`build_number`
+  was not edited manually" is unsatisfiable in practice: release automation
+  edits the watched file on every beta, which changes the scope hash, which
+  reopens the check, which makes an agent write prose — forever. One repo's
+  ledger carries 70 satisfactions of exactly this check, and it has never
+  once gone red. If a rule is about *who* changed a file, enforce it in CI
+  against the diff, not in the validation loop.
+- **Prefer two disjoint sets of positive globs over exclusions.** "Views run
+  the snapshot suite, non-views run the unit suite" is clearer, and stays
+  correct, as two `paths:` lists that cannot both match than as one broad
+  list with `exclude_paths:` carved out of it.
+
+Use `musts stats` on an existing repo to find the checks worth rewriting: a
+check with many reopens and zero reds is paying for validation work that has
+never objected to anything.
+
+### Glob semantics
+
+`paths:` and `exclude_paths:` do **not** behave like `.gitignore`. Three
+surprises, all of which have bitten real manifests:
+
+| | Behaviour |
+|---|---|
+| Case | **Insensitive.** `*View.swift` also matches `RequestReview.swift` and `MeetingPreview.swift`. |
+| `*` and `**` | **Both cross `/`.** `UI/*View.swift` also matches `UI/Deep/Nested/FooView.swift`. There is no "one directory level" wildcard. |
+| Leading `!` | **Rejected at parse time.** `globset` treats `!` as a literal, so `!foo` would match nothing at all. Use `exclude_paths:` instead. |
+
+`musts lint` reports each of these against the files actually in your tree,
+naming the ones that match only because of the surprise — so you never have
+to reason about it from the pattern alone.
 
 ## Capabilities at a glance
 
