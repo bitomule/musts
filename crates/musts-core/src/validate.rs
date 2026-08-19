@@ -27,7 +27,7 @@ use crate::manifest::{
     check_id, discover as discover_manifests, parse as parse_manifest, scope_path_for,
     validate_with_payload, Check, Manifest, ManifestEntry, ROOT_SCOPE,
 };
-use crate::report::{CapabilityNote, ValidateReport};
+use crate::report::{CapabilityNote, ManifestIssue, ValidateReport};
 use crate::snapshot::{
     compute_scope_hash, hash_bytes, hash_file, normalise_rel_path, FileFingerprint, ScopeInput,
 };
@@ -131,6 +131,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                     manifest_path: m.entry.rel_path.clone(),
                     check_id: cid.clone(),
                     capability: check.uses.clone(),
+                    available: available_capabilities(&cap_index),
                 });
             }
             let schema = capability_schema(&cap_index, &check.uses);
@@ -292,8 +293,32 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         tasks,
         ignored_checks,
         notes,
+        warnings: manifest_warnings(&manifests),
         repeated_task_ids,
     })
+}
+
+/// Every capability a check could legally name right now, sorted, with
+/// descriptor-backed and built-in ones in one list — the distinction does
+/// not matter to someone fixing a `uses:` line.
+fn available_capabilities(index: &CapabilityIndex<'_>) -> String {
+    let mut all: BTreeSet<String> = index.keys().map(|k| (*k).to_string()).collect();
+    all.extend(builtin::registered_capabilities().map(str::to_string));
+    all.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+/// Flatten every manifest's parse warnings, tagged with the file they
+/// came from.
+fn manifest_warnings(manifests: &[LoadedManifest]) -> Vec<ManifestIssue> {
+    manifests
+        .iter()
+        .flat_map(|m| {
+            m.parsed.warnings.iter().map(|w| ManifestIssue {
+                manifest: m.entry.rel_path.display().to_string(),
+                message: w.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// Load `task_id → task_snapshot_hash` for the tasks persisted by the

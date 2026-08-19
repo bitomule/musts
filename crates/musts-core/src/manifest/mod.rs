@@ -9,7 +9,7 @@ pub mod with_validation;
 
 pub use discovery::{discover, ManifestEntry};
 pub use ids::{check_id, scope_path_for, ROOT_SCOPE};
-pub use parser::{parse, Check, Manifest};
+pub use parser::{parse, Check, Manifest, ManifestWarning};
 pub use with_validation::validate_with_payload;
 
 /// Conventional manifest filename.

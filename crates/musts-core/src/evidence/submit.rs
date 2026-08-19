@@ -101,6 +101,9 @@ pub fn submit(
             manifest_path: std::path::PathBuf::from("(persisted task)"),
             check_id: inputs.task_id.to_string(),
             capability: capability.clone(),
+            available: crate::builtin::registered_capabilities()
+                .collect::<Vec<_>>()
+                .join(", "),
         });
     }
 
