@@ -16,6 +16,7 @@ use musts_core::extension::runtime::RuntimeOptions;
 use musts_core::manifest::discover as discover_manifests;
 use musts_core::report::{render_json, render_text, ValidateReport};
 use musts_core::run::RunOutcome;
+use musts_core::stats;
 use musts_core::validate::{self, ValidateOptions};
 use musts_core::workspace;
 use musts_core::Error;
@@ -62,6 +63,18 @@ enum Command {
         #[arg(long = "asset", value_name = "PATH")]
         assets: Vec<PathBuf>,
     },
+    /// Report what each check has cost and what it has caught.
+    ///
+    /// Reads the committed ledger (and local history, when present) to
+    /// show how many times each check has been reopened and re-proven,
+    /// and how often it was ever actually red. A check reopened dozens of
+    /// times that has never gone red is paying for validation work with
+    /// no observed safety value.
+    Stats {
+        /// Emit machine-readable JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage the agent-facing musts skill.
     Skill {
         #[command(subcommand)]
@@ -106,6 +119,7 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             text,
             assets,
         } => evidence_command(cli.workspace.as_deref(), task_id, text.as_deref(), assets),
+        Command::Stats { json } => stats_command(cli.workspace.as_deref(), *json),
         Command::Skill { command } => match command {
             SkillCommand::Install { agent } => skill_install(agent.as_deref()),
         },
@@ -168,6 +182,34 @@ fn validate_command(
     } else {
         Ok(ExitCode::from(1))
     }
+}
+
+/// Read-only, so it deliberately does **not** take the workspace lock: a
+/// long `validate` in another terminal should never stop you from reading
+/// the ledger. SQLite handles the concurrent reader.
+fn stats_command(
+    explicit_workspace: Option<&std::path::Path>,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let declared = match stats::declared_checks(&root) {
+        Ok(d) => d,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let report = match stats::collect(&root, &root.join(".musts"), &declared) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    if json {
+        println!("{}", stats::render_json(&report));
+    } else {
+        print!("{}", stats::render_text(&report));
+    }
+    Ok(ExitCode::from(0))
 }
 
 fn evidence_command(

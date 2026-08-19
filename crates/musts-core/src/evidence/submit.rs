@@ -151,6 +151,15 @@ pub fn submit(
         } else {
             parts.join(" — ")
         };
+        record_rejection(
+            session,
+            inputs.task_id,
+            &submission_id,
+            &stored_satisfies,
+            &stored_scope_hashes,
+            &submission,
+            &response,
+        );
         return Err(Error::EvidenceRejected {
             task_id: inputs.task_id.to_string(),
             capability: capability.clone(),
@@ -228,6 +237,55 @@ pub fn submit(
         satisfied: accepted_now,
         summary: response.summary,
     })
+}
+
+/// Persist a rejected submission as `accepted = 0`.
+///
+/// Rejections used to be dropped on the floor, which made "has this check
+/// ever actually failed?" unanswerable — and that question is the whole
+/// point of `musts stats`. A check that reopens on every commit and has
+/// never once rejected evidence is cost without safety value, and there
+/// was no record to prove it either way.
+///
+/// `is_green` filters on `accepted = 1`, so these rows can never make a
+/// check look satisfied. They are also strictly best-effort: failing to
+/// write history must never change the outcome the agent sees, which is
+/// already an error. Worst case a red goes uncounted.
+#[allow(clippy::too_many_arguments)]
+fn record_rejection(
+    session: &mut StateSession,
+    task_id: &str,
+    submission_id: &str,
+    stored_satisfies: &[String],
+    stored_scope_hashes: &BTreeMap<String, String>,
+    submission: &EvidenceSubmission,
+    response: &musts_protocol::EvidenceValidationResponse,
+) {
+    let now_unix = unix_seconds_now();
+    let submission_json = serde_json::to_string(submission).unwrap_or_else(|_| "{}".into());
+    let result_json = serde_json::to_string(response).unwrap_or_else(|_| "{}".into());
+    let hashes: Vec<String> = stored_satisfies
+        .iter()
+        .map(|cid| stored_scope_hashes.get(cid).cloned().unwrap_or_default())
+        .collect();
+    let rows: Vec<EvidenceRow<'_>> = stored_satisfies
+        .iter()
+        .zip(hashes.iter())
+        .map(|(cid, scope_hash)| EvidenceRow {
+            task_id,
+            submission_id,
+            check_id: cid,
+            scope_hash,
+            accepted: false,
+            summary: response.message.as_deref(),
+            submission_json: &submission_json,
+            result_json: &result_json,
+            submitted_at_unix: now_unix,
+        })
+        .collect();
+    if let Err(err) = insert_atomic(&mut session.db, &rows) {
+        tracing::debug!(%task_id, %err, "could not persist rejected submission");
+    }
 }
 
 fn missing_evidence_message(missing: &[musts_protocol::MissingEvidence]) -> String {
