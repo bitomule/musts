@@ -1,6 +1,6 @@
 [package]
 name = "musts"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,7 +16,7 @@ name = "musts"
 path = "src/main.rs"
 
 [dependencies]
-musts-core = { path = "../musts-core", version = "0.2.0" }
+musts-core = { path = "../musts-core", version = "0.2.1" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

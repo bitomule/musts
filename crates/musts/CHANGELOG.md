@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.2.1] - 2026-08-19
+
+### Added
+
+- Explain why a glob matches nothing, and let lint be silenced ([#77](https://github.com/bitomule/musts/pull/77))
+
 ## [0.2.0] - 2026-08-19
 
 ### Added
