@@ -288,12 +288,20 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         return Err(err);
     }
 
+    let mut warnings = crate::diagnose::workspace_warnings(
+        workspace_root,
+        &session.musts_dir,
+        &ledger_lock,
+        !tasks.is_empty(),
+    );
+    warnings.extend(manifest_warnings(&manifests));
+
     Ok(ValidateReport {
         workspace_root: workspace_root.display().to_string(),
         tasks,
         ignored_checks,
         notes,
-        warnings: manifest_warnings(&manifests),
+        warnings,
         repeated_task_ids,
     })
 }
