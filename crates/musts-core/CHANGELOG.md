@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
-## [0.1.9] - 2026-08-19
+## [0.2.0] - 2026-08-19
 
 ### Added
 
@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Only invalidate a check by what it actually depends on ([#73](https://github.com/bitomule/musts/pull/73))
 - Warn on unknown manifest keys instead of ignoring them ([#71](https://github.com/bitomule/musts/pull/71))
+
+### Breaking
+
+Public types gained fields, so code that constructs them directly needs
+updating (matching and field access are unaffected):
+
+- `report::ValidateReport` gained `warnings: Vec<ManifestIssue>`
+- `manifest::Manifest` gained `warnings: Vec<ManifestWarning>`
+- `Error::MissingExtension` gained `available: String`
+
+Scope hashes changed shape — a check is now invalidated only by its own
+declaration, its scope's files, and the extension implementing its
+capability. Existing ledgers are unaffected: `validate` also accepts a hit
+on the pre-0.2 hash for this release, so no repo reopens on upgrade. That
+compatibility path is removed in the next minor.
 
 ## [0.1.8] - 2026-07-31
 
