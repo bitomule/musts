@@ -61,6 +61,18 @@ Run `musts lint` after writing one. Everything below is a rule it enforces,
 and every rule exists because a real manifest got it wrong and quietly cost
 an agent's reasoning on every change for months.
 
+When a finding is deliberate, silence that single rule for the file rather
+than deleting the check or widening a glob to make lint quiet:
+
+```yaml
+# These two globs are built to be disjoint knowing `*` crosses `/`.
+# musts-lint: allow glob-crosses-directories
+```
+
+The suppression covers the whole manifest and only the named rule; take
+several with `allow rule-a, rule-b`. It also clears the exit code for an
+error-level rule, so an opted-out finding does not gate CI.
+
 The single question to ask of each check: **does satisfying this need
 judgment, or does it need a command run?** Only judgment belongs under
 `uses: agent`.
