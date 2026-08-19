@@ -147,6 +147,7 @@ fn validate_command(
             tasks: vec![],
             ignored_checks: vec![],
             notes: vec![],
+            warnings: vec![],
             repeated_task_ids: vec![],
         };
         if json {

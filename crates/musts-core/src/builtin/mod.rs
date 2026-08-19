@@ -37,6 +37,11 @@ pub fn lookup(uses: &str) -> Option<&'static BuiltinCapability> {
     REGISTRY.iter().find(|c| c.uses == uses)
 }
 
+/// Every capability id this build implements without an extension.
+pub fn registered_capabilities() -> impl Iterator<Item = &'static str> {
+    REGISTRY.iter().map(|c| c.uses)
+}
+
 const REGISTRY: &[BuiltinCapability] = &[
     BuiltinCapability {
         uses: "agent",

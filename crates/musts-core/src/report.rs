@@ -22,6 +22,14 @@ pub struct CapabilityNote {
     pub note: String,
 }
 
+/// One non-fatal manifest problem, tagged with the file it came from.
+#[derive(Debug, Clone, Serialize)]
+pub struct ManifestIssue {
+    /// Workspace-relative path of the manifest.
+    pub manifest: String,
+    pub message: String,
+}
+
 /// Aggregated output of a single `musts validate` run.
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidateReport {
@@ -29,6 +37,12 @@ pub struct ValidateReport {
     pub tasks: Vec<Task>,
     pub ignored_checks: Vec<IgnoredCheck>,
     pub notes: Vec<CapabilityNote>,
+    /// Manifest problems that did not stop the run: unknown keys, and
+    /// anything else musts parsed past rather than acted on. Rendered
+    /// before the task list, because a warning here usually means the
+    /// task list below it is wrong.
+    #[serde(default)]
+    pub warnings: Vec<ManifestIssue>,
     /// Ids of tasks that are byte-for-byte the same request as the previous
     /// `musts validate` run (same `satisfies`, same scope hashes). The text
     /// renderer prints these compactly instead of repeating the full body,
@@ -47,6 +61,9 @@ impl ValidateReport {
 /// Render the compact text representation for agents.
 pub fn render_text(report: &ValidateReport) -> String {
     let mut out = String::new();
+    // Before anything else: a warning here usually means the report that
+    // follows it is answering the wrong question.
+    push_warnings_section(&mut out, &report.warnings);
     if report.is_clean() {
         out.push_str("Musts validation clean.\n");
         push_notes_section(&mut out, &report.notes);
@@ -199,7 +216,22 @@ pub fn render_json(report: &ValidateReport) -> JsonValue {
         "tasks": report.tasks,
         "ignored_checks": report.ignored_checks,
         "notes": report.notes,
+        "warnings": report.warnings,
     })
+}
+
+/// Warnings print with a `!` gutter so they survive being skimmed. An
+/// ignored `exclude_paths:` typo is invisible in the task list itself —
+/// the check simply fires on more files than the author intended — so
+/// this section is the only place it can ever be seen.
+fn push_warnings_section(out: &mut String, warnings: &[ManifestIssue]) {
+    if warnings.is_empty() {
+        return;
+    }
+    for w in warnings {
+        out.push_str(&format!("! {}: {}\n", w.manifest, w.message));
+    }
+    out.push('\n');
 }
 
 #[cfg(test)]
@@ -245,6 +277,7 @@ mod tests {
                 capability: "bazel/build".into(),
                 note: "selected deepest applicable target".into(),
             }],
+            warnings: vec![],
             repeated_task_ids: vec![],
         }
     }
@@ -255,6 +288,7 @@ mod tests {
             tasks: vec![],
             ignored_checks: vec![],
             notes: vec![],
+            warnings: vec![],
             repeated_task_ids: vec![],
         }
     }
