@@ -12,6 +12,7 @@ pub mod diagnose;
 pub mod error;
 pub mod evidence;
 pub mod extension;
+pub mod lint;
 pub mod manifest;
 pub mod report;
 pub mod run;

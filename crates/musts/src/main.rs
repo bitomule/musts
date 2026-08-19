@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 use musts_core::bootstrap::StateSession;
 use musts_core::evidence::{submit, EvidenceSubmissionResult};
 use musts_core::extension::runtime::RuntimeOptions;
+use musts_core::lint;
 use musts_core::manifest::discover as discover_manifests;
 use musts_core::report::{render_json, render_text, ValidateReport};
 use musts_core::run::RunOutcome;
@@ -62,6 +63,18 @@ enum Command {
         /// Asset file path. Repeat for multiple assets.
         #[arg(long = "asset", value_name = "PATH")]
         assets: Vec<PathBuf>,
+    },
+    /// Check every MUSTS.yml for authoring mistakes that make the loop
+    /// cost more than it is worth.
+    ///
+    /// Catches facts that assert a command's exit status (use a runnable
+    /// capability instead), path conditions written as prose (put them in
+    /// `paths:`), globs that match more than they look like they do, and
+    /// unknown keys. Exits 1 when any error-level finding is present.
+    Lint {
+        /// Emit machine-readable JSON instead of the report.
+        #[arg(long)]
+        json: bool,
     },
     /// Report what each check has cost and what it has caught.
     ///
@@ -119,6 +132,7 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             text,
             assets,
         } => evidence_command(cli.workspace.as_deref(), task_id, text.as_deref(), assets),
+        Command::Lint { json } => lint_command(cli.workspace.as_deref(), *json),
         Command::Stats { json } => stats_command(cli.workspace.as_deref(), *json),
         Command::Skill { command } => match command {
             SkillCommand::Install { agent } => skill_install(agent.as_deref()),
@@ -183,6 +197,31 @@ fn validate_command(
     } else {
         Ok(ExitCode::from(1))
     }
+}
+
+/// Purely static: reads manifests and the file tree, touches no state,
+/// takes no lock.
+fn lint_command(
+    explicit_workspace: Option<&std::path::Path>,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let report = match lint::run(&root) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    if json {
+        println!("{}", lint::render_json(&report));
+    } else {
+        print!("{}", lint::render_text(&report));
+    }
+    // Warnings are advice and must not gate CI; errors mean the manifest
+    // does not do what it says.
+    Ok(ExitCode::from(u8::from(report.has_errors())))
 }
 
 /// Read-only, so it deliberately does **not** take the workspace lock: a
