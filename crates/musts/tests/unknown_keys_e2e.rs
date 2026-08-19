@@ -108,7 +108,9 @@ fn a_clean_manifest_emits_no_warning_line() {
     );
     let (stdout, _) = validate(dir.path(), &[]);
     assert!(!stdout.contains("unknown key"), "{stdout}");
-    assert!(!stdout.starts_with('!'), "{stdout}");
+    // Deliberately not asserting "no `!` lines at all": a fresh temp
+    // workspace legitimately carries the "no validation state here"
+    // health warning, which is a different subsystem.
 }
 
 #[test]
@@ -118,8 +120,14 @@ fn warnings_appear_in_json_output() {
     );
     let (stdout, _) = validate(dir.path(), &["--json"]);
     let v: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    let w = &v["warnings"][0];
-    assert_eq!(w["manifest"], "MUSTS.yml");
+    // Select by manifest rather than by index: workspace-health warnings
+    // share this array and are emitted first.
+    let w = v["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["manifest"] == "MUSTS.yml")
+        .unwrap_or_else(|| panic!("no manifest warning in {stdout}"));
     assert!(
         w["message"].as_str().unwrap().contains("excludes"),
         "{stdout}"
