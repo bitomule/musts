@@ -16,6 +16,7 @@ pub mod report;
 pub mod run;
 pub mod snapshot;
 pub mod state;
+pub mod stats;
 pub mod validate;
 pub mod workspace;
 
