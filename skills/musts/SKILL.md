@@ -116,6 +116,17 @@ musts evidence <task-id> \
 Run `musts lint` afterwards — it enforces everything below and reports each
 glob against the files actually in the tree.
 
+If a finding is deliberate, silence that one rule for the file with a
+comment; do not delete the check or widen the glob to make lint quiet:
+
+```yaml
+# These globs are built to be disjoint knowing `*` crosses `/`.
+# musts-lint: allow glob-crosses-directories
+```
+
+Scope is the whole manifest, and it is per-rule — other rules keep
+reporting. Several rules: `# musts-lint: allow rule-a, rule-b`.
+
 One question decides where a check goes: **does satisfying it need judgment,
 or does it need a command run?**
 

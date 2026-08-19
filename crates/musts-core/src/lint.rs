@@ -65,6 +65,7 @@ impl LintReport {
 /// Lint every manifest in the workspace.
 pub fn run(workspace_root: &Path) -> Result<LintReport> {
     let files = workspace_files(workspace_root);
+    let ignored_files = workspace_files_including_ignored(workspace_root);
     let mut findings = Vec::new();
 
     for entry in crate::manifest::discover(workspace_root)? {
@@ -80,9 +81,11 @@ pub fn run(workspace_root: &Path) -> Result<LintReport> {
         };
         let manifest_rel = entry.rel_path.display().to_string();
         let scope = scope_path_for(&entry.rel_path);
+        let allowed = suppressed_rules(&bytes);
 
+        let mut for_this_manifest = Vec::new();
         for w in &manifest.warnings {
-            findings.push(Finding {
+            for_this_manifest.push(Finding {
                 severity: Severity::Error,
                 manifest: manifest_rel.clone(),
                 check: w.check_local_id.as_ref().map(|id| check_id(&scope, id)),
@@ -99,9 +102,13 @@ pub fn run(workspace_root: &Path) -> Result<LintReport> {
                 check,
                 &entry.rel_path,
                 &files,
-                &mut findings,
+                &ignored_files,
+                &mut for_this_manifest,
             );
         }
+
+        for_this_manifest.retain(|f| !allowed.contains(f.rule));
+        findings.extend(for_this_manifest);
     }
 
     findings.sort_by(|a, b| {
@@ -113,14 +120,20 @@ pub fn run(workspace_root: &Path) -> Result<LintReport> {
     Ok(LintReport { findings })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lint_check(
     manifest_rel: &str,
     cid: &str,
     check: &Check,
     manifest_path: &Path,
     files: &[String],
+    ignored_files: &[String],
     out: &mut Vec<Finding>,
 ) {
+    let scope_dir = manifest_path
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
     let push = |out: &mut Vec<Finding>, severity, rule, message: String| {
         out.push(Finding {
             severity,
@@ -168,10 +181,6 @@ fn lint_check(
     // bills a round of reasoning and prose for every file in the folder,
     // which is the thing worth seeing.
     if check.paths.is_empty() && is_judgment(&check.uses) {
-        let scope_dir = manifest_path
-            .parent()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
         let where_ = if scope_dir.is_empty() {
             "the workspace root".to_string()
         } else {
@@ -190,10 +199,66 @@ fn lint_check(
     }
 
     for pat in check.paths.iter().chain(check.exclude_paths.iter()) {
-        for finding in glob_surprises(pat, files) {
+        let Ok(matcher) = GlobBuilder::new(pat)
+            .case_insensitive(true)
+            .build()
+            .map(|g| g.compile_matcher())
+        else {
+            // An invalid glob is a hard manifest error in `validate`, with
+            // a better message than lint could give.
+            continue;
+        };
+        let ctx = GlobContext {
+            files,
+            ignored_files,
+            scope_dir: &scope_dir,
+            matcher,
+        };
+        for finding in glob_surprises(pat, &ctx) {
             push(out, Severity::Warning, finding.0, finding.1);
         }
     }
+}
+
+/// Rules the manifest opts out of, via `# musts-lint: allow <rule>`.
+///
+/// A correct finding can still be noise. One repo's manifest opens with a
+/// header comment deliberately reasoning about `*` crossing `/` and
+/// constructing two globs to be disjoint *because* of it — the
+/// `glob-crosses-directories` warning there is accurate and unwanted, and
+/// a lint nobody can silence is a lint everybody ignores.
+///
+/// Scope is the whole file, on purpose. Per-check suppression means
+/// binding a comment to a YAML node, and `serde_yaml` discards comments —
+/// reconstructing that from raw text is guesswork that would break on
+/// reformatting. File scope is honest about what it can promise.
+///
+/// Read from the raw bytes for the same reason.
+fn suppressed_rules(manifest_bytes: &[u8]) -> std::collections::BTreeSet<String> {
+    const MARKER: &str = "musts-lint:";
+    let mut out = std::collections::BTreeSet::new();
+    let Ok(text) = std::str::from_utf8(manifest_bytes) else {
+        return out;
+    };
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = trimmed.trim_start_matches('#').trim().strip_prefix(MARKER) else {
+            continue;
+        };
+        let Some(rules) = rest.trim().strip_prefix("allow") else {
+            continue;
+        };
+        for rule in rules.split([',', ' ']) {
+            let rule = rule.trim();
+            if !rule.is_empty() {
+                out.insert(rule.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Does satisfying this capability cost an agent's reasoning, rather
@@ -259,16 +324,24 @@ fn prose_path_condition(fact: &str) -> Option<String> {
 /// Ways a pattern matches more than it looks like it does, reported
 /// against the files that are really there rather than from the
 /// pattern's shape alone.
-fn glob_surprises(pattern: &str, files: &[String]) -> Vec<(&'static str, String)> {
-    let mut out = Vec::new();
+/// Everything the glob rules need beyond the pattern itself.
+struct GlobContext<'a> {
+    /// Files musts can see (ignore rules applied) — the same set the
+    /// validator scopes over.
+    files: &'a [String],
+    /// Files on disk that ignore rules hide. Only ever used to explain an
+    /// empty match.
+    ignored_files: &'a [String],
+    /// Workspace-relative folder of the declaring manifest, `""` at root.
+    scope_dir: &'a str,
+    /// The pattern compiled case-insensitively, shared by the rules.
+    matcher: globset::GlobMatcher,
+}
 
-    let Ok(insensitive) = GlobBuilder::new(pattern)
-        .case_insensitive(true)
-        .build()
-        .map(|g| g.compile_matcher())
-    else {
-        return out;
-    };
+fn glob_surprises(pattern: &str, ctx: &GlobContext<'_>) -> Vec<(&'static str, String)> {
+    let mut out = Vec::new();
+    let files = ctx.files;
+    let insensitive = &ctx.matcher;
     let matched: Vec<&String> = files
         .iter()
         .filter(|f| insensitive.is_match(f.as_str()))
@@ -327,16 +400,58 @@ fn glob_surprises(pattern: &str, files: &[String]) -> Vec<(&'static str, String)
     }
 
     if matched.is_empty() {
-        out.push((
-            "glob-matches-nothing",
-            format!(
-                "`{pattern}` matches no file in the workspace today, so the check never fires. \
-                 Check for a typo."
-            ),
-        ));
+        out.push(("glob-matches-nothing", explain_empty_match(pattern, ctx)));
     }
 
     out
+}
+
+/// Say *why* a glob matches nothing. "Check for a typo" is the least
+/// likely cause and the least useful steer.
+///
+/// The case this exists for: a repo's `.mustsignore` said `*.png`,
+/// intending root-level screenshots. Unanchored, it also hid 122 committed
+/// snapshot baselines, so the snapshot check could not see the files it
+/// existed to protect — re-recording a baseline did not reopen it. The
+/// old message pointed at a typo, and the glob was fine.
+fn explain_empty_match(pattern: &str, ctx: &GlobContext<'_>) -> String {
+    let hidden: Vec<&String> = ctx
+        .ignored_files
+        .iter()
+        .filter(|f| ctx.matcher.is_match(f.as_str()))
+        .collect();
+    if let Some(example) = hidden.first() {
+        return format!(
+            "`{pattern}` matches no file musts can see, so the check never fires — but {} file(s) \
+             at that path exist and are excluded by `.gitignore` or `.mustsignore`, e.g. \
+             `{example}`. The check is blind to them: editing one will not re-open it. Narrow the \
+             ignore rule (an unanchored `*.ext` matches at every depth; `/*.ext` is root-only).",
+            hidden.len()
+        );
+    }
+
+    // `paths:` globs are workspace-relative even inside a nested manifest,
+    // which reads as a surprise often enough to be worth naming.
+    if !ctx.scope_dir.is_empty() {
+        let prefixed = format!("{}/{}", ctx.scope_dir, pattern);
+        if let Ok(m) = GlobBuilder::new(&prefixed)
+            .case_insensitive(true)
+            .build()
+            .map(|g| g.compile_matcher())
+        {
+            if ctx.files.iter().any(|f| m.is_match(f.as_str())) {
+                return format!(
+                    "`{pattern}` matches no file, but `{prefixed}` would. `paths:` globs are \
+                     relative to the **workspace root**, not to this manifest's folder."
+                );
+            }
+        }
+    }
+
+    format!(
+        "`{pattern}` matches no file in the workspace today, so the check never fires. Check for \
+         a typo."
+    )
 }
 
 fn under(file: &str, dir: &str) -> bool {
@@ -346,17 +461,36 @@ fn under(file: &str, dir: &str) -> bool {
 /// Workspace-relative paths of every file `validate` would consider,
 /// honouring `.gitignore` and `.mustsignore` the same way.
 fn workspace_files(workspace_root: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    for entry in ignore::WalkBuilder::new(workspace_root)
-        .standard_filters(true)
-        .git_ignore(true)
-        .git_exclude(true)
+    walk(workspace_root, true)
+}
+
+/// Every file on disk, ignore rules **not** applied. Used only to explain
+/// a glob that matches nothing: "no such file" and "the file is there but
+/// `.mustsignore` hides it" are different problems with different fixes,
+/// and the second is the one that silently under-scopes a check.
+fn workspace_files_including_ignored(workspace_root: &Path) -> Vec<String> {
+    walk(workspace_root, false)
+}
+
+fn walk(workspace_root: &Path, honour_ignores: bool) -> Vec<String> {
+    let mut builder = ignore::WalkBuilder::new(workspace_root);
+    builder
+        .standard_filters(honour_ignores)
+        .git_ignore(honour_ignores)
+        .git_exclude(honour_ignores)
+        .git_global(honour_ignores)
+        .ignore(honour_ignores)
+        .parents(honour_ignores)
         .require_git(false)
-        .add_custom_ignore_filename(".mustsignore")
-        .hidden(false)
-        .build()
-        .flatten()
-    {
+        .hidden(false);
+    // `add_custom_ignore_filename` has no on/off switch — a registered
+    // custom ignore file is always applied — so the un-ignored walk must
+    // simply never register it.
+    if honour_ignores {
+        builder.add_custom_ignore_filename(".mustsignore");
+    }
+    let mut out = Vec::new();
+    for entry in builder.build().flatten() {
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
@@ -642,5 +776,190 @@ mod tests {
         assert!(!is_judgment("bazel/build"));
         assert!(!is_judgment("bazel/test"));
         assert!(!is_judgment("acme/thing"));
+    }
+
+    /// The case this rule exists for. A repo's `.mustsignore` said
+    /// `*.png`, meaning root-level screenshots; unanchored, it also hid
+    /// 122 committed snapshot baselines, so the snapshot check could not
+    /// see the files it existed to protect. The old message said "check
+    /// for a typo" and the glob was fine.
+    #[test]
+    fn an_empty_match_caused_by_an_ignore_rule_says_so() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("MUSTS.yml"),
+            "version: 1\nchecks:\n  snapshot:\n    uses: agent\n    paths: [\"Tests/__Snapshots__/**\"]\n    with:\n      facts: [\"f\"]\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("Tests/__Snapshots__/Foo")).unwrap();
+        std::fs::write(dir.path().join("Tests/__Snapshots__/Foo/a.1.png"), "x").unwrap();
+        std::fs::write(dir.path().join(".mustsignore"), "*.png\n").unwrap();
+
+        let r = run(dir.path()).unwrap();
+        let f = r
+            .findings
+            .iter()
+            .find(|f| f.rule == "glob-matches-nothing")
+            .unwrap_or_else(|| panic!("{:?}", r.findings));
+        assert!(
+            f.message.contains("exist and are excluded"),
+            "{}",
+            f.message
+        );
+        assert!(f.message.contains("blind to them"), "{}", f.message);
+        assert!(
+            f.message.contains("/*.ext` is root-only"),
+            "must name the anchoring fix: {}",
+            f.message
+        );
+        assert!(
+            !f.message.contains("Check for a typo"),
+            "the glob is fine; a typo hint is the wrong steer: {}",
+            f.message
+        );
+    }
+
+    /// A genuinely absent path must keep the typo hint — the new branch
+    /// must not swallow the original, correct case.
+    #[test]
+    fn an_empty_match_with_nothing_on_disk_still_suggests_a_typo() {
+        let dir = ws(
+            "version: 1\nchecks:\n  c:\n    uses: agent\n    paths: [\"NoSuchDir/**\"]\n    with:\n      facts: [\"f\"]\n",
+            &["src/a.swift"],
+        );
+        let r = run(dir.path()).unwrap();
+        let f = r
+            .findings
+            .iter()
+            .find(|f| f.rule == "glob-matches-nothing")
+            .unwrap();
+        assert!(f.message.contains("Check for a typo"), "{}", f.message);
+    }
+
+    /// `paths:` globs are workspace-relative even inside a nested
+    /// manifest. Writing them relative to the manifest's own folder
+    /// silently matches nothing.
+    #[test]
+    fn a_manifest_relative_glob_in_a_nested_manifest_is_diagnosed() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("Sub/UI")).unwrap();
+        std::fs::write(dir.path().join("Sub/UI/a.swift"), "// x").unwrap();
+        std::fs::write(
+            dir.path().join("Sub/MUSTS.yml"),
+            "version: 1\nchecks:\n  ui:\n    uses: agent\n    paths: [\"UI/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+        )
+        .unwrap();
+
+        let r = run(dir.path()).unwrap();
+        let f = r
+            .findings
+            .iter()
+            .find(|f| f.rule == "glob-matches-nothing")
+            .unwrap_or_else(|| panic!("{:?}", r.findings));
+        assert!(
+            f.message.contains("`Sub/UI/*.swift` would"),
+            "{}",
+            f.message
+        );
+        assert!(f.message.contains("workspace root"), "{}", f.message);
+    }
+
+    #[test]
+    fn a_suppression_comment_silences_exactly_that_rule() {
+        let dir = ws(
+            "version: 1\n# musts-lint: allow glob-crosses-directories\nchecks:\n  c:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+            &["src/a.swift", "src/deep/b.swift"],
+        );
+        let r = run(dir.path()).unwrap();
+        assert!(
+            !rules(&r).contains(&"glob-crosses-directories"),
+            "{:?}",
+            r.findings
+        );
+    }
+
+    #[test]
+    fn suppressing_one_rule_leaves_the_others_reporting() {
+        let dir = ws(
+            "version: 1\n# musts-lint: allow glob-matches-nothing\nchecks:\n  c:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+            &["src/a.swift", "src/deep/b.swift"],
+        );
+        let r = run(dir.path()).unwrap();
+        assert!(
+            rules(&r).contains(&"glob-crosses-directories"),
+            "a suppression must not be a blanket mute: {:?}",
+            r.findings
+        );
+    }
+
+    #[test]
+    fn a_suppression_can_list_several_rules() {
+        let set =
+            suppressed_rules(b"# musts-lint: allow glob-crosses-directories, no-paths-filter\n");
+        assert!(set.contains("glob-crosses-directories"));
+        assert!(set.contains("no-paths-filter"));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn suppression_parsing_ignores_unrelated_comments_and_yaml() {
+        assert!(suppressed_rules(b"# just a comment\nchecks: {}\n").is_empty());
+        // Not a comment, so not a directive — a `uses:` value that merely
+        // mentions the marker must never silence anything.
+        assert!(suppressed_rules(b"uses: musts-lint: allow everything\n").is_empty());
+        // Indented comments count; authors indent inside a check block.
+        assert!(suppressed_rules(b"    # musts-lint: allow unknown-key\n").contains("unknown-key"));
+    }
+
+    #[test]
+    fn an_unknown_key_error_can_also_be_suppressed() {
+        // Errors gate CI, so being able to opt out matters more, not less.
+        let dir = ws(
+            "version: 1\n# musts-lint: allow unknown-key\nchecks:\n  c:\n    uses: agent\n    paths: [\"src/**\"]\n    excludes: [\"x\"]\n    with:\n      facts: [\"f\"]\n",
+            &["src/a.swift"],
+        );
+        let r = run(dir.path()).unwrap();
+        assert!(!rules(&r).contains(&"unknown-key"), "{:?}", r.findings);
+        assert!(!r.has_errors());
+    }
+
+    /// A suppression in one manifest must not leak into another.
+    #[test]
+    fn suppression_is_scoped_to_its_own_manifest() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/deep")).unwrap();
+        std::fs::create_dir_all(dir.path().join("Sub/src/deep")).unwrap();
+        for p in [
+            "src/a.swift",
+            "src/deep/b.swift",
+            "Sub/src/a.swift",
+            "Sub/src/deep/b.swift",
+        ] {
+            std::fs::write(dir.path().join(p), "// x").unwrap();
+        }
+        std::fs::write(
+            dir.path().join("MUSTS.yml"),
+            "version: 1\n# musts-lint: allow glob-crosses-directories\nchecks:\n  a:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Sub/MUSTS.yml"),
+            "version: 1\nchecks:\n  b:\n    uses: agent\n    paths: [\"Sub/src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+        )
+        .unwrap();
+
+        let r = run(dir.path()).unwrap();
+        let crossing: Vec<&Finding> = r
+            .findings
+            .iter()
+            .filter(|f| f.rule == "glob-crosses-directories")
+            .collect();
+        assert_eq!(
+            crossing.len(),
+            1,
+            "only Sub/ should report: {:?}",
+            r.findings
+        );
+        assert_eq!(crossing[0].manifest, "Sub/MUSTS.yml");
     }
 }

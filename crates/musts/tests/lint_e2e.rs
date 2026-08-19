@@ -184,3 +184,99 @@ fn lint_creates_no_state_directory() {
         "lint must not bootstrap state"
     );
 }
+
+/// A `.mustsignore` rule that hides the files a check exists to protect
+/// is the expensive version of this rule. Boxy's `*.png` was meant for
+/// root-level screenshots; unanchored, it hid 122 snapshot baselines and
+/// the snapshot check went blind.
+#[test]
+fn an_ignore_rule_hiding_the_files_is_named_as_the_cause() {
+    let dir = ws(
+        "version: 1\nchecks:\n  snapshot:\n    uses: agent\n    paths: [\"Tests/__Snapshots__/**\"]\n    with:\n      facts: [\"f\"]\n",
+        &["Tests/__Snapshots__/Foo/a.1.png"],
+    );
+    std::fs::write(dir.path().join(".mustsignore"), "*.png\n").unwrap();
+    let (stdout, _) = lint(dir.path(), &[]);
+    assert!(stdout.contains("exist and are excluded"), "{stdout}");
+    assert!(stdout.contains("blind to them"), "{stdout}");
+    assert!(!stdout.contains("Check for a typo"), "{stdout}");
+}
+
+#[test]
+fn a_truly_missing_path_still_reads_as_a_typo() {
+    let dir = ws(
+        "version: 1\nchecks:\n  c:\n    uses: agent\n    paths: [\"NoSuchDir/**\"]\n    with:\n      facts: [\"f\"]\n",
+        &["src/a.swift"],
+    );
+    let (stdout, _) = lint(dir.path(), &[]);
+    assert!(stdout.contains("Check for a typo"), "{stdout}");
+}
+
+/// `paths:` is workspace-relative even in a nested manifest. Writing it
+/// relative to the manifest's own folder silently matches nothing.
+#[test]
+fn a_nested_manifest_with_a_relative_glob_gets_the_prefix_suggested() {
+    let dir = ws("version: 1\nchecks: {}\n", &["Sub/UI/a.swift"]);
+    std::fs::write(
+        dir.path().join("Sub/MUSTS.yml"),
+        "version: 1\nchecks:\n  ui:\n    uses: agent\n    paths: [\"UI/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+    )
+    .unwrap();
+    let (stdout, _) = lint(dir.path(), &[]);
+    assert!(stdout.contains("`Sub/UI/*.swift` would"), "{stdout}");
+    assert!(stdout.contains("workspace root"), "{stdout}");
+}
+
+/// A correct finding can still be unwanted: one repo's manifest header
+/// deliberately reasons about `*` crossing `/` and builds its globs to be
+/// disjoint because of it. A lint nobody can silence is a lint everybody
+/// ignores.
+#[test]
+fn a_suppression_comment_silences_that_rule_only() {
+    let manifest = |header: &str| {
+        format!(
+            "version: 1\n{header}checks:\n  c:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n"
+        )
+    };
+    let files = ["src/a.swift", "src/deep/b.swift"];
+
+    let noisy = ws(&manifest(""), &files);
+    assert!(
+        lint(noisy.path(), &[])
+            .0
+            .contains("glob-crosses-directories"),
+        "baseline: the warning must fire without a suppression"
+    );
+
+    let quiet = ws(
+        &manifest("# musts-lint: allow glob-crosses-directories\n"),
+        &files,
+    );
+    let (stdout, code) = lint(quiet.path(), &[]);
+    assert!(!stdout.contains("glob-crosses-directories"), "{stdout}");
+    assert_eq!(code, 0);
+
+    let other = ws(
+        &manifest("# musts-lint: allow glob-matches-nothing\n"),
+        &files,
+    );
+    assert!(
+        lint(other.path(), &[])
+            .0
+            .contains("glob-crosses-directories"),
+        "suppressing one rule must not mute the rest"
+    );
+}
+
+/// Suppressing an error-level rule must also drop the exit code, or the
+/// opt-out does not actually let CI pass.
+#[test]
+fn suppressing_an_error_rule_also_clears_the_exit_code() {
+    let dir = ws(
+        "version: 1\n# musts-lint: allow unknown-key\nchecks:\n  c:\n    uses: agent\n    paths: [\"src/**\"]\n    excludes: [\"x\"]\n    with:\n      facts: [\"f\"]\n",
+        &["src/a.swift"],
+    );
+    let (stdout, code) = lint(dir.path(), &[]);
+    assert!(!stdout.contains("unknown-key"), "{stdout}");
+    assert_eq!(code, 0, "a suppressed error must not gate CI");
+}
