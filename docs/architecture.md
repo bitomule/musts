@@ -8,7 +8,7 @@
 |---|---|
 | `crates/musts-protocol` | Pure serde types for the JSON-over-stdio extension protocol. Zero behaviour. |
 | `crates/musts-extension-util` | Helpers for Rust extension authors: stdio framing (`ipc_main`, `read_request`, `write_response`), MIME-based asset classification (`asset_kind::*`). |
-| `crates/musts-core` | All domain logic — manifests, snapshots, state, extension runtime, validate orchestrator, evidence pipeline. Also hosts the **built-in capabilities** under [`src/builtin/`](../crates/musts-core/src/builtin/): `agent`, `cargo/{fmt,clippy,test}`, `bazel/build`, `mav/expect`. |
+| `crates/musts-core` | All domain logic — manifests, snapshots, state, extension runtime, validate orchestrator, evidence pipeline. Also hosts the **built-in capabilities** under [`src/builtin/`](../crates/musts-core/src/builtin/): `agent`, `cargo/{fmt,clippy,test}`, `bazel/{build,test}`, `mav/expect`. |
 | `crates/musts` | The CLI binary. Argument parsing (`clap`), error rendering, exit codes. |
 | `tests/fixtures/stub_extension` | Configurable test stub used by the integration suite. Behaviour driven by `MUSTS_STUB_*` env vars (PLAN.md §7.2.1). |
 

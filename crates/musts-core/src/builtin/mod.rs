@@ -15,6 +15,7 @@ use crate::error::Error;
 
 pub mod agent;
 pub mod bazel_build;
+pub mod bazel_test;
 pub mod cargo;
 pub mod mav_expect;
 mod util;
@@ -72,6 +73,12 @@ const REGISTRY: &[BuiltinCapability] = &[
         schema: bazel_build::schema,
         resolve: bazel_build::resolve,
         evidence: bazel_build::evidence,
+    },
+    BuiltinCapability {
+        uses: "bazel/test",
+        schema: bazel_test::schema,
+        resolve: bazel_test::resolve,
+        evidence: bazel_test::evidence,
     },
     BuiltinCapability {
         uses: "mav/expect",

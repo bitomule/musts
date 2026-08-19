@@ -17,7 +17,7 @@ The single hard rule of musts:
 1. **Run `musts validate`** at the start of every task that touches code and any time you are about to declare work complete.
 2. Treat the returned task list as the validation todo list. `validate` emits **every** dirty task (no batching) and is idempotent — re-running it never invalidates the ids it just issued.
 3. Close each task by kind:
-   - **Deterministic** (`do:` is a plain command — `cargo/*`, `bazel/build`): run `musts run <task-id>`. musts executes the command, checks the real exit code, and records evidence for you — no re-running to satisfy the loop. A non-zero exit prints the output and records nothing; fix and re-run.
+   - **Deterministic** (`do:` is a plain command — `cargo/*`, `bazel/{build,test}`): run `musts run <task-id>`. musts executes the command, checks the real exit code, and records evidence for you — no re-running to satisfy the loop. A non-zero exit prints the output and records nothing; fix and re-run.
    - **Judgment** (`agent`, `mav`): perform the validation yourself and record evidence (step 7).
 4. If multiple judgment tasks are independent, use subagents in parallel — but **not** when the underlying tool is single-resource (simulators, local servers, build locks, shared databases). When in doubt, run sequentially.
 5. If one task `satisfies` multiple checks, execute it **once**. Do not split.
@@ -57,7 +57,7 @@ What this means for your workflow:
 ## Capabilities at a glance
 
 - **`agent`** is built into the musts binary. Manifests using `uses: agent` need no installed extension; the task tells you which facts to verify and asks for a text summary plus whatever assets you captured.
-- **`bazel/build`, `mav/expect`, and any third-party `uses: ...`** are installed as extensions under `<workspace>/.musts/extensions/<name>/`. They can be Rust binaries, bash scripts, Python — anything that speaks the JSON protocol.
+- **Any third-party `uses: ...`** is installed as an extension under `<workspace>/.musts/extensions/<name>/`. They can be Rust binaries, bash scripts, Python — anything that speaks the JSON protocol.
 
 ## Quick reference
 
@@ -98,7 +98,7 @@ Musts validation pending: 2 tasks.
 Run runnable checks with `musts run <task-id>`; record judgment checks with `musts evidence`. Then rerun `musts validate` until clean.
 ```
 
-Deterministic checks (`cargo/*`, `bazel/build`) show a `run:` line — `musts run` executes them and records evidence for you. Judgment checks (`agent`, `mav`) show `evidence:` + `submit:`.
+Deterministic checks (`cargo/*`, `bazel/{build,test}`) show a `run:` line — `musts run` executes them and records evidence for you. Judgment checks (`agent`, `mav`) show `evidence:` + `submit:`.
 
 When clean:
 

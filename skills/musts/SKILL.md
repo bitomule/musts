@@ -1,6 +1,6 @@
 ---
 name: musts
-description: Use the `musts` CLI to validate that your changes are done. Run `musts validate` to get the validation todo list; for deterministic checks (cargo/*, bazel/build) run `musts run <task-id>` to let musts execute and record them for you; for judgment checks (agent, mav) do the work and record evidence with `musts evidence`; then re-run `musts validate` until it is empty. Use after any code change in a repo that has a `MUSTS.yml`. Also covers adding a `.mustsignore` (gitignore-style file) when local artefacts are making the validation loop noisier than it should be.
+description: Use the `musts` CLI to validate that your changes are done. Run `musts validate` to get the validation todo list; for deterministic checks (cargo/*, bazel/build, bazel/test) run `musts run <task-id>` to let musts execute and record them for you; for judgment checks (agent, mav) do the work and record evidence with `musts evidence`; then re-run `musts validate` until it is empty. Use after any code change in a repo that has a `MUSTS.yml`. Also covers adding a `.mustsignore` (gitignore-style file) when local artefacts are making the validation loop noisier than it should be.
 ---
 
 # Musts
@@ -28,7 +28,7 @@ musts validate
    is idempotent — re-running it never invalidates the ids it just issued.
 2. Close each task:
    - **Runnable checks** (`do:` is a plain command — `cargo/*`,
-     `bazel/build`): just `musts run <task-id>`. musts executes the
+     `bazel/build`, `bazel/test`): just `musts run <task-id>`. musts executes the
      command itself, checks the real exit code, and records the evidence
      for you. You never re-run the build to satisfy the loop.
    - **Judgment checks** (`agent`, `mav` — verify facts, drive a UI): do
