@@ -48,7 +48,7 @@ cargo build --release --locked
 ./target/release/musts validate         # must exit 0
 ```
 
-The reference capabilities (`agent`, `cargo/{fmt,clippy,test}`, `bazel/build`, `mav/expect`) are built into the `musts` binary — no `.musts/extensions/` wiring is needed for self-validation.
+The reference capabilities (`agent`, `cargo/{fmt,clippy,test}`, `bazel/{build,test}`, `mav/expect`) are built into the `musts` binary — no `.musts/extensions/` wiring is needed for self-validation.
 
 If `musts validate` reports pending tasks, run the listed commands, capture
 logs **outside** the workspace (e.g. `$TMPDIR`), and submit evidence with
@@ -82,7 +82,7 @@ Pre-1.0: minor may break, patch is bug-fix only, `feat!:` ships as minor
 - `crates/musts-core` — orchestrator: manifests, snapshots, scope hashes,
   ledger; also home of the built-in capabilities under
   [`src/builtin/`](crates/musts-core/src/builtin/) (`agent`,
-  `cargo/{fmt,clippy,test}`, `bazel/build`, `mav/expect`)
+  `cargo/{fmt,clippy,test}`, `bazel/{build,test}`, `mav/expect`)
 - `crates/musts` — the `musts` CLI binary
 - `tests/fixtures/stub_extension` — protocol test stub, `publish = false`
 - `.musts/ledger.lock.yaml` — committed validated-state lock; OS-portable

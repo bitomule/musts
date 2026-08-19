@@ -230,6 +230,7 @@ The reference capabilities are built into the `musts` binary:
 | `cargo/clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `cargo/test` | `cargo test --workspace` |
 | `bazel/build` | Bazel target builds |
+| `bazel/test` | Bazel test targets, grouped into one run per scope |
 | `mav/expect` | Mobile Agent Verifier flows and device evidence |
 
 Third-party extensions can add new capabilities in any language that speaks
