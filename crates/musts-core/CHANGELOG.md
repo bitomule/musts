@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.1.9] - 2026-08-19
+
+### Added
+
+- Add musts lint ([#75](https://github.com/bitomule/musts/pull/75))
+- Implement bazel/test as a built-in capability ([#74](https://github.com/bitomule/musts/pull/74))
+- Warn when the ledger is gitignored or absent ([#72](https://github.com/bitomule/musts/pull/72))
+- Add musts stats ([#63](https://github.com/bitomule/musts/pull/63))
+
+### Fixed
+
+- Only invalidate a check by what it actually depends on ([#73](https://github.com/bitomule/musts/pull/73))
+- Warn on unknown manifest keys instead of ignoring them ([#71](https://github.com/bitomule/musts/pull/71))
+
 ## [0.1.8] - 2026-07-31
 
 ### Fixed
