@@ -55,16 +55,11 @@ pub fn compute_current_scope_hashes(
     let manifest_entries = discover_manifests(workspace_root)?;
     let manifests = load_manifests(workspace_root, &manifest_entries)?;
     let descriptors = discover_descriptors(workspace_root)?;
-    let ext_descriptor_hash = aggregate_descriptor_hash(&descriptors);
+    let cap_index = build_capability_index(&descriptors);
     let scope_files = compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
     let mut out = BTreeMap::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
-        let manifest_bytes = std::fs::read(&m.entry.abs_path).map_err(|source| Error::Io {
-            path: m.entry.abs_path.clone(),
-            source,
-        })?;
-        let manifest_hash = hash_bytes(&manifest_bytes);
         for (local_id, check) in &m.parsed.checks {
             let cid = check_id(&scope, local_id);
             let descendant_paths =
@@ -88,8 +83,8 @@ pub fn compute_current_scope_hashes(
             }
             let scope_hash = compute_scope_hash(&ScopeInput {
                 files: effective_files,
-                manifest_hash: manifest_hash.clone(),
-                ext_descriptor_hash: ext_descriptor_hash.clone(),
+                manifest_hash: check_declaration_hash(check),
+                ext_descriptor_hash: capability_descriptor_hash(&check.uses, &cap_index),
                 descendant_manifest_paths: descendant_paths,
             });
             out.insert(cid, scope_hash);
@@ -115,7 +110,6 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
 
     // 2. Discover extensions.
     let descriptors = discover_descriptors(workspace_root)?;
-    let ext_descriptor_hash = aggregate_descriptor_hash(&descriptors);
     let cap_index = build_capability_index(&descriptors);
 
     // 3. Schema-validate every `with` payload (manifest-error path).
@@ -152,11 +146,6 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     let mut per_check = Vec::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
-        let manifest_bytes = std::fs::read(&m.entry.abs_path).map_err(|source| Error::Io {
-            path: m.entry.abs_path.clone(),
-            source,
-        })?;
-        let manifest_hash = hash_bytes(&manifest_bytes);
         for (local_id, check) in &m.parsed.checks {
             let cid = check_id(&scope, local_id);
             let descendant_paths =
@@ -179,15 +168,34 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
             }
             let effective_file_paths: Vec<String> =
                 effective_files.iter().map(|(p, _)| p.clone()).collect();
+            let legacy_files = effective_files.clone();
+            let legacy_descendants = descendant_paths.clone();
             let scope_hash = compute_scope_hash(&ScopeInput {
                 files: effective_files,
-                manifest_hash: manifest_hash.clone(),
-                ext_descriptor_hash: ext_descriptor_hash.clone(),
+                manifest_hash: check_declaration_hash(check),
+                ext_descriptor_hash: capability_descriptor_hash(&check.uses, &cap_index),
                 descendant_manifest_paths: descendant_paths,
             });
             persist_scope_snapshot(&mut session.db, &cid, &scope_hash, now_unix)?;
+            // Narrowing the hash inputs changed every hash, so every
+            // ledger entry written by an older musts would miss and every
+            // check in every repo would reopen at once — the exact cost
+            // this change exists to remove. Accept a hit on the legacy
+            // hash too, for one release. Nothing is recorded under it, so
+            // a check stays legacy-green only until its tree changes, at
+            // which point both hashes move and it reopens honestly.
             let already_green = check_has_green_evidence(&session.db, &cid, &scope_hash)?
-                || ledger_lock.contains(&cid, &scope_hash);
+                || ledger_lock.contains(&cid, &scope_hash)
+                || {
+                    let legacy = compute_scope_hash(&ScopeInput {
+                        files: legacy_files,
+                        manifest_hash: legacy_manifest_hash(m)?,
+                        ext_descriptor_hash: legacy_aggregate_descriptor_hash(&descriptors),
+                        descendant_manifest_paths: legacy_descendants,
+                    });
+                    check_has_green_evidence(&session.db, &cid, &legacy)?
+                        || ledger_lock.contains(&cid, &legacy)
+                };
             per_check.push(PreparedCheck {
                 check_id: cid,
                 local_id: local_id.clone(),
@@ -418,7 +426,20 @@ fn scope_depth(scope_path: &str) -> u32 {
     }
 }
 
-fn aggregate_descriptor_hash(descriptors: &[ExtensionDescriptor]) -> String {
+/// Pre-narrowing hash of the whole manifest file. Retained only to
+/// recognise ledger entries written by an older musts — see the
+/// legacy-hash branch in [`run`]. Delete with the compatibility window.
+fn legacy_manifest_hash(m: &LoadedManifest) -> Result<String> {
+    let bytes = std::fs::read(&m.entry.abs_path).map_err(|source| Error::Io {
+        path: m.entry.abs_path.clone(),
+        source,
+    })?;
+    Ok(hash_bytes(&bytes))
+}
+
+/// Pre-narrowing aggregate over every loaded descriptor. Same lifetime as
+/// [`legacy_manifest_hash`].
+fn legacy_aggregate_descriptor_hash(descriptors: &[ExtensionDescriptor]) -> String {
     let mut hasher = blake3::Hasher::new();
     let mut sorted: Vec<&ExtensionDescriptor> = descriptors.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
@@ -429,6 +450,108 @@ fn aggregate_descriptor_hash(descriptors: &[ExtensionDescriptor]) -> String {
         hasher.update(b"\0");
     }
     hasher.finalize().to_hex().to_string()
+}
+
+/// Hash of the extension that implements `capability`, or a constant for
+/// built-ins.
+///
+/// This used to be an aggregate over *every* loaded descriptor, shared by
+/// every scope in the run. Registering one extension therefore reopened
+/// every check in the repo at once: measured in Todoke, adding a single
+/// extension reopened 5 checks, each needing fresh evidence, for a change
+/// that touched none of them.
+///
+/// A check can only be affected by the extension that implements the
+/// capability it uses, so that is all it hashes. Swapping an unrelated
+/// extension is now invisible to it.
+fn capability_descriptor_hash(capability: &str, index: &CapabilityIndex<'_>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    match index.get(capability) {
+        Some((descriptor, _)) => {
+            hasher.update(descriptor.name.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(&descriptor.descriptor_bytes);
+        }
+        // Built-ins have no descriptor to hash. Their behaviour is pinned
+        // by the binary version, which is deliberately *not* mixed in:
+        // upgrading musts would otherwise reopen every check everywhere.
+        None => {
+            hasher.update(b"builtin");
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Hash of one check's own declaration.
+///
+/// This used to be the hash of the whole `MUSTS.yml`, shared by every
+/// check in the file, which made the scope hash far more brittle than the
+/// design intends. Verified by ablation: appending a *comment* to a
+/// manifest reopened every check in it, and removing the comment made
+/// them green again; editing one check's `facts` reopened its sibling.
+///
+/// A check's outcome cannot depend on how a sibling is declared, so only
+/// its own fields are hashed.
+fn check_declaration_hash(check: &Check) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for part in [
+        check.local_id.as_str(),
+        check.uses.as_str(),
+        &canonical_json(&check.with_payload),
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\0");
+    }
+    // Pattern *order* is not semantically meaningful — both fields are
+    // matched as an unordered set — but reordering them is also not worth
+    // a special case, so they hash as written.
+    for field in [&check.paths, &check.exclude_paths] {
+        for pat in field {
+            hasher.update(pat.as_bytes());
+            hasher.update(b"\0");
+        }
+        hasher.update(b"\x01");
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Serialise a JSON value with object keys sorted, so the hash does not
+/// depend on `serde_json`'s map ordering (which varies with the
+/// `preserve_order` feature) or on the order the author wrote them.
+fn canonical_json(value: &serde_json::Value) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    write_canonical(&mut out, value);
+    return out;
+
+    fn write_canonical(out: &mut String, value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, k) in keys.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    let _ = write!(out, "{:?}:", k);
+                    write_canonical(out, &map[*k]);
+                }
+                out.push('}');
+            }
+            serde_json::Value::Array(items) => {
+                out.push('[');
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    write_canonical(out, v);
+                }
+                out.push(']');
+            }
+            other => out.push_str(&other.to_string()),
+        }
+    }
 }
 
 type CapabilityIndex<'a> = BTreeMap<&'a str, (&'a ExtensionDescriptor, &'a Capability)>;
@@ -1227,5 +1350,107 @@ mod tests {
         ];
         let out = filter_effective_files(files, &filter);
         assert_eq!(out, vec![("app/a.swift".to_string(), "h1".to_string())]);
+    }
+
+    fn check_with(uses: &str, with: serde_json::Value, paths: &[&str]) -> Check {
+        Check {
+            local_id: "c".into(),
+            uses: uses.into(),
+            with_payload: with,
+            paths: paths.iter().map(|s| (*s).to_string()).collect(),
+            exclude_paths: vec![],
+        }
+    }
+
+    #[test]
+    fn check_declaration_hash_ignores_sibling_checks_entirely() {
+        // The hash takes a single Check, so a sibling cannot reach it.
+        // This is the property that stopped a comment (or another
+        // check's edit) from reopening the whole file.
+        let a = check_with("agent", serde_json::json!({"facts": ["x"]}), &["src/a"]);
+        let b = check_with("agent", serde_json::json!({"facts": ["x"]}), &["src/a"]);
+        assert_eq!(check_declaration_hash(&a), check_declaration_hash(&b));
+    }
+
+    #[test]
+    fn check_declaration_hash_changes_with_every_field_that_matters() {
+        let base = check_with("agent", serde_json::json!({"facts": ["x"]}), &["src/a"]);
+        let h = check_declaration_hash(&base);
+
+        let mut uses = base.clone();
+        uses.uses = "cargo/test".into();
+        assert_ne!(h, check_declaration_hash(&uses), "uses");
+
+        let mut with = base.clone();
+        with.with_payload = serde_json::json!({"facts": ["y"]});
+        assert_ne!(h, check_declaration_hash(&with), "with");
+
+        let mut paths = base.clone();
+        paths.paths = vec!["src/b".into()];
+        assert_ne!(h, check_declaration_hash(&paths), "paths");
+
+        let mut excl = base.clone();
+        excl.exclude_paths = vec!["src/gen".into()];
+        assert_ne!(h, check_declaration_hash(&excl), "exclude_paths");
+
+        let mut id = base;
+        id.local_id = "other".into();
+        assert_ne!(h, check_declaration_hash(&id), "local_id");
+    }
+
+    #[test]
+    fn canonical_json_is_key_order_independent() {
+        let a = serde_json::json!({"b": 1, "a": {"d": 2, "c": 3}});
+        let b = serde_json::json!({"a": {"c": 3, "d": 2}, "b": 1});
+        assert_eq!(canonical_json(&a), canonical_json(&b));
+    }
+
+    #[test]
+    fn canonical_json_still_separates_different_values() {
+        let a = serde_json::json!({"a": 1});
+        let b = serde_json::json!({"a": 2});
+        assert_ne!(canonical_json(&a), canonical_json(&b));
+        // Array order *is* meaningful.
+        assert_ne!(
+            canonical_json(&serde_json::json!([1, 2])),
+            canonical_json(&serde_json::json!([2, 1]))
+        );
+    }
+
+    #[test]
+    fn paths_and_exclude_paths_are_not_interchangeable_in_the_hash() {
+        // A separator between the two lists stops ["a"]/[] hashing the
+        // same as []/["a"], which would let an author swap an include
+        // for an exclude and inherit the old evidence.
+        let mut inc = check_with("agent", serde_json::json!({}), &["a"]);
+        inc.exclude_paths = vec![];
+        let mut exc = check_with("agent", serde_json::json!({}), &[]);
+        exc.exclude_paths = vec!["a".into()];
+        assert_ne!(check_declaration_hash(&inc), check_declaration_hash(&exc));
+    }
+
+    /// The legacy helpers exist only to recognise ledger entries written
+    /// before the narrowing. If their algorithm drifts they stop matching
+    /// and every repo silently reopens — the failure this compatibility
+    /// window exists to prevent. Pin them.
+    #[test]
+    fn legacy_aggregate_descriptor_hash_is_byte_stable() {
+        let descriptors: Vec<ExtensionDescriptor> = vec![];
+        assert_eq!(
+            legacy_aggregate_descriptor_hash(&descriptors),
+            blake3::Hasher::new().finalize().to_hex().to_string(),
+            "an empty descriptor set must hash as the empty blake3, as it did before"
+        );
+    }
+
+    #[test]
+    fn builtin_capabilities_share_one_descriptor_hash() {
+        // No descriptor means nothing extension-shaped can perturb the
+        // check, and upgrading the musts binary must not either.
+        let index = CapabilityIndex::new();
+        assert_eq!(
+            capability_descriptor_hash("agent", &index),
+            capability_descriptor_hash("cargo/test", &index)
+        );
     }
 }
