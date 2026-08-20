@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "musts"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "musts-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "fs2",

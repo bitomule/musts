@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.3.0] - 2026-08-20
+
+### Added
+
+- Make `paths:` relative to the declaring manifest ([#79](https://github.com/bitomule/musts/pull/79)) **(breaking)**
+
 ## [0.2.1] - 2026-08-19
 
 ### Added
