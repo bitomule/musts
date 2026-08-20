@@ -110,14 +110,23 @@ never objected to anything.
 
 ### Glob semantics
 
-`paths:` and `exclude_paths:` do **not** behave like `.gitignore`. Three
-surprises, all of which have bitten real manifests:
+`paths:` and `exclude_paths:` are matched against the path **relative to
+the manifest's own folder**. A `MUSTS.yml` in `App/macOSUI/MainWindow/`
+writes `MacOSMainView.swift` for the file beside it. Repeating the folder
+(`App/macOSUI/MainWindow/MacOSMainView.swift`) matches nothing.
+
+Beyond that they do **not** behave like `.gitignore`. Three surprises, all
+of which have bitten real manifests:
 
 | | Behaviour |
 |---|---|
 | Case | **Insensitive.** `*View.swift` also matches `RequestReview.swift` and `MeetingPreview.swift`. |
 | `*` and `**` | **Both cross `/`.** `UI/*View.swift` also matches `UI/Deep/Nested/FooView.swift`. There is no "one directory level" wildcard. |
 | Leading `!` | **Rejected at parse time.** `globset` treats `!` as a literal, so `!foo` would match nothing at all. Use `exclude_paths:` instead. |
+
+A check whose `paths:` match nothing cannot fire, and `validate` lists it
+under **Ignored checks** with the reason. It is never dropped in silence —
+that is how one repo's check went 89 days without running once.
 
 `musts lint` reports each of these against the files actually in your tree,
 naming the ones that match only because of the surprise — so you never have

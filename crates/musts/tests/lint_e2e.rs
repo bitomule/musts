@@ -212,10 +212,25 @@ fn a_truly_missing_path_still_reads_as_a_typo() {
     assert!(stdout.contains("Check for a typo"), "{stdout}");
 }
 
-/// `paths:` is workspace-relative even in a nested manifest. Writing it
-/// relative to the manifest's own folder silently matches nothing.
+/// `paths:` are relative to the manifest's folder, so the leftover
+/// workspace-relative form — which repeats the folder — is what matches
+/// nothing now.
 #[test]
-fn a_nested_manifest_with_a_relative_glob_gets_the_prefix_suggested() {
+fn a_scope_prefixed_glob_in_a_nested_manifest_gets_the_fix_suggested() {
+    let dir = ws("version: 1\nchecks: {}\n", &["Sub/UI/a.swift"]);
+    std::fs::write(
+        dir.path().join("Sub/MUSTS.yml"),
+        "version: 1\nchecks:\n  ui:\n    uses: agent\n    paths: [\"Sub/UI/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+    )
+    .unwrap();
+    let (stdout, _) = lint(dir.path(), &[]);
+    assert!(stdout.contains("`UI/*.swift` would"), "{stdout}");
+    assert!(stdout.contains("this manifest's folder"), "{stdout}");
+}
+
+/// And the intuitive form is simply correct — no finding at all.
+#[test]
+fn a_manifest_relative_glob_in_a_nested_manifest_is_not_flagged() {
     let dir = ws("version: 1\nchecks: {}\n", &["Sub/UI/a.swift"]);
     std::fs::write(
         dir.path().join("Sub/MUSTS.yml"),
@@ -223,8 +238,7 @@ fn a_nested_manifest_with_a_relative_glob_gets_the_prefix_suggested() {
     )
     .unwrap();
     let (stdout, _) = lint(dir.path(), &[]);
-    assert!(stdout.contains("`Sub/UI/*.swift` would"), "{stdout}");
-    assert!(stdout.contains("workspace root"), "{stdout}");
+    assert!(!stdout.contains("glob-matches-nothing"), "{stdout}");
 }
 
 /// A correct finding can still be unwanted: one repo's manifest header
