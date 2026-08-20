@@ -99,7 +99,8 @@ pub struct Check {
     pub with_payload: serde_json::Value,
     /// Optional gitignore-style glob patterns. When non-empty, the
     /// check's effective scope is narrowed to files matching at least
-    /// one pattern (relative to the workspace root). An empty vector
+    /// one pattern (relative to the declaring manifest's folder). An
+    /// empty vector
     /// means "no filter — apply to every file under the declaring
     /// manifest's folder, modulo the standard same-capability carve-out".
     pub paths: Vec<String>,

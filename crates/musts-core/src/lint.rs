@@ -208,9 +208,14 @@ fn lint_check(
             // a better message than lint could give.
             continue;
         };
+        // `paths:` are relative to the manifest's folder, so the glob
+        // rules must evaluate against the same shape `validate` uses.
+        // Anything else and lint contradicts the loop it is advising on.
+        let local: Vec<String> = relative_to_scope(files, &scope_dir);
+        let local_ignored: Vec<String> = relative_to_scope(ignored_files, &scope_dir);
         let ctx = GlobContext {
-            files,
-            ignored_files,
+            files: &local,
+            ignored_files: &local_ignored,
             scope_dir: &scope_dir,
             matcher,
         };
@@ -430,20 +435,26 @@ fn explain_empty_match(pattern: &str, ctx: &GlobContext<'_>) -> String {
         );
     }
 
-    // `paths:` globs are workspace-relative even inside a nested manifest,
-    // which reads as a surprise often enough to be worth naming.
+    // The migration hazard: a pattern still carrying the manifest's own
+    // folder, left over from when `paths:` were workspace-relative.
     if !ctx.scope_dir.is_empty() {
-        let prefixed = format!("{}/{}", ctx.scope_dir, pattern);
-        if let Ok(m) = GlobBuilder::new(&prefixed)
-            .case_insensitive(true)
-            .build()
-            .map(|g| g.compile_matcher())
+        let prefix = format!("{}/", ctx.scope_dir);
+        if let Some(without) = pattern
+            .strip_prefix(&prefix)
+            .or_else(|| pattern.strip_prefix(prefix.to_lowercase().as_str()))
         {
-            if ctx.files.iter().any(|f| m.is_match(f.as_str())) {
-                return format!(
-                    "`{pattern}` matches no file, but `{prefixed}` would. `paths:` globs are \
-                     relative to the **workspace root**, not to this manifest's folder."
-                );
+            if let Ok(m) = GlobBuilder::new(without)
+                .case_insensitive(true)
+                .build()
+                .map(|g| g.compile_matcher())
+            {
+                if ctx.files.iter().any(|f| m.is_match(f.as_str())) {
+                    return format!(
+                        "`{pattern}` matches no file, but `{without}` would. `paths:` globs are \
+                         relative to **this manifest's folder**, so the `{prefix}` prefix is \
+                         repeated and matches nothing."
+                    );
+                }
             }
         }
     }
@@ -452,6 +463,19 @@ fn explain_empty_match(pattern: &str, ctx: &GlobContext<'_>) -> String {
         "`{pattern}` matches no file in the workspace today, so the check never fires. Check for \
          a typo."
     )
+}
+
+/// Files under `scope_dir`, rendered relative to it — the shape a
+/// manifest's `paths:` are matched against.
+fn relative_to_scope(files: &[String], scope_dir: &str) -> Vec<String> {
+    if scope_dir.is_empty() {
+        return files.to_vec();
+    }
+    let prefix = format!("{scope_dir}/");
+    files
+        .iter()
+        .filter_map(|f| f.strip_prefix(&prefix).map(str::to_string))
+        .collect()
 }
 
 fn under(file: &str, dir: &str) -> bool {
@@ -836,17 +860,17 @@ mod tests {
         assert!(f.message.contains("Check for a typo"), "{}", f.message);
     }
 
-    /// `paths:` globs are workspace-relative even inside a nested
-    /// manifest. Writing them relative to the manifest's own folder
-    /// silently matches nothing.
+    /// `paths:` are relative to the manifest's folder, so the leftover
+    /// workspace-relative form — which repeats the folder — is now the
+    /// one that matches nothing.
     #[test]
-    fn a_manifest_relative_glob_in_a_nested_manifest_is_diagnosed() {
+    fn a_scope_prefixed_glob_in_a_nested_manifest_is_diagnosed() {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("Sub/UI")).unwrap();
         std::fs::write(dir.path().join("Sub/UI/a.swift"), "// x").unwrap();
         std::fs::write(
             dir.path().join("Sub/MUSTS.yml"),
-            "version: 1\nchecks:\n  ui:\n    uses: agent\n    paths: [\"UI/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+            "version: 1\nchecks:\n  ui:\n    uses: agent\n    paths: [\"Sub/UI/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
         )
         .unwrap();
 
@@ -856,12 +880,31 @@ mod tests {
             .iter()
             .find(|f| f.rule == "glob-matches-nothing")
             .unwrap_or_else(|| panic!("{:?}", r.findings));
+        assert!(f.message.contains("`UI/*.swift` would"), "{}", f.message);
         assert!(
-            f.message.contains("`Sub/UI/*.swift` would"),
+            f.message.contains("this manifest's folder"),
             "{}",
             f.message
         );
-        assert!(f.message.contains("workspace root"), "{}", f.message);
+    }
+
+    /// The intuitive form now just works — the whole point of the change.
+    #[test]
+    fn a_manifest_relative_glob_in_a_nested_manifest_now_matches() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("Sub/UI")).unwrap();
+        std::fs::write(dir.path().join("Sub/UI/a.swift"), "// x").unwrap();
+        std::fs::write(
+            dir.path().join("Sub/MUSTS.yml"),
+            "version: 1\nchecks:\n  ui:\n    uses: agent\n    paths: [\"UI/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+        )
+        .unwrap();
+        let r = run(dir.path()).unwrap();
+        assert!(
+            !rules(&r).contains(&"glob-matches-nothing"),
+            "the manifest-relative form must just work: {:?}",
+            r.findings
+        );
     }
 
     #[test]
@@ -944,7 +987,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.path().join("Sub/MUSTS.yml"),
-            "version: 1\nchecks:\n  b:\n    uses: agent\n    paths: [\"Sub/src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+            "version: 1\nchecks:\n  b:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
         )
         .unwrap();
 

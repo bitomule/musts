@@ -143,10 +143,18 @@ folder. Fine for a runnable capability; expensive under `uses: agent`.
 
 ### Glob semantics — these are not `.gitignore` rules
 
+- **Relative to the manifest's own folder**, not the workspace root. A
+  `MUSTS.yml` in `App/macOSUI/MainWindow/` writes `MacOSMainView.swift`
+  for the file beside it — never `App/macOSUI/MainWindow/MacOSMainView.swift`,
+  which repeats the folder and matches nothing.
 - **Case-insensitive.** `*View.swift` also matches `RequestReview.swift`.
 - **`*` and `**` both cross `/`.** `UI/*View.swift` also matches
   `UI/Deep/Nested/FooView.swift`. There is no single-level wildcard.
 - **Leading `!` is rejected** at parse time. Use `exclude_paths:`.
+
+If `paths:` match nothing, `validate` says so under **Ignored checks** —
+a check that cannot fire is never hidden. Treat that line as a bug in the
+manifest, not as "nothing to do".
 
 ### Auditing an existing manifest
 

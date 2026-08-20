@@ -65,13 +65,15 @@ pub fn compute_current_scope_hashes(
             let descendant_paths =
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
             let path_filter = compile_path_filter(&m.entry.rel_path, check)?;
+            let scope_prefix = normalise_prefix(&m.scope_prefix);
             let effective_files = filter_effective_files(
                 effective_files_for(
                     &scope_files,
-                    &normalise_prefix(&m.scope_prefix),
+                    &scope_prefix,
                     &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
                 ),
                 &path_filter,
+                &scope_prefix,
             );
             // A check with an explicit `paths:`/`exclude_paths:` filter
             // that currently matches nothing is "not applicable" — it has
@@ -144,6 +146,9 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     //    ledger row for the current scope_hash; Phase 4 adds the writes).
     let scope_files = compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
     let mut per_check = Vec::new();
+    // Checks whose `paths:` currently match nothing. Reported, never
+    // silently dropped — see the push site below.
+    let mut inapplicable: Vec<musts_protocol::IgnoredCheck> = Vec::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
         for (local_id, check) in &m.parsed.checks {
@@ -151,19 +156,30 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
             let descendant_paths =
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
             let path_filter = compile_path_filter(&m.entry.rel_path, check)?;
+            let scope_prefix = normalise_prefix(&m.scope_prefix);
             let effective_files = filter_effective_files(
                 effective_files_for(
                     &scope_files,
-                    &normalise_prefix(&m.scope_prefix),
+                    &scope_prefix,
                     &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
                 ),
                 &path_filter,
+                &scope_prefix,
             );
-            // Skip checks whose `paths:`/`exclude_paths:` filter matches
-            // no current files: there is nothing for the extension to
-            // validate and emitting a task would dead-end. The check
-            // rejoins the loop automatically when a matching file appears.
+            // A filter matching nothing means there is nothing to
+            // validate, so no task is emitted — but say so out loud.
+            //
+            // This used to `continue` in silence: the check vanished from
+            // every surface, and `validate` reported "clean" as if it had
+            // passed. That is how one repo's check went 89 days without
+            // running once. A check that cannot fire is a very different
+            // thing from a check that fired and was satisfied, and only
+            // one of them deserves silence.
             if path_filter.is_active() && effective_files.is_empty() {
+                inapplicable.push(musts_protocol::IgnoredCheck {
+                    id: cid.clone(),
+                    reason: inapplicable_reason(check, &scope_prefix, &scope_files),
+                });
                 continue;
             }
             let effective_file_paths: Vec<String> =
@@ -303,6 +319,11 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         !tasks.is_empty(),
     );
     warnings.extend(manifest_warnings(&manifests));
+
+    // Inapplicable checks first: "this check cannot fire" outranks "a
+    // capability chose not to emit a task for it".
+    inapplicable.extend(ignored_checks);
+    let ignored_checks = inapplicable;
 
     Ok(ValidateReport {
         workspace_root: workspace_root.display().to_string(),
@@ -869,18 +890,125 @@ fn compile_glob_set(
 /// entry matching the `exclude` set. Matching is against the
 /// workspace-relative path string, so a pattern like `**/Tracking*.swift`
 /// works regardless of how deep the file is.
+/// Narrow `files` to the check's `paths:`/`exclude_paths:` filter.
+///
+/// Patterns match against the path **relative to the declaring
+/// manifest's folder**, not to the workspace root. A manifest at
+/// `App/macOSUI/MainWindow/` writes `MacOSMainView.swift`, and reads the
+/// way every author expects it to.
+///
+/// It used to be workspace-relative, which meant that same manifest had
+/// to repeat its own location in every pattern. Two independent authors
+/// wrote the intuitive form instead, and because a filter matching
+/// nothing silently removed the check, one of them went unnoticed for 89
+/// days. The mirror-image mistake — a pattern still carrying the scope
+/// prefix — is now reported rather than silently matching nothing; see
+/// `scope_prefixed_pattern`.
 fn filter_effective_files(
     files: Vec<(String, String)>,
     filter: &PathFilter,
+    scope_prefix: &str,
 ) -> Vec<(String, String)> {
     files
         .into_iter()
         .filter(|(rel, _)| {
-            let included = filter.include.as_ref().is_none_or(|set| set.is_match(rel));
-            let excluded = filter.exclude.as_ref().is_some_and(|set| set.is_match(rel));
+            let local = strip_scope_prefix(rel, scope_prefix);
+            let included = filter
+                .include
+                .as_ref()
+                .is_none_or(|set| set.is_match(local));
+            let excluded = filter
+                .exclude
+                .as_ref()
+                .is_some_and(|set| set.is_match(local));
             included && !excluded
         })
         .collect()
+}
+
+/// Why a check's `paths:` currently match nothing, in the most useful
+/// terms available.
+///
+/// The migration hazard for manifest-relative patterns is a pattern that
+/// still carries the manifest's own folder — the exact inverse of the
+/// mistake that motivated the change. Naming it turns a silent
+/// non-firing check into a one-line fix.
+fn inapplicable_reason(
+    check: &Check,
+    scope_prefix: &str,
+    scope_files: &BTreeMap<String, String>,
+) -> String {
+    if let Some((written, without)) = scope_prefixed_pattern(check, scope_prefix, scope_files) {
+        return format!(
+            "`paths:` match no file, so this check cannot fire. `{written}` still carries this \
+             manifest's own folder — `paths:` are relative to the manifest, so write `{without}`."
+        );
+    }
+    let patterns: Vec<&str> = check
+        .paths
+        .iter()
+        .chain(check.exclude_paths.iter())
+        .map(String::as_str)
+        .collect();
+    format!(
+        "`paths:` match no file, so this check cannot fire — nothing to validate. Patterns: {}. \
+         They are relative to this manifest's folder.",
+        patterns.join(", ")
+    )
+}
+
+/// A `paths:` entry that would match if its leading scope prefix were
+/// removed. Returns `(as written, as it should be)`.
+fn scope_prefixed_pattern(
+    check: &Check,
+    scope_prefix: &str,
+    scope_files: &BTreeMap<String, String>,
+) -> Option<(String, String)> {
+    if scope_prefix.is_empty() {
+        return None;
+    }
+    // `scope_prefix` carries no trailing slash, so add one before
+    // stripping — otherwise the suggestion comes back as `/Foo/**`.
+    let prefix = format!("{scope_prefix}/");
+    for pat in &check.paths {
+        let Some(stripped) = pat.to_lowercase().strip_prefix(&prefix).map(str::to_string) else {
+            continue;
+        };
+        let Ok(matcher) = GlobBuilder::new(&stripped)
+            .case_insensitive(true)
+            .build()
+            .map(|g| g.compile_matcher())
+        else {
+            continue;
+        };
+        let matches = scope_files
+            .keys()
+            .filter_map(|f| f.strip_prefix(&prefix))
+            .any(|local| matcher.is_match(local));
+        if matches {
+            // Slice the original so the suggestion keeps the author's case.
+            return Some((pat.clone(), pat[prefix.len()..].to_string()));
+        }
+    }
+    None
+}
+
+/// A workspace-relative path rendered relative to `scope_prefix`.
+///
+/// `scope_prefix` is already normalised (NFC, lowercased) and either
+/// empty for a root manifest or `"app/shared"`-shaped — **no trailing
+/// slash**, which is why the separator is added here rather than assumed.
+/// Paths that do not sit under it are returned unchanged:
+/// `effective_files_for` has already restricted the set, so that case
+/// does not arise in practice, and mangling a path would be worse than
+/// passing it through.
+fn strip_scope_prefix<'a>(rel: &'a str, scope_prefix: &str) -> &'a str {
+    if scope_prefix.is_empty() {
+        return rel;
+    }
+    rel.strip_prefix(scope_prefix)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(rel)
 }
 
 /// Filter the workspace-wide file map down to a check's effective scope.
@@ -1249,7 +1377,7 @@ mod tests {
             ("a.rs".into(), "h1".into()),
             ("b.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files.clone(), &PathFilter::default());
+        let out = filter_effective_files(files.clone(), &PathFilter::default(), "");
         assert_eq!(out, files);
     }
 
@@ -1262,7 +1390,7 @@ mod tests {
             ("App/OtherFile.swift".into(), "h2".into()),
             ("Tests/TrackingEventsTests.swift".into(), "h3".into()),
         ];
-        let out = filter_effective_files(files, &filter);
+        let out = filter_effective_files(files, &filter, "");
         assert_eq!(
             out,
             vec![
@@ -1284,7 +1412,7 @@ mod tests {
             ("tests/it.rs".into(), "h2".into()),
             ("src/main.rs".into(), "h3".into()),
         ];
-        let out = filter_effective_files(files, &filter);
+        let out = filter_effective_files(files, &filter, "");
         assert_eq!(
             out,
             vec![
@@ -1302,7 +1430,7 @@ mod tests {
             ("App/A.swift".into(), "h1".into()),
             ("App/B.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files, &filter);
+        let out = filter_effective_files(files, &filter, "");
         assert!(out.is_empty());
     }
 
@@ -1317,7 +1445,7 @@ mod tests {
             ("app/trackingevents.swift".into(), "h1".into()),
             ("app/other.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files, &filter);
+        let out = filter_effective_files(files, &filter, "");
         assert_eq!(
             out,
             vec![("app/trackingevents.swift".to_string(), "h1".to_string())]
@@ -1334,7 +1462,7 @@ mod tests {
             ("app/main.swift".into(), "h1".into()),
             ("tools/config.bzl".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files, &filter);
+        let out = filter_effective_files(files, &filter, "");
         assert_eq!(out, vec![("app/main.swift".to_string(), "h1".to_string())]);
     }
 
@@ -1348,7 +1476,7 @@ mod tests {
             ("app/b.generated.swift".into(), "h2".into()),
             ("app/notes.md".into(), "h3".into()),
         ];
-        let out = filter_effective_files(files, &filter);
+        let out = filter_effective_files(files, &filter, "");
         assert_eq!(out, vec![("app/a.swift".to_string(), "h1".to_string())]);
     }
 
