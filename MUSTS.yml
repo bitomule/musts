@@ -1,9 +1,39 @@
 version: 1
 
+# Every check declares the files it actually reads. Without `paths:` a check's
+# scope is the whole manifest folder, so editing a README reopened the full
+# suite.
+#
+# `docs/examples/**` is in the compile/test scope on purpose: the shell
+# extension e2e test loads the eslint-check example from there
+# (crates/musts/tests/shell_extension_e2e.rs).
+
 checks:
   fmt:
     uses: cargo/fmt
+    paths:
+      - "crates/**/*.rs"
+      - "tests/**/*.rs"
+      - "rust-toolchain.toml"
+
   clippy:
     uses: cargo/clippy
+    paths:
+      - "crates/**"
+      - "tests/**"
+      - "fixtures/**"
+      - "docs/examples/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+
   test:
     uses: cargo/test
+    paths:
+      - "crates/**"
+      - "tests/**"
+      - "fixtures/**"
+      - "docs/examples/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
