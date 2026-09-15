@@ -843,6 +843,14 @@ impl PathFilter {
 /// always lowercases the scope-file map keys for OS-portable scope
 /// hashes. Writing `**/Tracking*.swift` keeps matching regardless of
 /// the file's on-disk case.
+///
+/// `*` stops at `/` and only `**` descends, as in `.gitignore`. It used
+/// to cross `/` too, which meant `UI/*View.swift` silently covered every
+/// view at any depth: the pattern read as one directory level and
+/// behaved as a whole subtree. Authors compensated by enumerating files
+/// by hand — one manifest listed 70 paths, and its header comment blamed
+/// exactly this. See `lint`'s `glob-star-stops-at-slash` rule, which
+/// reports every pattern whose meaning narrowed under the new semantics.
 fn compile_path_filter(manifest_rel: &std::path::Path, check: &Check) -> Result<PathFilter> {
     Ok(PathFilter {
         include: compile_glob_set(manifest_rel, check, "paths", &check.paths)?,
@@ -865,6 +873,7 @@ fn compile_glob_set(
     for pat in patterns {
         let glob = GlobBuilder::new(pat)
             .case_insensitive(true)
+            .literal_separator(true)
             .build()
             .map_err(|err| Error::Manifest {
                 path: manifest_rel.to_path_buf(),
@@ -976,6 +985,7 @@ fn scope_prefixed_pattern(
         };
         let Ok(matcher) = GlobBuilder::new(&stripped)
             .case_insensitive(true)
+            .literal_separator(true)
             .build()
             .map(|g| g.compile_matcher())
         else {

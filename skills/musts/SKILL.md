@@ -120,8 +120,9 @@ If a finding is deliberate, silence that one rule for the file with a
 comment; do not delete the check or widen the glob to make lint quiet:
 
 ```yaml
-# These globs are built to be disjoint knowing `*` crosses `/`.
-# musts-lint: allow glob-crosses-directories
+# This check covers one directory level on purpose; the subtree
+# belongs to the sibling check.
+# musts-lint: allow glob-star-stops-at-slash
 ```
 
 Scope is the whole manifest, and it is per-rule — other rules keep
@@ -148,8 +149,11 @@ folder. Fine for a runnable capability; expensive under `uses: agent`.
   for the file beside it — never `App/macOSUI/MainWindow/MacOSMainView.swift`,
   which repeats the folder and matches nothing.
 - **Case-insensitive.** `*View.swift` also matches `RequestReview.swift`.
-- **`*` and `**` both cross `/`.** `UI/*View.swift` also matches
-  `UI/Deep/Nested/FooView.swift`. There is no single-level wildcard.
+- **`*` stops at `/`; only `**` descends**, as in `.gitignore`.
+  `UI/*View.swift` covers `UI/HomeView.swift` and not
+  `UI/Deep/FooView.swift` — write `UI/**/*View.swift` for the subtree.
+  Before 0.4 `*` crossed `/` too, so older patterns cover less than their
+  author meant; `musts lint` names every file they lost.
 - **Leading `!` is rejected** at parse time. Use `exclude_paths:`.
 
 If `paths:` match nothing, `validate` says so under **Ignored checks** —
