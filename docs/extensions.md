@@ -96,7 +96,8 @@ checks:
 Semantics:
 
 - `paths` accepts either a single string or a list of strings. Absent or empty means "no filter" — the legacy behaviour applies (all files under the manifest's folder, minus the same-capability carve-out).
-- Patterns are matched against the workspace-relative path. `**/Tracking*.swift` matches at any depth; `tests/**` is rooted at the workspace.
+- Patterns are matched against the path relative to the declaring manifest's folder. `**/Tracking*.swift` matches at any depth; `tests/**` is rooted at that folder.
+- `*` stops at `/` and only `**` descends, as in `.gitignore`. `UI/*View.swift` covers `UI/HomeView.swift` but not `UI/Deep/FooView.swift` — write `UI/**/*View.swift` for the whole subtree. Before 0.4 `*` crossed `/` as well, so a pattern written then covers fewer files now; `musts lint` names every one of them under `glob-star-stops-at-slash`.
 - On case-insensitive filesystems (default macOS / Windows) matching is case-insensitive — mirrors the workspace's own behaviour so `**/Tracking*.swift` keeps matching `Tracking.swift` regardless of how the file is stored.
 - A check whose `paths` currently matches **no** file is "not applicable" and is dropped from the task list. When a matching file is added later, the next `musts validate` picks it up automatically.
 - An invalid glob is a manifest error (exit 2) — surfaced at parse time, with the check id and the offending pattern.

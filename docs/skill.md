@@ -65,8 +65,9 @@ When a finding is deliberate, silence that single rule for the file rather
 than deleting the check or widening a glob to make lint quiet:
 
 ```yaml
-# These two globs are built to be disjoint knowing `*` crosses `/`.
-# musts-lint: allow glob-crosses-directories
+# This check covers one directory level on purpose; the subtree
+# belongs to the sibling check.
+# musts-lint: allow glob-star-stops-at-slash
 ```
 
 The suppression covers the whole manifest and only the named rule; take
@@ -115,13 +116,13 @@ the manifest's own folder**. A `MUSTS.yml` in `App/macOSUI/MainWindow/`
 writes `MacOSMainView.swift` for the file beside it. Repeating the folder
 (`App/macOSUI/MainWindow/MacOSMainView.swift`) matches nothing.
 
-Beyond that they do **not** behave like `.gitignore`. Three surprises, all
-of which have bitten real manifests:
+Beyond that they do **not** behave like `.gitignore` in every respect.
+Surprises that have bitten real manifests:
 
 | | Behaviour |
 |---|---|
 | Case | **Insensitive.** `*View.swift` also matches `RequestReview.swift` and `MeetingPreview.swift`. |
-| `*` and `**` | **Both cross `/`.** `UI/*View.swift` also matches `UI/Deep/Nested/FooView.swift`. There is no "one directory level" wildcard. |
+| `*` and `**` | **`*` stops at `/`, `**` descends.** `UI/*View.swift` matches `UI/HomeView.swift` and not `UI/Deep/FooView.swift`; write `UI/**/*View.swift` for the whole subtree. |
 | Leading `!` | **Rejected at parse time.** `globset` treats `!` as a literal, so `!foo` would match nothing at all. Use `exclude_paths:` instead. |
 
 A check whose `paths:` match nothing cannot fire, and `validate` lists it

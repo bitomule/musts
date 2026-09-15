@@ -201,6 +201,7 @@ fn lint_check(
     for pat in check.paths.iter().chain(check.exclude_paths.iter()) {
         let Ok(matcher) = GlobBuilder::new(pat)
             .case_insensitive(true)
+            .literal_separator(true)
             .build()
             .map(|g| g.compile_matcher())
         else {
@@ -227,10 +228,9 @@ fn lint_check(
 
 /// Rules the manifest opts out of, via `# musts-lint: allow <rule>`.
 ///
-/// A correct finding can still be noise. One repo's manifest opens with a
-/// header comment deliberately reasoning about `*` crossing `/` and
-/// constructing two globs to be disjoint *because* of it — the
-/// `glob-crosses-directories` warning there is accurate and unwanted, and
+/// A correct finding can still be noise. A check that deliberately covers
+/// one directory level and leaves the subtree to a sibling check gets a
+/// `glob-star-stops-at-slash` warning that is accurate and unwanted, and
 /// a lint nobody can silence is a lint everybody ignores.
 ///
 /// Scope is the whole file, on purpose. Per-check suppression means
@@ -357,6 +357,7 @@ fn glob_surprises(pattern: &str, ctx: &GlobContext<'_>) -> Vec<(&'static str, St
     // documented in a 15-line header comment rather than being told.
     if let Ok(sensitive) = GlobBuilder::new(pattern)
         .case_insensitive(false)
+        .literal_separator(true)
         .build()
         .map(|g| g.compile_matcher())
     {
@@ -377,27 +378,33 @@ fn glob_surprises(pattern: &str, ctx: &GlobContext<'_>) -> Vec<(&'static str, St
         }
     }
 
-    // Files that match only because `*` crosses `/`. Authors read `*` as
-    // "within one directory" — it is not.
+    // Files a pattern would have matched back when `*` crossed `/`.
+    //
+    // This is the one failure in the whole manifest that is silent and
+    // costs coverage: `UI/*View.swift` used to mean the whole subtree and
+    // now means one directory level, so a pattern written against the old
+    // semantics quietly protects fewer files than its author believes.
+    // Measured across nine repos before the change: five checks would
+    // have narrowed, dropping 230 files between them, with nothing said.
     if pattern.contains('*') {
-        if let Ok(literal) = GlobBuilder::new(pattern)
+        if let Ok(crossing_matcher) = GlobBuilder::new(pattern)
             .case_insensitive(true)
-            .literal_separator(true)
             .build()
             .map(|g| g.compile_matcher())
         {
-            let crossing: Vec<&&String> = matched
+            let lost: Vec<&String> = files
                 .iter()
-                .filter(|f| !literal.is_match(f.as_str()))
+                .filter(|f| crossing_matcher.is_match(f.as_str()))
+                .filter(|f| !insensitive.is_match(f.as_str()))
                 .collect();
-            if let Some(example) = crossing.first() {
+            if let Some(example) = lost.first() {
                 out.push((
-                    "glob-crosses-directories",
+                    "glob-star-stops-at-slash",
                     format!(
-                        "`{pattern}` matches {} file(s) only because `*` and `**` both cross \
-                         `/` in musts globs, e.g. `{example}`. If you meant one directory \
-                         level, list the paths explicitly.",
-                        crossing.len()
+                        "`{pattern}` does not cover {} file(s) below its own directory, e.g. \
+                         `{example}`. `*` stops at `/` — write `**/` where you mean a whole \
+                         subtree. (It used to cross `/`, so this pattern covered them before.)",
+                        lost.len()
                     ),
                 ));
             }
@@ -445,6 +452,7 @@ fn explain_empty_match(pattern: &str, ctx: &GlobContext<'_>) -> String {
         {
             if let Ok(m) = GlobBuilder::new(without)
                 .case_insensitive(true)
+                .literal_separator(true)
                 .build()
                 .map(|g| g.compile_matcher())
             {
@@ -704,7 +712,7 @@ mod tests {
         let f = r
             .findings
             .iter()
-            .find(|f| f.rule == "glob-crosses-directories")
+            .find(|f| f.rule == "glob-star-stops-at-slash")
             .unwrap_or_else(|| panic!("{:?}", r.findings));
         assert!(f.message.contains("deep/nested/b.swift"), "{}", f.message);
     }
@@ -910,12 +918,12 @@ mod tests {
     #[test]
     fn a_suppression_comment_silences_exactly_that_rule() {
         let dir = ws(
-            "version: 1\n# musts-lint: allow glob-crosses-directories\nchecks:\n  c:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+            "version: 1\n# musts-lint: allow glob-star-stops-at-slash\nchecks:\n  c:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
             &["src/a.swift", "src/deep/b.swift"],
         );
         let r = run(dir.path()).unwrap();
         assert!(
-            !rules(&r).contains(&"glob-crosses-directories"),
+            !rules(&r).contains(&"glob-star-stops-at-slash"),
             "{:?}",
             r.findings
         );
@@ -929,7 +937,7 @@ mod tests {
         );
         let r = run(dir.path()).unwrap();
         assert!(
-            rules(&r).contains(&"glob-crosses-directories"),
+            rules(&r).contains(&"glob-star-stops-at-slash"),
             "a suppression must not be a blanket mute: {:?}",
             r.findings
         );
@@ -938,8 +946,8 @@ mod tests {
     #[test]
     fn a_suppression_can_list_several_rules() {
         let set =
-            suppressed_rules(b"# musts-lint: allow glob-crosses-directories, no-paths-filter\n");
-        assert!(set.contains("glob-crosses-directories"));
+            suppressed_rules(b"# musts-lint: allow glob-star-stops-at-slash, no-paths-filter\n");
+        assert!(set.contains("glob-star-stops-at-slash"));
         assert!(set.contains("no-paths-filter"));
         assert_eq!(set.len(), 2);
     }
@@ -982,7 +990,7 @@ mod tests {
         }
         std::fs::write(
             dir.path().join("MUSTS.yml"),
-            "version: 1\n# musts-lint: allow glob-crosses-directories\nchecks:\n  a:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
+            "version: 1\n# musts-lint: allow glob-star-stops-at-slash\nchecks:\n  a:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
         )
         .unwrap();
         std::fs::write(
@@ -995,7 +1003,7 @@ mod tests {
         let crossing: Vec<&Finding> = r
             .findings
             .iter()
-            .filter(|f| f.rule == "glob-crosses-directories")
+            .filter(|f| f.rule == "glob-star-stops-at-slash")
             .collect();
         assert_eq!(
             crossing.len(),

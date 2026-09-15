@@ -83,14 +83,19 @@ fn a_case_insensitive_glob_collision_names_the_real_file() {
     assert!(stdout.contains("RequestReview.swift"), "{stdout}");
 }
 
+/// The only manifest mistake that costs coverage in silence. `*` used to
+/// cross `/`, so `src/*.swift` covered the whole subtree; it now stops at
+/// one level. A pattern written against the old semantics protects fewer
+/// files than its author believes, and nothing else would say so.
 #[test]
-fn a_star_crossing_directories_names_the_real_file() {
+fn a_star_that_stops_at_a_slash_names_what_it_no_longer_covers() {
     let dir = ws(
         "version: 1\nchecks:\n  ui:\n    uses: agent\n    paths: [\"src/*.swift\"]\n    with:\n      facts: [\"f\"]\n",
         &["src/a.swift", "src/deep/b.swift"],
     );
     let (stdout, _) = lint(dir.path(), &[]);
-    assert!(stdout.contains("glob-crosses-directories"), "{stdout}");
+    assert!(stdout.contains("glob-star-stops-at-slash"), "{stdout}");
+    // The file the author almost certainly meant to cover, and no longer does.
     assert!(stdout.contains("src/deep/b.swift"), "{stdout}");
 }
 
@@ -258,16 +263,16 @@ fn a_suppression_comment_silences_that_rule_only() {
     assert!(
         lint(noisy.path(), &[])
             .0
-            .contains("glob-crosses-directories"),
+            .contains("glob-star-stops-at-slash"),
         "baseline: the warning must fire without a suppression"
     );
 
     let quiet = ws(
-        &manifest("# musts-lint: allow glob-crosses-directories\n"),
+        &manifest("# musts-lint: allow glob-star-stops-at-slash\n"),
         &files,
     );
     let (stdout, code) = lint(quiet.path(), &[]);
-    assert!(!stdout.contains("glob-crosses-directories"), "{stdout}");
+    assert!(!stdout.contains("glob-star-stops-at-slash"), "{stdout}");
     assert_eq!(code, 0);
 
     let other = ws(
@@ -277,7 +282,7 @@ fn a_suppression_comment_silences_that_rule_only() {
     assert!(
         lint(other.path(), &[])
             .0
-            .contains("glob-crosses-directories"),
+            .contains("glob-star-stops-at-slash"),
         "suppressing one rule must not mute the rest"
     );
 }

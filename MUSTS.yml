@@ -7,6 +7,10 @@ version: 1
 # `docs/examples/**` is in the compile/test scope on purpose: the shell
 # extension e2e test loads the eslint-check example from there
 # (crates/musts/tests/shell_extension_e2e.rs).
+#
+# Cargo.toml / Cargo.lock are deliberately absent: `.mustsignore` already
+# keeps them out of every scope, so naming them here would be a pattern
+# that can never match. The cargo CI jobs cover dependency changes.
 
 checks:
   fmt:
@@ -23,8 +27,6 @@ checks:
       - "tests/**"
       - "fixtures/**"
       - "docs/examples/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
       - "rust-toolchain.toml"
 
   test:
@@ -34,6 +36,4 @@ checks:
       - "tests/**"
       - "fixtures/**"
       - "docs/examples/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
       - "rust-toolchain.toml"
