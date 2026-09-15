@@ -1,8 +1,14 @@
 version: 1
 
 checks:
+  # Scoped to the wire types and the dependency list. Without `paths:` the
+  # scope was the whole crate folder, so the CHANGELOG.md that release-plz
+  # regenerates on every release reopened this review each time.
   contract:
     uses: agent
+    paths:
+      - "src/**"
+      - "Cargo.toml"
     with:
       facts:
         - "musts-protocol contains only serde wire types and constants; any fn body beyond #[derive] machinery is justified or moved out."
