@@ -40,6 +40,15 @@ PR titles must follow Conventional Commits:
 Branch names are free. Intermediate commits inside the branch are free.
 Only the PR title matters.
 
+**Keep a publishable crate's `MUSTS.yml` out of a `feat!:` PR.**
+`release-plz` attributes a commit to every crate whose files it touches,
+so a one-line edit to `crates/musts-protocol/MUSTS.yml` riding in a
+`feat!:` change bumped `musts-protocol` to a breaking version and wrote
+*"Make `*` stop at `/` in paths: globs **(breaking)**"* into the changelog
+of a crate that has no globs. That crate is what third-party extension
+authors depend on, and the line reads as a wire-protocol break that never
+happened. Manifest edits go in their own `chore:` PR.
+
 ## Before opening a PR
 
 ```bash
