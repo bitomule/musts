@@ -1,0 +1,153 @@
+# `uses: jev` — a judgment check a machine can run
+
+## Why this capability exists
+
+`musts` has had two kinds of check: **deterministic** ones a script runs (`bazel/*`,
+`cargo/*`, `bash/check`) and **judgment** ones only an agent can make (`agent`,
+`mav/expect`). `Task.command` in the protocol says it outright — populated for the first
+kind, `None` for "judgment tasks that need agent-produced evidence".
+
+That split has a cost nobody wrote down: **judgment is expensive, so almost no judgment
+checks get written.** Across the nine repos here there are 26 checks and only 5 are
+`uses: agent`, holding 10 facts — and 5 of those 10 facts are scriptable things that
+should never have been `agent` at all ("I ran `bunx tsc --noEmit` and it exited 0").
+
+`uses: jev` is the first capability that is a **judgment task with a runnable command**.
+A typed question answers in ~400 ms for ~$0.0001, which moves judgment into the runnable
+column.
+
+**The value is not the two checks shipped here. It is the checks nobody wrote because
+validating them cost an agent.** David: *"ahora no lo explotamos mucho porque validar con
+agentes es muy caro, pero jev lo hace barato."*
+
+There is a second, quieter gain. An `agent` fact is an **attestation** — "He releído
+README.md tras este cambio y refleja el estado actual" is a sentence a hurried node signs
+without looking, and nothing can tell. A jev verdict is a **measurement** against the real
+file, with its probability and the model id stored in the ledger. It cannot be signed
+without looking.
+
+## The six constraints, each one measured
+
+Every rule below came out of an experiment, not a preference. Numbers in
+`~/.claude/hive/jev-codigo-2026-09-18.md`.
+
+1. **The code resolves the pointers; jev judges the result.** jev answers about what is
+   written in front of it and abstains when the answer depends on what something resolves
+   to at runtime. Measured: 10 hollow tests whose assertions sit in a loop over
+   `FileManager.subpaths(atPath: #filePath + …)` scored **0/10 with 10/10 abstentions**;
+   adding a code-computed `resolved_element_count: 0` took them to **10/10 correct**. The
+   control matters as much as the result: with the count set to 37 it does not flip to a
+   false green, it abstains. Zero wrong answers in both arms. Hence the `facts:` program.
+   (Same pattern as `jev-shell-guard` in `dabit3/jev-experiments`, which hands jev
+   `is_home_or_root`, `inside_cwd`, `exists` rather than the raw path.)
+
+2. **No narration, ever.** Nothing sent describes what a previous step concluded. Measured:
+   inserting one unverified sentence — "I re-read this test and confirmed it asserts on real
+   production output" — moved the probability from **0.06 to 0.74**, twelve-fold, straight
+   into the band that calibration says is unreliable. It did not become a false green only
+   because the default thresholds abstain there. `hive/qa-autonomo`, whose loop had no
+   abstention, landed a 12/12 false green on the same shape. The script therefore builds the
+   state itself; there is no field a caller could put a sentence in.
+
+3. **Exactly one source per question, so two fields can never contradict.** `qa-autonomo`
+   first measured field ORDER moving a false green from 17% to 100%, then isolated the real
+   cause: a false sentence that **contradicts** what the artefact shows is position-sensitive
+   (6/12 in the middle, 12/12 false green at the end), while an equally false sentence that
+   contradicts nothing is harmless anywhere (12/12 correct in both positions). Ordering fields
+   manages the problem; not introducing the contradiction removes it. Facts are namespaced
+   under `facts` so they cannot collide with the artefact.
+
+4. **Default thresholds. Never a hand-tuned cut.** A sweep found a cut deciding 30/40 with
+   zero errors — fitted on those same 40 rows. Honest holdout (fit on 20, test on 20, 200
+   repetitions): **0.41 errors on average, 39% of splits with at least one error.** Tens of
+   rows can check whether the defaults already work; they cannot tune anything.
+
+5. **Never ask jev whether it can answer.** A meta-question like "do you have enough
+   information?" answers yes ~85% of the time in published third-party tests: it does not
+   know what it does not know. Abstention comes from the probability and from nowhere else.
+   This code asks no meta-question.
+
+6. **Three outcomes, and `unsure` is not green.** `jevi` already exits 3 for it. How it is
+   handled depends on the mode:
+   - **`gate`** — the check grants green, so an unanswered file must not pass. Exit 3, the
+     agent judges those files and says in the evidence what it found. The `evidence` hook
+     refuses a submission that ignores an `UNSURE` line.
+   - **`tripwire`** — the check only ever fires. `unsure` is silence, because on this
+     question jev answers confidently on the defect and abstains on the healthy case. **A
+     quiet tripwire proves nothing**, so it may never be the only check protecting a risk.
+
+## What did NOT replicate
+
+Published third-party results say one big question loses to five small ones summed in your
+own code (89.4% → 95.0% on 2,000 phishing emails). **Tested on our corpus, it did not hold.**
+Same 38 files, five atomic questions with a scoring rule declared before looking at any
+answer: the fan-out detected the hollow tests exactly as well as the single question (8/8
+tautological, 0/10 unreachable without facts, **10/10 with facts** — identical to the single
+question) and was *worse* at confirming healthy tests, because requiring four confident
+answers abstains more often. Zero wrong answers either way.
+
+Read: **for this kind of question the computed fact is what moves the needle, not the number
+of questions.** Effort belongs in the `facts:` program.
+
+The fan-out keeps one real benefit at equal accuracy: it says *which* property fired, which
+makes a far better red message than a single yes/no. Worth it for diagnostics, not for
+accuracy. Caveat: n=38 and the five questions were not iterated; the third-party result may
+still hold for questions less dominated by one resolved fact.
+
+## Shadow mode (designed in, not a later phase)
+
+The honest blocker on everything above is that we have tens of labelled rows and need
+hundreds. `mode: shadow` runs the check beside an existing `uses: agent` on the same input,
+records both verdicts plus the probability, and grants nothing. Ordinary traffic then becomes
+a labelled set for free, and after a few weeks the rows where the two disagree are the only
+ones worth reading. That is the only route to validating a threshold that survives a holdout.
+
+## When NOT to use `uses: jev`
+
+- **The check is scriptable.** Then it is `bash/check`. jev never replaces a script, only a
+  model. Half the existing `agent` facts here are in this category.
+- **The judgment needs to follow a pointer the code cannot resolve either.** Nokoru's
+  "each new LEGACY_ALLOWLIST entry is a genuine multi-verb protocol" has to open the named
+  file and weigh its design. Out of scope until the `facts:` program can resolve it.
+- **The question never changes and labelled examples exist.** A small local model then wins
+  on speed and price. jev's edge is an unlabelled domain with a question still moving.
+- **The correct answer is the one that resembles the question LEAST.** Check this before
+  writing the question and before any positive control: if such a case exists, the question
+  is fragile. Both of our 100% positive controls (`: View`, `async`) were the easy family and
+  neither of us chose them for that reason — we found out afterwards.
+
+## The abstention rate IS the economics
+
+This is the hole a sibling node found in published routing data and it applies straight to
+`gate` mode. An abstention has to go somewhere, and where it goes decides whether any saving
+exists: in 237 re-priced real turns, sending abstentions to the safest, most expensive model
+saved 11.9%, while sending them to a middle tier saved 59.9%. **An abstention routed to the
+expensive option eats the entire benefit.**
+
+For `uses: jev` the expensive option is the agent. A gate whose abstention rate is high costs
+*more* than the plain `uses: agent` it replaced, because the repo now pays for jev **and** the
+agent. So the abstention rate is a budget, not a detail. Measured on our two questions:
+
+| question | mode | abstains on the healthy case |
+|---|---|---|
+| "would this test fail if the code broke" | gate | **12 of 20** — unusable as a gate |
+| "does this example config hold only placeholders" | gate | 6 of 20 |
+| "would this test fail", **with computed facts**, hollow files | tripwire | 0 of 10 |
+
+Rule that falls out: **measure the abstention rate on the HEALTHY case before choosing the
+mode.** High abstention does not mean the question is bad — it means it is a tripwire, not a
+gate. That is exactly why the hollow-test check ships as a tripwire and the config check as a
+gate, and it is a decision no amount of prompt wording fixes.
+
+## A hard guard beats a well-worded question
+
+`jev-ax-pilot` in the same public collection carries a rule the model cannot override: a goal
+worded with new/create/make cannot be reported as reached before a real action happened. That
+is "can give red, cannot give green" implemented as code rather than trusted to a criteria
+block. Worth copying wherever an invariant is known: put it in the `facts` program or in the
+scoring, never in the question. A criteria line is a request; a code guard is a fact.
+
+Caveat on every third-party number cited in this document: they are public experiments on a
+model that is days old, and none of those repos measures accuracy against real labels at all —
+they measure latency, or cost, or nothing. Treat them as hypotheses that shaped our
+experiments, never as results. The measurements that govern this design are ours.

@@ -1,0 +1,21 @@
+name: jev
+version: 0.1.0
+
+# `uses: jev` is the first capability that is a JUDGMENT task and still carries a
+# machine-runnable `command`. Until now musts had two kinds of check: deterministic
+# ones a script can run (bazel/*, cargo/*, bash/check) and judgment ones only an
+# agent can make (agent, mav/expect). Judgment was therefore expensive, so almost
+# nothing was written as a judgment check. jev answers a typed question in ~400 ms
+# for ~$0.0001, which moves judgment into the runnable column.
+#
+# The point is NOT the two checks shipped here. It is the checks nobody wrote
+# because validating them cost an agent.
+
+capabilities:
+  check:
+    uses: jev
+    schema: schemas/jev.schema.json
+    resolve:
+      command: ["./jev-check.sh", "resolve"]
+    evidence:
+      command: ["./jev-check.sh", "evidence"]

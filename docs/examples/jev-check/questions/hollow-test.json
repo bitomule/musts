@@ -1,0 +1,5 @@
+{"version":1,"model":"typesafe/jev-1.13","questions":{
+ "would_fail":{"type":"noul",
+  "instructions":"This test would fail if the production code it exercises stopped working correctly.",
+  "criteria":{"true":"The test reaches at least one assertion that compares an output of the production code against an independently expected value",
+              "false":"No assertion can ever fail: every loop enclosing them has a resolved_element_count of 0, or they compare a value against itself"}}}}
