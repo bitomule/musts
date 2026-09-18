@@ -91,6 +91,15 @@ run)
     printf 'BROKEN: question `%s` in %s has no criteria block with both branches. uses: jev refuses to run without one.\n' "$ask" "$qfile"
     exit 1
   fi
+  # "No numeric threshold" cannot be enforced by the `with` schema alone: a
+  # question set carries its own `decide` block, and jevi honours it. That is the
+  # back door into a hand-tuned cut, so it is refused here where it can be seen.
+  # Why it matters: a cut fitted on 40 rows with zero errors made 0.41 wrong
+  # answers per 20 on a holdout, wrong at least once in 39% of splits.
+  if jq -e --arg a "$ask" '.questions[$a].decide' >/dev/null "$qfile" 2>/dev/null; then
+    printf 'BROKEN: question `%s` in %s carries a `decide` block. uses: jev runs on default thresholds; a cut tuned on tens of rows does not survive a holdout.\n' "$ask" "$qfile"
+    exit 1
+  fi
 
   pass=0; fail=0; unsure=0; skipped=0; notapplicable=0
   while IFS= read -r f; do

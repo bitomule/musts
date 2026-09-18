@@ -30,8 +30,11 @@ omitted.
 
 **2. No numeric threshold, anywhere. The `verdict` decides.** A cut fitted on 40 rows with zero
 errors made **0.41 wrong answers per 20 on a holdout, with 39% of splits wrong at least once**.
-Tens of rows can check whether the defaults work; they cannot tune anything. The schema has no
-probability field so one cannot be added for convenience.
+Tens of rows can check whether the defaults work; they cannot tune anything. The `with` schema
+has no probability field — **but that is not enough on its own**: a question set carries its own
+`decide` block and jevi honours it, which is a back door into a hand-tuned cut that the schema
+never sees. So the run also refuses a question whose set carries `decide`. A rule that only one
+of two files can express is not enforced.
 
 **3. `unsure` is green, and that is not a concession.** Under two states an abstaining file and
 a healthy file reach the same outcome, so an abstention rate of 47%, 60% or 95% costs exactly
