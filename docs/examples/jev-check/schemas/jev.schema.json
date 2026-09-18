@@ -37,10 +37,11 @@
       "type": "string",
       "enum": [
         "gate",
-        "tripwire"
+        "tripwire",
+        "shadow"
       ],
       "default": "gate",
-      "description": "gate: the check GRANTS green, so `unsure` must escalate to a human and never pass. tripwire: the check only ever FIRES, so `unsure` is silence \u2014 and the check proves nothing when it stays quiet. Pick tripwire only when measurement shows jev answers confidently on the defect and abstains on the healthy case."
+      "description": "gate: the check GRANTS green, so `unsure` must escalate to a human and never pass. tripwire: the check only ever FIRES, so `unsure` is silence \u2014 and the check proves nothing when it stays quiet. Pick tripwire only when measurement shows jev answers confidently on the defect and abstains on the healthy case. shadow: runs, records every verdict to .musts/jev-shadow/, and grants and blocks NOTHING \u2014 the only honest way to start, and the only way to accumulate the labelled rows a threshold needs."
     }
   }
 }

@@ -5,7 +5,13 @@ set -euo pipefail
 python3 - "${1:?file}" <<'PY'
 import re,sys,json
 src=open(sys.argv[1],errors="ignore").read()
-src_nc=re.sub(r'//[^\n]*','',src)
+# Blank out string literals BEFORE stripping comments: a Rust string holding a
+# Bazel label ("//App:Target") is not a comment, and treating it as one deletes
+# the rest of the line. That mistake reported a healthy 3-assertion test as
+# assertion-free, at p=0.90 — a false RED, which is what a wrong facts program
+# produces (jev abstains rather than inventing a green).
+src_nc=re.sub(r'"(?:[^"\\\n]|\\.)*"','""',src)
+src_nc=re.sub(r'//[^\n]*','',src_nc)
 fns=[]
 for m in re.finditer(r'#\[(?:tokio::)?test\][^\n]*\n\s*(?:async\s+)?fn\s+([A-Za-z0-9_]+)', src_nc):
     i=src_nc.index("{", m.end()); d=0

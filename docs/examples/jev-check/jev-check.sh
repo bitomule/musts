@@ -46,11 +46,14 @@ resolve)
         satisfies: [.id],
         parallelizable: true,
         command: [($here + "/jev-check.sh"), "run", .id],
-        instructions: [
+        instructions: (if (.with.mode // "gate") == "shadow" then [
+          ("Run `musts run jev-" + (.id | gsub("[^A-Za-z0-9]+"; "-")) + "`. It is in SHADOW mode: it records verdicts and grants nothing."),
+          "It cannot fail and its green means only that the rows were recorded."
+        ] else [
           ("Run `musts run jev-" + (.id | gsub("[^A-Za-z0-9]+"; "-")) + "`."),
           "It asks jev one typed question per file in scope and records the verdicts.",
           "If it reports UNSURE, jev declined to answer: judge those files yourself and submit evidence with `musts evidence`. Never pass an unsure file without looking at it."
-        ],
+        ] end),
         evidence_contract: {
           text:   { required: true, description: "One line per judged file: verdict and probability." },
           assets: [ { kind: "log", required: true } ]
@@ -69,7 +72,7 @@ run)
   spec="$(jq -r --arg id "$check_id" '.checks[] | select(.id==$id) | .with' <<<"$request")"
   [ "$spec" = "null" ] && die "no check $check_id in request"
 
-  qfile="$here/$(jq -r '.questions' <<<"$spec")"
+  qfile="$root/.musts/extensions/jev/$(jq -r '.questions' <<<"$spec")"
   ask="$(jq -r '.ask'    <<<"$spec")"
   expect="$(jq -r '.expect // "yes"' <<<"$spec")"
   cmode="$(jq -r '.mode // "gate"' <<<"$spec")"
@@ -90,7 +93,7 @@ run)
     # Facts the code resolved on jev's behalf. Namespaced under `facts` so a
     # fact can never collide with — and therefore never contradict — the artefact.
     if [ -n "$factsbin" ]; then
-      computed="$("$here/$factsbin" "$root/$f")" || die "facts program failed on $f"
+      computed="$("$root/.musts/extensions/jev/$factsbin" "$root/$f")" || die "facts program failed on $f"
       jq -e 'type == "object"' >/dev/null <<<"$computed" || die "facts program must print a JSON object ($f)"
       state="$(jq -n --argjson s "$state" --argjson c "$computed" '$s + {facts: $c}')"
     fi
@@ -107,6 +110,13 @@ run)
     p="$(jq -r --arg a "$ask" '.answers[$a].p // 0'              <<<"$out")"
     m="$(jq -r '.model // "?"' <<<"$out")"
 
+    if [ "$cmode" = "shadow" ]; then
+      mkdir -p "$root/.musts/jev-shadow"
+      jq -c -n --arg f "$f" --arg ask "$ask" --arg v "$v" --arg p "$p" --arg m "$m" \
+              --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson st "$state" \
+        '{ts:$ts, file:$f, question:$ask, verdict:$v, p:($p|tonumber), model:$m, facts:($st.facts // null)}' \
+        >> "$root/.musts/jev-shadow/$ask.jsonl"
+    fi
     case "$v" in
       unsure) unsure=$((unsure+1)); printf 'UNSURE %-60s p=%s %s\n' "$f" "$p" "$m" ;;
       "$expect") pass=$((pass+1));  printf 'ok     %-60s p=%s %s\n' "$f" "$p" "$m" ;;
@@ -117,6 +127,10 @@ run)
   printf '\n%d ok, %d failed, %d unsure, %d not evaluated\n' "$pass" "$fail" "$unsure" "$skipped"
   if [ "$pass" -eq 0 ] && [ "$fail" -eq 0 ] && [ "$unsure" -eq 0 ]; then
     printf 'Nothing was judged. This check proves nothing about this change.\n'
+    exit 0
+  fi
+  if [ "$cmode" = "shadow" ]; then
+    printf 'SHADOW: recorded to .musts/jev-shadow/%s.jsonl. Nothing granted, nothing blocked.\n' "$ask"
     exit 0
   fi
   [ "$fail" -gt 0 ] && exit 1
