@@ -52,7 +52,7 @@ resolve)
         ] else [
           ("Run `musts run jev-" + (.id | gsub("[^A-Za-z0-9]+"; "-")) + "`."),
           "It asks jev one typed question per file in scope and records the verdicts.",
-          "If it reports UNSURE, jev declined to answer: judge those files yourself and submit evidence with `musts evidence`. Never pass an unsure file without looking at it."
+          "UNSURE files are green: this check reports what fired, never what is verified. Its silence is not evidence."
         ] end),
         evidence_contract: {
           text:   { required: true, description: "One line per judged file: verdict and probability." },
@@ -83,7 +83,16 @@ run)
     exit 0
   fi
 
-  pass=0; fail=0; unsure=0; skipped=0
+  # Criteria are mandatory, not a style note. Measured: without them detection
+  # fell from 8/18 to 3/18 and every healthy file abstained. A question set that
+  # can be written without them will be, so refuse it here rather than run a
+  # check that silently judges worse.
+  if ! jq -e --arg a "$ask" '.questions[$a].criteria.true and .questions[$a].criteria.false' >/dev/null "$qfile" 2>/dev/null; then
+    printf 'BROKEN: question `%s` in %s has no criteria block with both branches. uses: jev refuses to run without one.\n' "$ask" "$qfile"
+    exit 1
+  fi
+
+  pass=0; fail=0; unsure=0; skipped=0; notapplicable=0
   while IFS= read -r f; do
     [ -z "$f" ] && continue
 
@@ -95,6 +104,14 @@ run)
     if [ -n "$factsbin" ]; then
       computed="$("$root/.musts/extensions/jev/$factsbin" "$root/$f")" || die "facts program failed on $f"
       jq -e 'type == "object"' >/dev/null <<<"$computed" || die "facts program must print a JSON object ($f)"
+      # The deterministic filter runs BEFORE any call. 81% of this check's
+      # abstentions were files the question did not apply to at all — not
+      # judgment, just a wasted request.
+      # NOT `.applicable // true`: jq's `//` treats false as absent, so that
+      # spelling silently accepts every file the filter meant to drop.
+      if [ "$(jq -r 'if .applicable == false then "no" else "yes" end' <<<"$computed")" = "no" ]; then
+        notapplicable=$((notapplicable+1)); continue
+      fi
       state="$(jq -n --argjson s "$state" --argjson c "$computed" '$s + {facts: $c}')"
     fi
 
@@ -135,7 +152,8 @@ run)
     esac
   done < <(jq -r '.changed_files[]' <<<"$request")
 
-  printf '\n%d ok, %d failed, %d unsure, %d not evaluated\n' "$pass" "$fail" "$unsure" "$skipped"
+  printf '\n%d ok, %d failed, %d unsure, %d not evaluated, %d not applicable\n' \
+    "$pass" "$fail" "$unsure" "$skipped" "$notapplicable"
   if [ "$pass" -eq 0 ] && [ "$fail" -eq 0 ] && [ "$unsure" -eq 0 ]; then
     printf 'Nothing was judged. This check proves nothing about this change.\n'
     exit 0
@@ -153,10 +171,12 @@ run)
     exit 0
   fi
   [ "$fail" -gt 0 ] && exit 1
-  # A GATE grants green, so an unanswered file must not pass: exit 3, escalate.
-  # A TRIPWIRE only ever fires, so unsure is silence — but its silence proves
-  # nothing, which is why a tripwire may never be the only check on a risk.
-  if [ "$cmode" = "gate" ] && [ "$unsure" -gt 0 ]; then exit 3; fi
+  # Two states. `unsure` is green, and so is a file nothing could be judged on.
+  # That is honest only because this capability never claims its green means
+  # "verified": it means "nothing fired". Measured: under two states the
+  # abstention rate costs nothing, because an abstaining file and a healthy file
+  # reach the same outcome — which is why this ships the variant that DETECTS
+  # most (17/18) rather than the one that abstains least.
   exit 0
   ;;
 

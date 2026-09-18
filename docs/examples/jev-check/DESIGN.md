@@ -312,3 +312,51 @@ judgment task blocks every commit through the pre-commit hook. A `shadow` wired 
 would therefore block exactly what it promises not to block. It runs from
 `.musts/extensions/jev/shadow-run.sh` instead — outside the validation loop, where it can be
 honest about granting and blocking nothing.
+
+## The four levers, measured — and why the check ships the one that abstains most
+
+The first version abstained on 47% of files, which looked like the thing to fix. Measured on
+the labelled corpus (20 healthy tests, 18 hollow mutants), every lever with **both** numbers,
+because a lever that lowers abstention by turning "don't know" into wrong answers is worse
+than the 47%:
+
+| lever | abstains on healthy | **wrong answers** | hollow detected |
+|---|---|---|---|
+| one question, explicit criteria | 60% | **0** | 8/18 |
+| the same, criteria removed | 100% | **0** | 3/18 |
+| **+ facts resolved in code** | 95% | **0** | **17/18** |
+| split into three atomic questions | 20% | **0** | 5/18 |
+| split + facts | 20% | **0** | 13/18 |
+
+Zero wrong answers in all five: no lever bought a lower abstention with errors. Three findings.
+
+**Criteria are not a style note.** Removing them took detection from 8/18 to 3/18 and made every
+healthy file abstain. That is why the schema requires them and the run refuses a question set
+without both branches, rather than trusting whoever writes the next check.
+
+**The levers pull in opposite directions.** Resolved facts maximise detection (17/18) and also
+maximise abstention on healthy files (95%). Splitting the question does the reverse: 20%
+abstention, 5/18 detected. There is no setting that is best at both.
+
+**And under two states the abstention rate is not a cost at all.** `unsure` is green and a
+healthy file is green: they are the same outcome, so 47%, 60% and 95% cost exactly the same —
+nothing. Abstention only costs money in a gate, where it escalates to an agent, and there is no
+gate. So the check is chosen by **what it catches**, and it ships the single question with
+resolved facts: 17 of 18, the variant that abstains most.
+
+That is the whole argument for two states, and it is the opposite of the one this document
+started with. Being binary is not a limitation to compensate for — it is what frees the design
+to take the most aggressive detector.
+
+## The filter runs before the request, not after
+
+81% of the original abstentions were files with no `#[test]` in them at all. That is not
+judgment, it is a question that did not apply, and it cost a request each time. The facts
+program now prints `"applicable": false` for those and the check drops them before calling
+anything. End to end over this repo: **64 files → 27 dropped as not applicable, 37 judged, 7
+abstentions (19%)**, and 27 requests never made.
+
+One bug worth naming because it made the filter silently do nothing: the first spelling was
+`jq -r '.applicable // true'`. **jq's `//` treats `false` as absent**, so `false // true` is
+`true` and every file the filter meant to drop sailed through. The shadow reported
+`0 not applicable` and looked fine. Use `if .applicable == false`.

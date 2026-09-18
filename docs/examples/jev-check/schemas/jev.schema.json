@@ -1,47 +1,37 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "uses: jev \u2014 `with` payload",
+  "title": "uses: jev — `with` payload",
   "type": "object",
-  "required": [
-    "questions",
-    "ask"
-  ],
+  "required": ["questions", "ask", "facts"],
   "additionalProperties": false,
   "properties": {
     "questions": {
       "type": "string",
-      "description": "Path (relative to the manifest) of the jevi question set. Every question must be atomic and written in English."
+      "description": "Path (relative to the manifest) of the question set. Every question it contains MUST carry a `criteria` block with both branches — the check refuses to run otherwise. Measured: dropping criteria took detection from 8/18 to 3/18 and abstention on healthy files to 100%."
     },
     "ask": {
       "type": "string",
-      "description": "Question id inside that set whose verdict decides this check."
+      "description": "Question id inside that set whose verdict decides this check. Exactly one: this capability asks one question, not a panel. Measured: a five-question fan-out summed in code did not beat one question on our corpus."
     },
     "expect": {
       "type": "string",
-      "enum": [
-        "yes",
-        "no"
-      ],
+      "enum": ["yes", "no"],
       "default": "yes",
-      "description": "The verdict that means the check PASSES. `no` makes the check a tripwire: it can only ever fire."
+      "description": "The verdict that means nothing fired. The opposite verdict is the only judgment that produces a red."
     },
     "facts": {
       "type": "string",
-      "description": "Optional executable (relative to the manifest) run once per file. It prints a JSON object of DETERMINISTIC facts the code resolved on jev's behalf \u2014 the pointers jev cannot follow. Merged into the state next to the artefact."
-    },
-    "pin_model": {
-      "type": "string",
-      "description": "Model id prefix recorded with every verdict. A longer, dated id (typesafe/jev-1.13-20260917) turns a silent model rotation into `unsure` instead of a changed answer."
+      "description": "REQUIRED. Executable (relative to the manifest) run once per file. It prints a JSON object of deterministic facts the code resolved on jev's behalf — the pointers jev cannot follow — and may print `\"applicable\": false` to drop a file before any call is made. Measured: without resolved facts the same 10 hollow tests scored 0/10 with 10/10 abstentions; with them, 17/18 detected."
     },
     "mode": {
       "type": "string",
-      "enum": [
-        "gate",
-        "tripwire",
-        "shadow"
-      ],
-      "default": "gate",
-      "description": "gate: the check GRANTS green, so `unsure` must escalate to a human and never pass. tripwire: the check only ever FIRES, so `unsure` is silence \u2014 and the check proves nothing when it stays quiet. Pick tripwire only when measurement shows jev answers confidently on the defect and abstains on the healthy case. shadow: runs, records every verdict to .musts/jev-shadow/, and grants and blocks NOTHING \u2014 the only honest way to start, and the only way to accumulate the labelled rows a threshold needs."
+      "enum": ["tripwire", "shadow"],
+      "default": "shadow",
+      "description": "shadow: records every verdict and grants and blocks NOTHING — where every check starts. tripwire: a confident verdict against `expect` turns the check red; everything else is green. There is deliberately no `gate`: a capability whose green would mean \"verified\" cannot be built on a model that abstains, and an abstention routed to an agent costs more than the agent check it replaces."
+    },
+    "pin_model": {
+      "type": "string",
+      "description": "Model id recorded with every verdict, matched by prefix. A dated id (typesafe/jev-1.13-20260917) turns a silent model rotation into an abstention instead of a changed answer."
     }
   }
 }

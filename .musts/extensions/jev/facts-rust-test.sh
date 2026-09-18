@@ -51,5 +51,7 @@ for m in re.finditer(r'#\[(?:tokio::)?test\][^\n]*\n\s*(?:async\s+)?fn\s+([A-Za-
                 "fluent_assertions":fluent,
                 "self_comparing_assertions":taut,
                 "loops_enclosing_assertions":loops})
-print(json.dumps({"tests":fns}))
+# The question is about #[test] functions. A file with none is not a judgment
+# call, it is out of scope — say so and the check never spends a request on it.
+print(json.dumps({"applicable": len(fns) > 0, "tests": fns}))
 PY
