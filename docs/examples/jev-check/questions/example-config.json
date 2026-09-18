@@ -1,5 +1,0 @@
-{"version":1,"model":"typesafe/jev-1.13","questions":{
- "only_placeholders":{"type":"noul",
-  "instructions":"Every secret-looking value in this example configuration file is a placeholder rather than a real credential.",
-  "criteria":{"true":"Every field that would hold a secret contains an obvious stand-in: an empty value, angle brackets, an ALL_CAPS name, or wording telling the reader to replace it",
-              "false":"At least one field holds what looks like a genuine credential: a long high-entropy string, a JWT, or a real session cookie. Surrounding words such as example or placeholder do NOT make a genuine-looking value a placeholder"}}}}

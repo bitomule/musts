@@ -18,8 +18,18 @@ request="$(cat)"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { printf '%s\n' "$*" >&2; exit 2; }
-command -v jq   >/dev/null || die "jev-check needs jq on PATH"
-command -v jevi >/dev/null || die "jev-check needs jevi on PATH (cargo install jevi)"
+command -v jq >/dev/null || die "jev-check needs jq on PATH"
+
+# A judgment check that calls the network must never be load-bearing. It is not
+# for CI and it degrades on its own: with no key, no network, jevi missing, or
+# CI set, it SKIPS — it does not fail, does not hang, and says out loud that
+# nothing was evaluated. Silence from this check is never evidence.
+jev_unavailable() {
+  [ -n "${CI:-}" ]              && { echo "CI is set"; return 0; }
+  [ -n "${JEVI_DISABLE:-}" ]    && { echo "JEVI_DISABLE is set"; return 0; }
+  command -v jevi >/dev/null    || { echo "jevi is not on PATH"; return 0; }
+  return 1
+}
 
 case "$mode" in
 
@@ -65,7 +75,12 @@ run)
   cmode="$(jq -r '.mode // "gate"' <<<"$spec")"
   factsbin="$(jq -r '.facts // empty' <<<"$spec")"
 
-  pass=0; fail=0; unsure=0
+  if reason="$(jev_unavailable)"; then
+    printf 'SKIPPED: %s. Nothing was judged; this check proves nothing about this change.\n' "$reason"
+    exit 0
+  fi
+
+  pass=0; fail=0; unsure=0; skipped=0
   while IFS= read -r f; do
     [ -z "$f" ] && continue
 
@@ -80,7 +95,14 @@ run)
       state="$(jq -n --argjson s "$state" --argjson c "$computed" '$s + {facts: $c}')"
     fi
 
-    out="$(printf '%s' "$state" | jevi ask -f "$qfile" --state-json --json --soft)"
+    # --soft so a no-key / no-network / rate-limited answer comes back as
+    # exit 0 with ok:false instead of killing the run. Read `ok`, never $?.
+    out="$(printf '%s' "$state" | jevi ask -f "$qfile" --state-json --json --soft || true)"
+    if [ "$(jq -r '.ok // false' <<<"$out")" != "true" ]; then
+      skipped=$((skipped+1))
+      printf 'SKIP   %-60s %s\n' "$f" "$(jq -r '.error.kind // "unknown"' <<<"$out")"
+      continue
+    fi
     v="$(jq -r --arg a "$ask" '.answers[$a].verdict // "unsure"' <<<"$out")"
     p="$(jq -r --arg a "$ask" '.answers[$a].p // 0'              <<<"$out")"
     m="$(jq -r '.model // "?"' <<<"$out")"
@@ -92,7 +114,11 @@ run)
     esac
   done < <(jq -r '.changed_files[]' <<<"$request")
 
-  printf '\n%d ok, %d failed, %d unsure\n' "$pass" "$fail" "$unsure"
+  printf '\n%d ok, %d failed, %d unsure, %d not evaluated\n' "$pass" "$fail" "$unsure" "$skipped"
+  if [ "$pass" -eq 0 ] && [ "$fail" -eq 0 ] && [ "$unsure" -eq 0 ]; then
+    printf 'Nothing was judged. This check proves nothing about this change.\n'
+    exit 0
+  fi
   [ "$fail" -gt 0 ] && exit 1
   # A GATE grants green, so an unanswered file must not pass: exit 3, escalate.
   # A TRIPWIRE only ever fires, so unsure is silence — but its silence proves
