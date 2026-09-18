@@ -228,6 +228,27 @@ After the three fixes: 23 files, **zero wrong answers**, 10 abstentions, and 9 o
 files abstaining — which is what put this check in `tripwire` rather than `gate`, and then in
 `shadow` before either.
 
+## Not every failure is an excuse to skip
+
+The first version of this check treated every `ok: false` from jevi as "not evaluated". That
+is wrong, and `hive/jev` caught it while reviewing the library API: **an infrastructure failure
+degrades, an input failure is our own bug and must go red.** jevi's own error type already
+draws that line — `NoAnswer` (no key, DNS, timeout, 401, 5xx) against `Invalid` (a malformed
+question set, an empty state, a 400) — and a check that swallows the second reports
+"not evaluated" forever while being permanently broken.
+
+So the skip list is explicit (`no_key`, `disabled`, `dns`, `timeout`, `rate limited`) and
+everything else is a red marked `BROKEN`, with the kind and the message. Verified both ways:
+no key → 4 files "not evaluated", exit 0; a question set that does not exist → 4 files
+`BROKEN`, exit 1.
+
+**Shadow does not get an exemption from this.** Shadow promises not to block on a *verdict*;
+it does not promise to hide its own breakage. A misconfigured shadow records nothing forever
+and nobody notices — the failure mode of every channel that only ever carries "all clear".
+So a shadow run whose files failed for a configuration reason exits 1 and says
+`SHADOW IS BROKEN`, while a healthy shadow stays silent at exit 0. Verified: broken shadow
+exit 1, healthy shadow exit 0, no key exit 0.
+
 ## Shadow mode has a target and a date, or it is theatre
 
 This check ships in `shadow`: it records one row per judged file to

@@ -102,8 +102,19 @@ run)
     # exit 0 with ok:false instead of killing the run. Read `ok`, never $?.
     out="$(printf '%s' "$state" | jevi ask -f "$qfile" --state-json --json --soft || true)"
     if [ "$(jq -r '.ok // false' <<<"$out")" != "true" ]; then
-      skipped=$((skipped+1))
-      printf 'SKIP   %-60s %s\n' "$f" "$(jq -r '.error.kind // "unknown"' <<<"$out")"
+      # Not every failure is an excuse to skip. Infrastructure failures degrade;
+      # a malformed question set or an oversized state is OUR bug and must go red,
+      # or a broken check quietly reports "not evaluated" forever.
+      case "$(jq -r '.error.kind // "unknown"' <<<"$out")" in
+        no_key|disabled|dns|timeout|rate_limited|rate\ limited)
+          skipped=$((skipped+1))
+          printf 'SKIP   %-60s %s\n' "$f" "$(jq -r '.error.kind' <<<"$out")" ;;
+        *)
+          fail=$((fail+1))
+          printf 'BROKEN %-60s %s: %s\n' "$f" \
+            "$(jq -r '.error.kind // "unknown"' <<<"$out")" \
+            "$(jq -r '.error.message // ""' <<<"$out")" ;;
+      esac
       continue
     fi
     v="$(jq -r --arg a "$ask" '.answers[$a].verdict // "unsure"' <<<"$out")"
@@ -130,6 +141,14 @@ run)
     exit 0
   fi
   if [ "$cmode" = "shadow" ]; then
+    # Shadow promises not to block on a VERDICT. It does not promise to hide its
+    # own breakage: a misconfigured shadow records nothing forever and nobody
+    # notices, which is the failure mode of every channel that only ever carries
+    # "all clear". A broken run is still loud.
+    if [ "$fail" -gt 0 ]; then
+      printf 'SHADOW IS BROKEN: %d files could not be judged because of a configuration error, not a verdict. Nothing was recorded for them.\n' "$fail"
+      exit 1
+    fi
     printf 'SHADOW: recorded to .musts/jev-shadow/%s.jsonl. Nothing granted, nothing blocked.\n' "$ask"
     exit 0
   fi
