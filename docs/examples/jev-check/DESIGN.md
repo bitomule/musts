@@ -116,6 +116,13 @@ ones worth reading. That is the only route to validating a threshold that surviv
   forbidden-term list finds every offending string outright. **Once the code can locate the
   cases, there is no judgment left to make.** So before tuning a weak question, ask whether
   the facts program you are about to write already answers it.
+
+  The tell, and it fires while you are still writing the program: **if the facts program has
+  to locate the defect in order to describe it to jev, it has already found it, and the
+  question only repeats the finding.** Compare with the hollow-test check in this repo, which
+  is the other case: its facts program resolves how many elements a loop yields — a neutral
+  fact about the code that says nothing about whether the test is hollow. Resolving a fact is
+  the good case; locating the defect is the sign you no longer need a model.
 - **The judgment needs to follow a pointer the code cannot resolve either.** Nokoru's
   "each new LEGACY_ALLOWLIST entry is a genuine multi-verb protocol" has to open the named
   file and weigh its design. Out of scope until the `facts:` program can resolve it.
