@@ -5,6 +5,7 @@ members = [
     "crates/musts-extension-util",
     "crates/musts-core",
     "crates/musts",
+    "crates/musts-jev",
     "tests/fixtures/stub_extension",
 ]
 

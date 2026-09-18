@@ -56,8 +56,12 @@ field pushes, not that it informs.**
 **5. The filter runs before the request.** 81% of the original abstentions were files with no
 `#[test]` in them — not judgment, a question that did not apply, one wasted request each. The
 facts program prints `"applicable": false` and the check drops them before calling anything.
-Over this repo: **64 files → 27 dropped, 37 judged, 7 abstentions (19%)**, 27 requests never
+Over this repo: **64 files → 13 dropped, 51 judged, 7 abstentions (14%)**, 13 requests never
 made.
+
+*(An earlier figure said 27 dropped and 19%. It was wrong: the prototype extractor required
+`fn` on the line after `#[test]` and silently skipped 14 real test files. The correction is in
+the list below — it is the sixth time this program, not the model, was the error.)*
 
 **6. An input failure is red; only infrastructure degrades.** jevi's error type splits
 `NoAnswer` (no key, DNS, timeout, 5xx) from `Invalid` (malformed question set, empty state,
@@ -80,8 +84,8 @@ The weak point is not the model and not the question. A wrong facts program does
 false greens — jev abstains — it produces **false reds**, which burn the check's credibility in
 a week.
 
-The Rust facts program here was wrong four times, and every time it looked like a jev mistake,
-three of them at p ≥ 0.90:
+The Rust facts program here was wrong **six** times, and every time it looked like a jev
+mistake, three of them at p ≥ 0.90:
 
 1. **Multi-line signatures** — assertions matched line by line, wrapped declarations missed.
 2. **`.unwrap()` is an assertion** — a test whose only check was `f(...).unwrap()` was counted
@@ -91,6 +95,17 @@ three of them at p ≥ 0.90:
 4. **Stripping comments ate a string** — `//[^\n]*` removed the rest of any line holding a
    Bazel label, so `assert_eq!(target_slug("//App:Target"), …)` read as assertion-free and a
    healthy test was flagged at p=0.90. Blank out string literals before touching comments.
+
+5. **A byte offset used as a char index, and a depth counter that could underflow** — it
+   panicked on the first file holding a non-ASCII byte before a brace. A facts program that
+   panics takes the whole check down with it.
+6. **`fn` required on the line after `#[test]`** — an `#[ignore]` in between hid the test, and
+   14 real test files were reported as having none. That made the measured abstention rate
+   wrong in both directions and is why the figure above changed.
+
+Every one of those six is now a test in `crates/musts-jev/src/facts.rs`. That is the only
+defence that works: the errors are not exotic, they are what parsing a language looks like, and
+they will happen again to whoever adds the next one.
 
 And the mirror image: once the program was right, **six of eight hand-built "hollow" mutants
 turned out not to be hollow**. Re-derive your labels with the fixed instrument before believing

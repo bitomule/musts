@@ -1,0 +1,10 @@
+[package]
+name = "musts-jev"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The judgment runner behind `uses: jev`. Talks to jev; musts-core never does."
+
+[dependencies]
+jevi = "0.1.2"
+serde_json = "1"
