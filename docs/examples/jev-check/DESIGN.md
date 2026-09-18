@@ -106,6 +106,16 @@ ones worth reading. That is the only route to validating a threshold that surviv
 
 - **The check is scriptable.** Then it is `bash/check`. jev never replaces a script, only a
   model. Half the existing `agent` facts here are in this category.
+- **A good enough facts program removes the question.** This is the sharper form of the rule
+  above and it is easy to miss, because it only becomes visible *after* you have written the
+  facts program. Measured on a sibling task (localisation style): the terminology question
+  — "does this translation use a word the platform's own interface would not use here" —
+  scored 0 of 5 with no computed fact, 2 of 5 with the platform's term supplied as a fact,
+  and **25 of 25 `unsure` on the healthy control**: no signal at all. It was not rescued with
+  a better facts program, because a better facts program made it unnecessary: a plain
+  forbidden-term list finds every offending string outright. **Once the code can locate the
+  cases, there is no judgment left to make.** So before tuning a weak question, ask whether
+  the facts program you are about to write already answers it.
 - **The judgment needs to follow a pointer the code cannot resolve either.** Nokoru's
   "each new LEGACY_ALLOWLIST entry is a genuine multi-verb protocol" has to open the named
   file and weigh its design. Out of scope until the `facts:` program can resolve it.
@@ -115,6 +125,26 @@ ones worth reading. That is the only route to validating a threshold that surviv
   writing the question and before any positive control: if such a case exists, the question
   is fragile. Both of our 100% positive controls (`: View`, `async`) were the easy family and
   neither of us chose them for that reason — we found out afterwards.
+
+## Independently replicated on non-English prose
+
+Everything measured here is code. A sibling node ran the same method over real en/de and en/es
+string-catalogue pairs from four apps — 178 judgments, $0.0024, median 400 ms — asking whether
+a translation states the same thing as its source:
+
+| arm | correct | **wrong** | unsure |
+|---|---|---|---|
+| German, healthy (n=30) | 25 | **0** | 5 (17%) |
+| Spanish, healthy (n=30) | 29 | **0** | 1 (3%) |
+| obvious mutant, both languages (n=60) | 60 | **0** | 0 |
+| hard mutant, donor sharing ≥2 words (n=29×2) | 30 | **0** | 28 |
+
+Zero wrong answers in six arms, on prose, in two languages neither of us had tested. Two things
+carry over. The abstention rate is again what decides the shape — 17% and 3% on the healthy
+case, against the 5%-to-60% sweep measured here on code — and again it is the *wording* that
+moves it, not the model. And the positive-control discipline paid for itself a fifth time: the
+one apparent false green was a mislabelled row, where the "wrong" donor string differed from
+the original only in capitalisation, so the translation was correct and jev was right.
 
 ## The abstention rate IS the economics
 
