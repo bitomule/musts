@@ -134,6 +134,27 @@ nothing, because there is nothing to catch**: zero hollow tests across every tes
 - **If the flagged count never reaches 30, delete the check here** rather than promote it: the
   defect does not occur in this repo.
 
+## Dead ends, with their numbers
+
+**"Does the name of this test describe what its assertions check?"** — 24 real test functions,
+half with the name swapped between two tests in the same file (mechanical truth). Result:
+**3 decided, 21 abstentions**, zero errors. Unusable, and it generalises: a question that asks
+whether two things *mean* the same abstains. Every question that has worked here asks about a
+property **visible in the text** — a `json.dump` of a parsed catalogue, an assertion with the
+same expression on both sides. Before writing a question, ask which of those two it is.
+
+**One file per call, and not because of the window.** Measured across 1,225 real source files
+in four apps: the largest is 97 KiB (25,018 tokens, 78% of the budget) and **not one exceeds
+it**; the median is 1,307 tokens, so roughly 32 median files would fit in a single call. The
+limit is nowhere near reached. One file per call is chosen because these questions are answered
+by reading one file and a red has to say which one — not because more would not fit.
+
+**And jevi's CLI truncates at 80,000 characters without saying so.** 120, 140 and 160 KiB of
+real source all came back with the same token count, judged on the same prefix, with no field
+and no warning (fixed upstream in 0.1.3; the marker existed but lived inside the text, where
+only the model could read it). The library does not apply that cap, so `MAX_STATE_CHARS` here
+is set explicitly to 0 — a decision, not an omission.
+
 ## When NOT to use `uses: jev`
 
 - **The check is scriptable.** Then it is `bash/check`. jev never replaces a script, only a

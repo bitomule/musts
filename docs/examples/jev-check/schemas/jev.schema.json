@@ -2,16 +2,16 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "uses: jev — `with` payload",
   "type": "object",
-  "required": ["questions", "ask", "facts"],
+  "required": ["questions", "ask"],
   "additionalProperties": false,
   "properties": {
     "questions": {
       "type": "string",
-      "description": "Path (relative to the manifest) of the question set. Every question it contains MUST carry a `criteria` block with both branches — the check refuses to run otherwise. Measured: dropping criteria took detection from 8/18 to 3/18 and abstention on healthy files to 100%."
+      "description": "Path (relative to the manifest) of the question set, in jev's own format. The repo writes the question; this capability knows nothing about it. Every question it contains MUST carry a `criteria` block with both branches — the run refuses otherwise."
     },
     "ask": {
       "type": "string",
-      "description": "Question id inside that set whose verdict decides this check. Exactly one: this capability asks one question, not a panel. Measured: a five-question fan-out summed in code did not beat one question on our corpus."
+      "description": "Question id inside that set whose verdict decides this check. Exactly one."
     },
     "expect": {
       "type": "string",
@@ -19,19 +19,11 @@
       "default": "yes",
       "description": "The verdict that means nothing fired. The opposite verdict is the only judgment that produces a red."
     },
-    "facts": {
-      "type": "string",
-      "description": "REQUIRED. Executable (relative to the manifest) run once per file. It prints a JSON object of deterministic facts the code resolved on jev's behalf — the pointers jev cannot follow — and may print `\"applicable\": false` to drop a file before any call is made. Measured: without resolved facts the same 10 hollow tests scored 0/10 with 10/10 abstentions; with them, 17/18 detected."
-    },
     "mode": {
       "type": "string",
       "enum": ["tripwire", "shadow"],
       "default": "shadow",
-      "description": "shadow: records every verdict and grants and blocks NOTHING — where every check starts. tripwire: a confident verdict against `expect` turns the check red; everything else is green. There is deliberately no `gate`: a capability whose green would mean \"verified\" cannot be built on a model that abstains, and an abstention routed to an agent costs more than the agent check it replaces."
-    },
-    "pin_model": {
-      "type": "string",
-      "description": "Model id recorded with every verdict, matched by prefix. A dated id (typesafe/jev-1.13-20260917) turns a silent model rotation into an abstention instead of a changed answer."
+      "description": "shadow: records every verdict and grants and blocks NOTHING — where every check starts. tripwire: a confident verdict against `expect` turns the check red; everything else is green. There is deliberately no `gate`."
     }
   }
 }

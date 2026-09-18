@@ -1,5 +1,0 @@
-{"version":1,"model":"typesafe/jev-1.13","questions":{
- "hollow":{"type":"noul",
-  "instructions":"At least one #[test] in this file cannot fail, no matter how the code under test behaves.",
-  "criteria":{"true":"A test has assertion_count 0, or every one of its assertions is counted in self_comparing_assertions, or all of its assertions sit inside a loop whose resolved_element_count is 0",
-              "false":"Every test reaches at least one assertion that compares an output of the code under test against a separately written expected value"}}}}

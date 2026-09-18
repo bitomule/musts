@@ -1,21 +1,21 @@
 name: jev
-version: 0.1.0
+version: 0.2.0
 
-# `uses: jev` is the first capability that is a JUDGMENT task and still carries a
-# machine-runnable `command`. Until now musts had two kinds of check: deterministic
-# ones a script can run (bazel/*, cargo/*, bash/check) and judgment ones only an
-# agent can make (agent, mav/expect). Judgment was therefore expensive, so almost
-# nothing was written as a judgment check. jev answers a typed question in ~400 ms
-# for ~$0.0001, which moves judgment into the runnable column.
+# A thin wrapper over what jev already accepts: the repo writes the question, this sends one
+# file and reads the verdict. It knows no domain. The rules that hold for every question —
+# criteria mandatory, no numeric threshold anywhere, unsure is green, the green is never
+# silent, silent in CI, and no gate — are enforced by the binary, not by this file.
 #
-# The point is NOT the two checks shipped here. It is the checks nobody wrote
-# because validating them cost an agent.
+# The state sent is `{path, source}` and nothing else. Anything that depends on execution
+# cannot be judged this way: measured, jev abstains 100% of the time on those. A repo that
+# needs computed facts should produce them with a `bash/check` and leave the result where its
+# question can read it.
 
 capabilities:
   check:
     uses: jev
     schema: schemas/jev.schema.json
     resolve:
-      command: ["./jev-check.sh", "resolve"]
+      command: ["musts-jev", "resolve"]
     evidence:
-      command: ["./jev-check.sh", "evidence"]
+      command: ["musts-jev", "evidence"]
