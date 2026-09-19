@@ -1,0 +1,14 @@
+name: jev
+version: 0.1.0
+
+# musts' own use of the capability shipped in docs/examples/jev-check/.
+# Deliberately separate: the capability is generic and publishable, this file
+# and the questions next to it are musts' own configuration for its own code.
+capabilities:
+  check:
+    uses: jev
+    schema: ../../../docs/examples/jev-check/schemas/jev.schema.json
+    resolve:
+      command: ["../../../docs/examples/jev-check/jev-check.sh", "resolve"]
+    evidence:
+      command: ["../../../docs/examples/jev-check/jev-check.sh", "evidence"]

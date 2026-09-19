@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "uses: jev — `with` payload",
+  "type": "object",
+  "required": ["questions", "ask"],
+  "additionalProperties": false,
+  "properties": {
+    "questions": {
+      "type": "string",
+      "description": "Path (relative to the manifest) of the question set, in jev's own format. The repo writes the question; this capability knows nothing about it. Every question it contains MUST carry a `criteria` block with both branches — the run refuses otherwise."
+    },
+    "ask": {
+      "type": "string",
+      "description": "Question id inside that set whose verdict decides this check. Exactly one."
+    },
+    "expect": {
+      "type": "string",
+      "enum": ["yes", "no"],
+      "default": "yes",
+      "description": "The verdict that means nothing fired. The opposite verdict is the only judgment that produces a red."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["tripwire", "shadow"],
+      "default": "shadow",
+      "description": "shadow: records every verdict and grants and blocks NOTHING — where every check starts. tripwire: a confident verdict against `expect` turns the check red; everything else is green. There is deliberately no `gate`."
+    }
+  }
+}
