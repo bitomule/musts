@@ -994,6 +994,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "fs2",
+ "globset",
  "jevi",
  "musts-core",
  "predicates",

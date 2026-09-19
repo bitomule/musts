@@ -283,6 +283,8 @@ musts evidence <task-id> --text "..." \        # record evidence for a judgment 
     --asset path/to/log --asset path/to/screen.png
 musts lint                                     # authoring checks on every MUSTS.yml
 musts stats                                    # what each check has cost, and caught
+musts calibrate                                # does each `uses: jev` question decide anything?
+musts calibrate --no-record                    # same, without updating .musts/calibration.json
 ```
 
 Exit codes:
@@ -291,9 +293,65 @@ Exit codes:
 - `evidence`: 0 accepted, 1 rejected by extension, 2 unknown task / stale snapshot / over-claim, 70 internal error.
 - `lint`: 0 clean or advice only, 1 an error-level finding (the manifest does not do what it says).
 - `stats`: always 0 — it reports, it does not judge.
+- `calibrate`: 0 when it ran, 70 when it could not judge a control (it then writes nothing).
 
-`lint` and `stats` are read-only and take no workspace lock, so neither
-blocks on (or blocks) a running `validate`.
+`lint`, `stats` and `calibrate` are read-only with respect to validation
+state and take no workspace lock, so none of them blocks on (or blocks) a
+running `validate`.
+
+### Calibrating a judgment check
+
+A `uses: jev` question is prose, and prose can be wrong in a way nothing
+notices: a question that can never fire looks exactly like a question on
+a clean repo. Both answer "no" to everything.
+
+`musts calibrate` separates them. It runs each question against real file
+states from the repo's own history **and** against two files the check
+declares: one that really breaks the rule, and a near-miss that does not.
+
+```yaml
+  self-comparing-assertions:
+    uses: jev
+    with:
+      ask: self_comparing
+      expect: "no"
+      mode: shadow
+      control:
+        violating: .musts/controls/self-comparing/violating.rs
+        clean: .musts/controls/self-comparing/clean.rs
+```
+
+Six verdicts, and two of them are the point:
+
+| verdict | what it means |
+|---|---|
+| `broken` | a control answered the wrong way — the question does not work |
+| `uncontrolled` | no control declared, so nothing below can be read |
+| `thin` | too little history to judge; the controls stand alone |
+| `noisy` | fires on most of real history, so it decides nothing |
+| `mute` | **nothing to find here yet** — the question works, the repo is clean |
+| `decisive` | fires on a minority, and its controls hold |
+
+Three things it deliberately does:
+
+- **It never edits `MUSTS.yml`.** For `broken`, `noisy` and
+  `uncontrolled` it prints the exact edit and stops. A check disabled
+  silently is the same quiet green the loop exists to remove.
+- **It samples only commits older than the one the question first
+  appeared in**, so a rule is never scored against changes it already
+  approved. When that leaves fewer samples than asked for, it says so
+  rather than reaching for newer history.
+- **It records `.musts/calibration.json`, committed**, with the boundary
+  commit and every probability, so a reviewer can see what a judgment
+  check was calibrated against without running anything.
+
+It needs a jev key and does not run under `CI` or `JEVI_DISABLE`; there
+it fails loudly and records nothing.
+
+`control:` is a new `with` field, so a `musts` older than the one that
+ships `calibrate` will reject a manifest that declares it — upgrade
+before adding the block. This repo's own manifest therefore picks it up
+in a follow-up, once a release carrying `calibrate` is installed.
 
 ## Stability
 

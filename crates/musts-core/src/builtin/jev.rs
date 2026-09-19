@@ -32,7 +32,22 @@ pub fn schema() -> &'static Value {
                 "questions": { "type": "string" },
                 "question": { "type": "object" },
                 "expect": { "type": "string", "enum": ["yes", "no"] },
-                "mode": { "type": "string", "enum": ["tripwire", "shadow"] }
+                "mode": { "type": "string", "enum": ["tripwire", "shadow"] },
+                // The two planted files `musts calibrate` judges the question
+                // against: one that really breaks the rule, one near-miss that
+                // does not. They live in the manifest rather than in the
+                // question set so a reviewer sees what a check was calibrated
+                // against without opening a second file, and so nothing in
+                // jevi's own format has to be extended to carry them.
+                "control": {
+                    "type": "object",
+                    "required": ["violating", "clean"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "violating": { "type": "string" },
+                        "clean": { "type": "string" }
+                    }
+                }
             }
         })
     })
