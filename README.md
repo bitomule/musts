@@ -31,15 +31,24 @@ is clean.
 ### 1. Install the CLI
 
 ```bash
-# Homebrew (macOS / Linux)
 brew install bitomule/tap/musts
-
-# Cargo (from crates.io)
-cargo install musts --locked
-
-# Precompiled binaries
-cargo binstall musts        # or download directly from GitHub Releases
 ```
+
+Homebrew is the supported channel. It installs both `musts` and `musts-jev`, the
+runner behind `uses: jev`.
+
+If you already have it, upgrade rather than assume: a stale local install is the
+most common reason a capability appears to be missing.
+
+```bash
+brew update && brew upgrade musts
+musts --version
+```
+
+Other channels exist (`cargo install musts --locked`, `cargo binstall musts`, or the
+binaries on GitHub Releases) but are not the one tested here. Installing through more
+than one will leave two binaries on your PATH, and whichever comes first wins — which
+is confusing precisely when you are trying to work out why a new feature is absent.
 
 ### 2. Create your first `MUSTS.yml`
 
