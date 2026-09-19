@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Musts calibrate, and the control that makes a judgment check mean something ([#99](https://github.com/bitomule/musts/pull/99))
+  - This adds a field to the `jev` capability's `with` schema: `control:`,
+    naming the two files calibration judges a question against. **A `musts`
+    older than 0.6.0 rejects a manifest that declares it** —
+    `Additional properties are not allowed ('control' was unexpected)` — so
+    upgrade before adding the block, and expect anyone still on 0.5.x to
+    fail validation on a manifest that has it.
 
 ## [0.5.3] - 2026-09-19
 
