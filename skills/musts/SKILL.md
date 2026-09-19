@@ -33,6 +33,9 @@ musts validate
      for you. You never re-run the build to satisfy the loop.
    - **Judgment checks** (`agent`, `mav` — verify facts, drive a UI): do
      the work yourself, then `musts evidence <task-id>` (see below).
+   - **Judged checks** (`jev` — musts asks a model the question itself):
+     `musts run <task-id>`, same as a deterministic check. Needs an API
+     key — see below.
 3. Re-run `musts validate`.
 4. Repeat until exit code `0`.
 
@@ -77,6 +80,27 @@ If two tasks share a single resource the report cannot know about (a
 simulator, a database, a port), run them sequentially. Deterministic checks
 are simpler: just `musts run` them (in parallel is fine unless they contend
 on a build lock).
+
+## `uses: jev` — set the API key first
+
+A `uses: jev` check asks a model a yes/no question about the change. It
+needs an API key of its own, once per machine:
+
+```bash
+musts-jev set-key < key.txt
+```
+
+It reads the key from stdin so it never reaches the shell history, and
+stores it in the macOS keychain (service `musts-jev`) where there is one.
+
+musts looks for the key in this order: the `MUSTS_JEV_API_KEY` environment
+variable (that is the CI form: `export MUSTS_JEV_API_KEY=...`), the system
+keychain, then `~/.config/bitomule/musts/config.json`. It never borrows
+another tool's key.
+
+With no key the check fails **red**, naming all three places it looked. It
+never passes quietly — a check that cannot judge must not look like a check
+that judged.
 
 ## Recording evidence (judgment checks)
 
