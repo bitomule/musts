@@ -4,6 +4,16 @@ changelog_update = true
 # Don't auto-bump pre-1.0 majors based on breaking changes — solo maintainer
 # decides when to ship a breaking minor.
 semver_check = false
+# A `feat:` ships as minor, not patch, even below 1.0.
+#
+# Below 1.0 release-plz follows Cargo's reading, where 0.x.y treats the
+# minor as the breaking slot, so a feature only moves the patch. This
+# repo's own changelog header says the opposite — "Patch versions are
+# bug-fix only" — and without this setting the two contradict each other
+# on the page: `musts calibrate`, a whole new command, was proposed as
+# 0.5.4 with an "### Added" section inside a patch release, and the same
+# thing had already happened to 0.2.1 (#77). Twice is a rule, not a slip.
+features_always_increment_minor = true
 # Push the tag, but let cargo-dist create the GitHub Release with binaries
 # attached. Enabling both creators causes "a release with the same tag name
 # already exists" failures in the Release workflow.
