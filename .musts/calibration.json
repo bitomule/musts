@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "at_unix": 1789836670,
+  "head": "8c4b20f0d7a7264ae9fa23c30d7d507db632a257",
+  "questions": {
+    "root/self-comparing-assertions": {
+      "check_id": "root/self-comparing-assertions",
+      "ask": "self_comparing",
+      "expect": "no",
+      "verdict": "decisive",
+      "introduced_at": "325574e035c0823e5a282765be58b6d88d028b6d",
+      "samples_wanted": 20,
+      "samples": [
+        {
+          "file": "crates/musts-core/src/lint.rs",
+          "commit": "7b0244ef4683ed11aab3a4cc897290c66874c0ca",
+          "p": 0.08,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/validate.rs",
+          "commit": "7b0244ef4683ed11aab3a4cc897290c66874c0ca",
+          "p": 0.3,
+          "verdict": "UNSURE"
+        },
+        {
+          "file": "crates/musts/tests/lint_e2e.rs",
+          "commit": "7b0244ef4683ed11aab3a4cc897290c66874c0ca",
+          "p": 0.08,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/manifest/parser.rs",
+          "commit": "4802a8d56bc3147a163c52ea6f28d84d6424bfc4",
+          "p": 0.24,
+          "verdict": "UNSURE"
+        },
+        {
+          "file": "crates/musts/tests/manifest_relative_paths_e2e.rs",
+          "commit": "4802a8d56bc3147a163c52ea6f28d84d6424bfc4",
+          "p": 0.08,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/lib.rs",
+          "commit": "5784d171274de068d4d7e666171dc947f57817e7",
+          "p": 0.04,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts/src/main.rs",
+          "commit": "5784d171274de068d4d7e666171dc947f57817e7",
+          "p": 0.03,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/builtin/bazel_test.rs",
+          "commit": "d38f18ee3876bddb16166408fa69834f1aeee35e",
+          "p": 0.15,
+          "verdict": "UNSURE"
+        },
+        {
+          "file": "crates/musts-core/src/builtin/mod.rs",
+          "commit": "d38f18ee3876bddb16166408fa69834f1aeee35e",
+          "p": 0.04,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts/tests/scope_hash_narrowing_e2e.rs",
+          "commit": "d3319dc79fc5f0380f88d286ca144a98f7353cc3",
+          "p": 0.81,
+          "verdict": "UNSURE"
+        },
+        {
+          "file": "crates/musts-core/src/diagnose.rs",
+          "commit": "19023eaaeb4b5cc47d366491a723ef792267f372",
+          "p": 0.07,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts/tests/diagnose_e2e.rs",
+          "commit": "19023eaaeb4b5cc47d366491a723ef792267f372",
+          "p": 0.07,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts/tests/unknown_keys_e2e.rs",
+          "commit": "19023eaaeb4b5cc47d366491a723ef792267f372",
+          "p": 0.08,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/error.rs",
+          "commit": "c1f835ba50490e42a708ba168895ebd64c25d7d7",
+          "p": 0.02,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/evidence/submit.rs",
+          "commit": "c1f835ba50490e42a708ba168895ebd64c25d7d7",
+          "p": 0.11,
+          "verdict": "UNSURE"
+        },
+        {
+          "file": "crates/musts-core/src/manifest/mod.rs",
+          "commit": "c1f835ba50490e42a708ba168895ebd64c25d7d7",
+          "p": 0.03,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/report.rs",
+          "commit": "c1f835ba50490e42a708ba168895ebd64c25d7d7",
+          "p": 0.09,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/stats.rs",
+          "commit": "cfc3dacc716ac6037f6460339fc94de7b1349849",
+          "p": 0.08,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts/tests/stats_e2e.rs",
+          "commit": "cfc3dacc716ac6037f6460339fc94de7b1349849",
+          "p": 0.08,
+          "verdict": "ok"
+        },
+        {
+          "file": "crates/musts-core/src/state/lock.rs",
+          "commit": "26d9a6b57cdc53d29758d4ac32874f4bcda3d2c8",
+          "p": 0.1,
+          "verdict": "ok"
+        }
+      ],
+      "controls": {
+        "violating": {
+          "file": ".musts/controls/self-comparing/violating.rs",
+          "p": 0.98,
+          "verdict": "FAIL",
+          "fired": true
+        },
+        "clean": {
+          "file": ".musts/controls/self-comparing/clean.rs",
+          "p": 0.05,
+          "verdict": "ok",
+          "fired": false
+        }
+      },
+      "median_p": 0.08,
+      "min_p": 0.02,
+      "max_p": 0.81,
+      "fired": 0,
+      "model": "typesafe/jev-1.13-20260917",
+      "suggested_edit": null
+    }
+  }
+}

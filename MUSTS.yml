@@ -49,6 +49,15 @@ checks:
       ask: self_comparing
       expect: "no"
       mode: shadow
+      # What `musts calibrate` judges this question against. Without them a
+      # question that cannot fire at all and a question on a clean repo
+      # produce identical numbers: measured, this one answered 0.02-0.75
+      # across 20 historic file states and fired on none of them, which is
+      # only readable as "nothing to find" because the violating control
+      # does fire. `clean.rs` is a near-miss of `violating.rs` on purpose.
+      control:
+        violating: .musts/controls/self-comparing/violating.rs
+        clean: .musts/controls/self-comparing/clean.rs
       question:
         type: noul
         instructions: "An assertion in this file compares an expression against itself."
