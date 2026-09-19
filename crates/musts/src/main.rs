@@ -9,6 +9,8 @@
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitCode};
 
+mod calibrate;
+
 use clap::{Parser, Subcommand};
 use musts_core::bootstrap::StateSession;
 use musts_core::evidence::{submit, EvidenceSubmissionResult};
@@ -88,6 +90,33 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Ask whether each `uses: jev` question decides anything, and
+    /// whether it decides the right way.
+    ///
+    /// Runs every judgment question against real file states from the
+    /// repo's own history — only commits older than the one that
+    /// introduced the question, so a rule cannot be scored against
+    /// changes it already approved — plus the two planted control files
+    /// the check declares. Without those controls a question that cannot
+    /// fire at all and a question on a clean repo produce identical
+    /// numbers, which is the failure this command exists to catch.
+    ///
+    /// It edits no manifest. For the verdicts that ask for a change it
+    /// prints the exact edit and leaves it to you.
+    Calibrate {
+        /// Real file states to judge per question.
+        #[arg(long, default_value_t = calibrate::DEFAULT_SAMPLES)]
+        samples: usize,
+        /// Commits to look back through while collecting those samples.
+        #[arg(long, default_value_t = calibrate::SCAN_DEFAULT)]
+        scan: usize,
+        /// Emit the record as JSON instead of the report.
+        #[arg(long)]
+        json: bool,
+        /// Print the report without updating `.musts/calibration.json`.
+        #[arg(long)]
+        no_record: bool,
+    },
     /// Manage the agent-facing musts skill.
     Skill {
         #[command(subcommand)]
@@ -134,6 +163,18 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
         } => evidence_command(cli.workspace.as_deref(), task_id, text.as_deref(), assets),
         Command::Lint { json } => lint_command(cli.workspace.as_deref(), *json),
         Command::Stats { json } => stats_command(cli.workspace.as_deref(), *json),
+        Command::Calibrate {
+            samples,
+            scan,
+            json,
+            no_record,
+        } => calibrate_command(
+            cli.workspace.as_deref(),
+            *samples,
+            *scan,
+            *json,
+            !*no_record,
+        ),
         Command::Skill { command } => match command {
             SkillCommand::Install { agent } => skill_install(agent.as_deref()),
         },
@@ -222,6 +263,23 @@ fn lint_command(
     // Warnings are advice and must not gate CI; errors mean the manifest
     // does not do what it says.
     Ok(ExitCode::from(u8::from(report.has_errors())))
+}
+
+/// Reads manifests and git history and runs `musts-jev`; it changes no
+/// validation state, so like `lint` it takes no workspace lock.
+fn calibrate_command(
+    explicit_workspace: Option<&std::path::Path>,
+    samples: usize,
+    scan: usize,
+    json: bool,
+    write: bool,
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    calibrate::run(&root, samples, scan, json, write)
 }
 
 /// Read-only, so it deliberately does **not** take the workspace lock: a

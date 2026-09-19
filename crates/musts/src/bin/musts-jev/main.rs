@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use serde_json::{json, Value};
 
 const USAGE: &str = "usage: musts-jev --questions <path> --ask <id> [--expect yes|no] \
-                     [--mode shadow|tripwire] [--root <dir>] <file>";
+                     [--mode shadow|tripwire] [--root <dir>] [--json] <file>";
 
 /// jevi's CLI silently truncates a state at 80_000 characters and says nothing about it in
 /// its output: 120, 140 and 160 KiB of real source all came back with the same token count,
@@ -44,6 +44,11 @@ struct Args {
     root: String,
     /// The inline question object, verbatim from the manifest.
     inline: Option<String>,
+    /// Emit one JSON object instead of the human line. `musts calibrate`
+    /// reads this: parsing `p=Some(0.99)` out of a Debug-formatted
+    /// `Option` is the kind of coupling that breaks on a refactor nobody
+    /// connects to the breakage.
+    json: bool,
     file: String,
 }
 
@@ -53,6 +58,7 @@ fn parse_args() -> Result<Args, String> {
     let mut mode = "shadow".to_string();
     let mut root = ".".to_string();
     let mut inline: Option<String> = None;
+    let mut json = false;
     let mut files: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -64,6 +70,7 @@ fn parse_args() -> Result<Args, String> {
             "--expect" => expect = take("--expect")?,
             "--mode" => mode = take("--mode")?,
             "--root" => root = take("--root")?,
+            "--json" => json = true,
             o if o.starts_with("--") => return Err(format!("unknown flag {o}")),
             o => files.push(o.to_string()),
         }
@@ -95,6 +102,7 @@ fn parse_args() -> Result<Args, String> {
         expect,
         mode,
         root,
+        json,
         file: files.remove(0),
     })
 }
@@ -156,9 +164,13 @@ fn run() -> Result<ExitCode, String> {
     let args = parse_args()?;
 
     if let Some(reason) = unavailable() {
-        println!(
-            "SKIPPED: {reason}. Nothing was judged; this check proves nothing about this change."
-        );
+        if args.json {
+            emit_json(&args.file, "skipped", None, None, Some(reason));
+        } else {
+            println!(
+                "SKIPPED: {reason}. Nothing was judged; this check proves nothing about this change."
+            );
+        }
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -218,32 +230,48 @@ fn run() -> Result<ExitCode, String> {
         // shapes of failure that a single `ok: false` used to flatten into one, which left a
         // permanently broken check reporting that all was well.
         Err(e @ jevi::Error::NoAnswer { .. }) => {
-            println!("SKIP   {}  {}", args.file, e.kind());
-            println!("\n0 judged, 1 not evaluated. This check proves nothing about this change.");
+            if args.json {
+                emit_json(&args.file, "skipped", None, None, Some(e.kind()));
+            } else {
+                println!("SKIP   {}  {}", args.file, e.kind());
+                println!(
+                    "\n0 judged, 1 not evaluated. This check proves nothing about this change."
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
-            println!("BROKEN {}  {}: {e}", args.file, e.kind());
+            if args.json {
+                emit_json(&args.file, "broken", None, None, Some(e.kind()));
+            } else {
+                println!("BROKEN {}  {}: {e}", args.file, e.kind());
+            }
             Ok(ExitCode::FAILURE)
         }
         Ok(answered) => {
             let idx = answered.names.iter().position(|n| n == &args.ask);
             let Some(o) = idx.and_then(|i| answered.outcomes.get(i)) else {
-                println!("BROKEN {}  answer for `{}` missing", args.file, args.ask);
+                if args.json {
+                    emit_json(&args.file, "broken", None, None, Some("answer missing"));
+                } else {
+                    println!("BROKEN {}  answer for `{}` missing", args.file, args.ask);
+                }
                 return Ok(ExitCode::FAILURE);
             };
             let verdict = o.verdict.as_str();
             let model = answered.model.clone().unwrap_or_default();
-            println!(
-                "{:6} {}  p={:?} {model}",
-                match verdict {
-                    "unsure" => "UNSURE",
-                    v if v == args.expect => "ok",
-                    _ => "FAIL",
-                },
-                args.file,
-                o.number
-            );
+            let decided = match verdict {
+                "unsure" => "UNSURE",
+                v if v == args.expect => "ok",
+                _ => "FAIL",
+            };
+            if args.json {
+                emit_json(&args.file, decided, o.number, Some(&model), None);
+                // A machine reading this has the verdict in the object; a
+                // second exit-code channel would only let the two disagree.
+                return Ok(ExitCode::SUCCESS);
+            }
+            println!("{decided:6} {}  p={:?} {model}", args.file, o.number);
 
             if args.mode == "shadow" {
                 let dir = Path::new(&args.root).join(".musts/jev-shadow");
@@ -272,6 +300,15 @@ fn run() -> Result<ExitCode, String> {
             })
         }
     }
+}
+
+/// One object per call, for `musts calibrate` and anything else that has to
+/// read a verdict rather than show it.
+fn emit_json(file: &str, verdict: &str, p: Option<f64>, model: Option<&str>, note: Option<&str>) {
+    println!(
+        "{}",
+        json!({ "file": file, "verdict": verdict, "p": p, "model": model, "note": note })
+    );
 }
 
 fn main() -> ExitCode {

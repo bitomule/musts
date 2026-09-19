@@ -8,6 +8,7 @@
 
 pub mod bootstrap;
 pub mod builtin;
+pub mod calibrate;
 pub mod diagnose;
 pub mod error;
 pub mod evidence;
