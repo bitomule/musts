@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.5.2] - 2026-09-19
+
+### Internal
+
+- Updated the following local packages: musts-core
+
 ## [0.5.1] - 2026-09-19
 
 ## [0.5.0] - 2026-09-19

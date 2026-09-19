@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.4.2] - 2026-09-19
+
+### Fixed
+
+- The task's command is argv, not a shell line ([#93](https://github.com/bitomule/musts/pull/93))
+
 ## [0.4.1] - 2026-09-19
 
 ## [0.4.0] - 2026-09-15
