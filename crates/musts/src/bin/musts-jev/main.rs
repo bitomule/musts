@@ -16,6 +16,8 @@
 //! measured, jev abstains 100% of the time on those. A repo that needs computed facts should
 //! produce them with a `bash/check` and leave the result where its question can read it.
 
+mod jevkey;
+
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -139,6 +141,7 @@ fn run() -> Result<ExitCode, String> {
     match std::env::args().nth(1).as_deref() {
         Some("resolve") => return protocol::resolve().map(|_| ExitCode::SUCCESS),
         Some("evidence") => return protocol::evidence().map(|_| ExitCode::SUCCESS),
+        Some("set-key") => return jevkey::set_key().map(|_| ExitCode::SUCCESS),
         _ => {}
     }
     let args = parse_args()?;
@@ -157,7 +160,17 @@ fn run() -> Result<ExitCode, String> {
     let prepared = jevi::QuestionSet::parse(&raw, &args.questions)
         .and_then(|s| s.prepare())
         .map_err(|e| format!("{}: {e}", e.kind()))?;
+    // The key is musts' own, never jevi's: inheriting another tool's credential silently
+    // is how "it works on my machine" starts. No key is a red, not a quiet pass.
+    let Some((key, source)) = jevkey::resolve() else {
+        return Err(jevkey::missing_key_message());
+    };
+    // SAFETY-ish: jevi reads the provider key from the environment, so hand it ours for this
+    // process only. Nothing is written anywhere and no child inherits more than it already
+    // would.
+    std::env::set_var("OPENROUTER_API_KEY", &key);
     let cfg = jevi::Config::load().map_err(|e| format!("{}: {e}", e.kind()))?;
+    eprintln!("musts-jev: key from {}", source.describe());
     let opts = jevi::AskOptions {
         provider: None,
         model: None,

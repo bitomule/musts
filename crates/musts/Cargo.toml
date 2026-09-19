@@ -23,7 +23,7 @@ path = "src/main.rs"
 # `--no-default-features` builds without it for anyone who wants no HTTPS client in the tree.
 [[bin]]
 name = "musts-jev"
-path = "src/bin/musts-jev.rs"
+path = "src/bin/musts-jev/main.rs"
 required-features = ["jev"]
 
 [features]

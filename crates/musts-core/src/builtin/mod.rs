@@ -17,6 +17,7 @@ pub mod agent;
 pub mod bazel_build;
 pub mod bazel_test;
 pub mod cargo;
+pub mod jev;
 pub mod mav_expect;
 mod util;
 
@@ -44,6 +45,12 @@ pub fn registered_capabilities() -> impl Iterator<Item = &'static str> {
 }
 
 const REGISTRY: &[BuiltinCapability] = &[
+    BuiltinCapability {
+        uses: "jev",
+        schema: jev::schema,
+        resolve: jev::resolve,
+        evidence: jev::evidence,
+    },
     BuiltinCapability {
         uses: "agent",
         schema: agent::schema,
