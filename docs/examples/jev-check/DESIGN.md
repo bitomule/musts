@@ -134,6 +134,27 @@ nothing, because there is nothing to catch**: zero hollow tests across every tes
 - **If the flagged count never reaches 30, delete the check here** rather than promote it: the
   defect does not occur in this repo.
 
+## What makes a question worth asking
+
+Four tests, in order. The first is the one that rules candidates out for free.
+
+**1. Does it fire before the damage is written?** A judgment check that only speaks up once
+the mistake is in the tree is a report, not a guard. Most candidate questions fail here.
+
+**2. Does what it watches change often?** A check aimed at a property that changes once in a
+file's lifetime spends its life green by inertia.
+
+**3. Is the regression ordinary?** If it takes an exotic mistake to trigger, nobody will keep
+the check.
+
+**4. Can a script do it?** If a grep catches your case, write the grep.
+
+And one number to judge your own wording by: **abstention on the HEALTHY case.** The question
+shipped as the example abstains on 1 of 14 healthy files, 7%. The first question tried here
+abstained on 47% — same model, same day, different wording. A high rate does not mean the
+model is weak; it means the question asks for something it cannot see. Under two states it
+costs nothing, so treat it as a signal about your wording, not as a bill.
+
 ## Dead ends, with their numbers
 
 **"Does the name of this test describe what its assertions check?"** — 24 real test functions,

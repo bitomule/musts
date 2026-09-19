@@ -1,13 +1,15 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "uses: jev — `with` payload",
+  "title": "uses: jev \u2014 `with` payload",
   "type": "object",
-  "required": ["questions", "ask"],
+  "required": [
+    "ask"
+  ],
   "additionalProperties": false,
   "properties": {
     "questions": {
       "type": "string",
-      "description": "Path (relative to the manifest) of the question set, in jev's own format. The repo writes the question; this capability knows nothing about it. Every question it contains MUST carry a `criteria` block with both branches — the run refuses otherwise."
+      "description": "Path (relative to the manifest) of the question set, in jev's own format. Use this OR `question`. Start inline; the moment you measure a question, move it to a file \u2014 that file IS the measurement."
     },
     "ask": {
       "type": "string",
@@ -15,15 +17,25 @@
     },
     "expect": {
       "type": "string",
-      "enum": ["yes", "no"],
+      "enum": [
+        "yes",
+        "no"
+      ],
       "default": "yes",
       "description": "The verdict that means nothing fired. The opposite verdict is the only judgment that produces a red."
     },
     "mode": {
       "type": "string",
-      "enum": ["tripwire", "shadow"],
+      "enum": [
+        "tripwire",
+        "shadow"
+      ],
       "default": "shadow",
-      "description": "shadow: records every verdict and grants and blocks NOTHING — where every check starts. tripwire: a confident verdict against `expect` turns the check red; everything else is green. There is deliberately no `gate`."
+      "description": "shadow: records every verdict and grants and blocks NOTHING \u2014 where every check starts. tripwire: a confident verdict against `expect` turns the check red; everything else is green. There is deliberately no `gate`."
+    },
+    "question": {
+      "type": "object",
+      "description": "The question itself, written inline. Use this OR `questions`, never both. It is assembled into the same document a question set file would hold and handed to jev's own parser, so nothing about the format differs. NOTE: in YAML the criteria keys must be quoted \u2014 bare true: and false: are booleans, not strings (musts rejects that loudly)."
     }
   }
 }

@@ -36,11 +36,14 @@ const USAGE: &str = "usage: musts-jev --questions <path> --ask <id> [--expect ye
 const MAX_STATE_CHARS: usize = 0; // 0 = never truncate
 
 struct Args {
+    /// Either a path to a question set, or the inline question assembled into one.
     questions: String,
     ask: String,
     expect: String,
     mode: String,
     root: String,
+    /// The inline question object, verbatim from the manifest.
+    inline: Option<String>,
     file: String,
 }
 
@@ -49,12 +52,14 @@ fn parse_args() -> Result<Args, String> {
     let mut expect = "yes".to_string();
     let mut mode = "shadow".to_string();
     let mut root = ".".to_string();
+    let mut inline: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         let mut take = |name: &str| it.next().ok_or_else(|| format!("{name} needs a value"));
         match arg.as_str() {
             "--questions" => questions = take("--questions")?,
+            "--question-json" => inline = Some(take("--question-json")?),
             "--ask" => ask = take("--ask")?,
             "--expect" => expect = take("--expect")?,
             "--mode" => mode = take("--mode")?,
@@ -63,7 +68,10 @@ fn parse_args() -> Result<Args, String> {
             o => files.push(o.to_string()),
         }
     }
-    if questions.is_empty() || ask.is_empty() || files.len() != 1 {
+    if inline.is_some() && !questions.is_empty() {
+        return Err("give --questions or --question-json, not both".into());
+    }
+    if (questions.is_empty() && inline.is_none()) || ask.is_empty() || files.len() != 1 {
         // One file per call — not because of the context window, which is nowhere near
         // reached, but because these questions are answered by reading one file and a red
         // has to say which one.
@@ -82,6 +90,7 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(Args {
         questions,
+        inline,
         ask,
         expect,
         mode,
@@ -153,11 +162,25 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let raw = std::fs::read_to_string(&args.questions)
-        .map_err(|e| format!("cannot read {}: {e}", args.questions))?;
+    // An inline question is assembled into the very same document a file would hold, and
+    // handed to jevi's own parser. Nothing about jev's format is reimplemented here, and the
+    // two rules below apply to both spellings because they read the same object.
+    let (raw, origin) = match &args.inline {
+        Some(q) => {
+            let question: Value =
+                serde_json::from_str(q).map_err(|e| format!("inline question is not JSON: {e}"))?;
+            let doc = json!({ "version": 1, "questions": { &args.ask: question } });
+            (doc.to_string(), format!("{} (inline)", args.ask))
+        }
+        None => (
+            std::fs::read_to_string(&args.questions)
+                .map_err(|e| format!("cannot read {}: {e}", args.questions))?,
+            args.questions.clone(),
+        ),
+    };
     vet(&raw, &args.ask)?;
 
-    let prepared = jevi::QuestionSet::parse(&raw, &args.questions)
+    let prepared = jevi::QuestionSet::parse(&raw, &origin)
         .and_then(|s| s.prepare())
         .map_err(|e| format!("{}: {e}", e.kind()))?;
     // The key is musts' own, never jevi's: inheriting another tool's credential silently
@@ -292,7 +315,12 @@ mod protocol {
             .map(|c| {
                 let id = c["id"].as_str().unwrap_or("?");
                 let w = &c["with"];
-                let (q, ask) = (w["questions"].as_str().unwrap_or("?"), w["ask"].as_str().unwrap_or("?"));
+                let ask = w["ask"].as_str().unwrap_or("?");
+                // Inline or a file — the same document reaches the same parser either way.
+                let q = match w.get("question") {
+                    Some(inline) => format!("--question-json '{}'", inline),
+                    None => format!("--questions {}", w["questions"].as_str().unwrap_or("?")),
+                };
                 let expect = w["expect"].as_str().unwrap_or("yes");
                 let mode = w["mode"].as_str().unwrap_or("shadow");
                 let sample = files.first().copied().unwrap_or("<file>");
@@ -303,7 +331,7 @@ mod protocol {
                     "satisfies": [id],
                     "parallelizable": true,
                     "instructions": [
-                        format!("Run this once per file in scope: `musts-jev --questions {q} --ask {ask} --expect {expect} --mode {mode} {sample}`"),
+                        format!("Run this once per file in scope: `musts-jev {q} --ask {ask} --expect {expect} --mode {mode} {sample}`"),
                         "Submit its output. The summary line says how many files were judged and how many were not — a green with nothing judged proves nothing.".to_string(),
                         "UNSURE is green: this check reports what fired, never what is verified.".to_string(),
                     ],
