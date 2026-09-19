@@ -1,13 +1,14 @@
 name: jev
 version: 0.2.0
 
-# This repo's own wiring of the capability. The commands point at the locally built binary;
-# a consumer that installed it (`cargo install musts-jev`) writes just `musts-jev` instead.
+# `musts-jev` ships with `musts`, so a consumer that ran `cargo install musts` already has
+# it on the same PATH. This repo points at its own build so the check works before the
+# change is released.
 capabilities:
   check:
     uses: jev
     schema: ../../../docs/examples/jev-check/schemas/jev.schema.json
     resolve:
-      command: ["../../../target/debug/musts-jev", "resolve"]
+      command: ["../../../target/release/musts-jev", "resolve"]
     evidence:
-      command: ["../../../target/debug/musts-jev", "evidence"]
+      command: ["../../../target/release/musts-jev", "evidence"]
