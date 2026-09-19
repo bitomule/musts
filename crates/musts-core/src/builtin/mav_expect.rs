@@ -150,6 +150,8 @@ pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
             title: format!("Validate MAV expectations for {scope}"),
             satisfies: bucket.satisfies,
             parallelizable: false,
+            // UI expectations need agent-driven capture; not `musts run`-able.
+            command: None,
             instructions,
             evidence_contract: EvidenceContract {
                 text: TextContract {

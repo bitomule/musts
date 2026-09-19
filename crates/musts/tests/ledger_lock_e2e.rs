@@ -69,17 +69,26 @@ checks:
     );
     let body = fs::read_to_string(&lock_path).unwrap();
     assert!(body.contains("version: 1"));
-    assert!(body.contains("root/contract"));
-    // sha-like scope hash should be a 64-hex-char string.
-    let hex = body
+    // One flow mapping per line. Keeping a record on a single line is
+    // what makes `merge=union` a correct resolution for the lock.
+    let entry = body
         .lines()
-        .find(|l| l.contains("scope_hash:"))
-        .expect("scope_hash line")
-        .split(':')
-        .nth(1)
+        .find(|l| l.contains("root/contract"))
+        .expect("entry line");
+    let hex = entry
+        .rsplit("scope_hash: \"")
+        .next()
         .unwrap()
-        .trim();
+        .trim_end_matches("\"}");
     assert_eq!(hex.len(), 64, "blake3 hex should be 64 chars (was {hex:?})");
+    assert_eq!(
+        entry,
+        format!("- {{check: \"root/contract\", scope_hash: \"{hex}\"}}")
+    );
+
+    // The union-merge attribute ships alongside the lock.
+    let attrs = fs::read_to_string(dir.path().join(".musts/.gitattributes")).unwrap();
+    assert!(attrs.contains("ledger.lock.yaml merge=union"), "{attrs}");
 }
 
 #[test]

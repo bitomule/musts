@@ -1,8 +1,17 @@
 version: 1
 
 checks:
+  # Scoped to the wire types. Without `paths:` the scope was the whole
+  # crate folder, so anything dropped beside the source would reopen a
+  # review that only ever reads lib.rs.
+  #
+  # Cargo.toml is not listed even though one fact is about dependencies:
+  # `.mustsignore` excludes it workspace-wide, so the pattern could never
+  # match. A new dependency still shows up in CI.
   contract:
     uses: agent
+    paths:
+      - "src/**"
     with:
       facts:
         - "musts-protocol contains only serde wire types and constants; any fn body beyond #[derive] machinery is justified or moved out."

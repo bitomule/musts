@@ -31,15 +31,24 @@ is clean.
 ### 1. Install the CLI
 
 ```bash
-# Homebrew (macOS / Linux)
 brew install bitomule/tap/musts
-
-# Cargo (from crates.io)
-cargo install musts --locked
-
-# Precompiled binaries
-cargo binstall musts        # or download directly from GitHub Releases
 ```
+
+Homebrew is the supported channel. It installs both `musts` and `musts-jev`, the
+runner behind `uses: jev`.
+
+If you already have it, upgrade rather than assume: a stale local install is the
+most common reason a capability appears to be missing.
+
+```bash
+brew update && brew upgrade musts
+musts --version
+```
+
+Other channels exist (`cargo install musts --locked`, `cargo binstall musts`, or the
+binaries on GitHub Releases) but are not the one tested here. Installing through more
+than one will leave two binaries on your PATH, and whichever comes first wins — which
+is confusing precisely when you are trying to work out why a new feature is absent.
 
 ### 2. Create your first `MUSTS.yml`
 
@@ -127,6 +136,24 @@ checks:
       target: //App:App
 ```
 
+Use `exclude_paths` to carve files out of a check's scope so editing them
+doesn't re-open it — for example a version file bumped by release automation:
+
+```yaml
+checks:
+  app-build:
+    uses: bazel/build
+    exclude_paths:
+      - "tools/config.bzl"   # release automation bumps build_number here
+    with:
+      target: //App:App
+```
+
+`exclude_paths` applies after `paths`. Note that musts does **not** support
+gitignore-style `!` negation inside `paths:` (it would silently match
+nothing) — a leading `!` is now rejected with a manifest error pointing you
+at `exclude_paths`.
+
 ### Product or architecture contracts
 
 Use the built-in `agent` capability when the validation is a judgement call
@@ -212,6 +239,7 @@ The reference capabilities are built into the `musts` binary:
 | `cargo/clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `cargo/test` | `cargo test --workspace` |
 | `bazel/build` | Bazel target builds |
+| `bazel/test` | Bazel test targets, grouped into one run per scope |
 | `mav/expect` | Mobile Agent Verifier flows and device evidence |
 
 Third-party extensions can add new capabilities in any language that speaks
@@ -250,14 +278,22 @@ sequence, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 ```bash
 musts validate                                 # report pending validation tasks
 musts validate --json                          # machine-readable report
-musts evidence <task-id> --text "..." \        # record evidence for a task
+musts run <task-id>                            # execute a deterministic task and record it
+musts evidence <task-id> --text "..." \        # record evidence for a judgment task
     --asset path/to/log --asset path/to/screen.png
+musts lint                                     # authoring checks on every MUSTS.yml
+musts stats                                    # what each check has cost, and caught
 ```
 
 Exit codes:
 
 - `validate`: 0 clean, 1 pending tasks, 2 configuration / stale / lock error, 70 internal error.
 - `evidence`: 0 accepted, 1 rejected by extension, 2 unknown task / stale snapshot / over-claim, 70 internal error.
+- `lint`: 0 clean or advice only, 1 an error-level finding (the manifest does not do what it says).
+- `stats`: always 0 — it reports, it does not judge.
+
+`lint` and `stats` are read-only and take no workspace lock, so neither
+blocks on (or blocks) a running `validate`.
 
 ## Stability
 
@@ -270,7 +306,7 @@ some API movement while the format settles.
 
 Start at [`docs/README.md`](docs/README.md) for the documentation index.
 
-- [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) - Claude Code plugin and Stop hook.
+- [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) - Claude Code plugin and pre-commit validation hook.
 - [`docs/skill.md`](docs/skill.md) - copyable agent instructions for the validation loop.
 - [`docs/extensions.md`](docs/extensions.md) - how to write a third-party extension.
 - [`docs/architecture.md`](docs/architecture.md) - bird's-eye view of the crates.

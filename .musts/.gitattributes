@@ -1,0 +1,4 @@
+# Managed by musts. The validated-state ledger is an append-only set, so
+# taking both sides is always the right merge — a hand resolution would
+# drop entries that were legitimately proven green on one branch.
+ledger.lock.yaml merge=union

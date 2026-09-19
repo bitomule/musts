@@ -1,0 +1,5 @@
+{"version":1,"model":"typesafe/jev-1.13","questions":{
+ "rewrites_catalogue":{"type":"noul",
+  "instructions":"This script writes a whole String Catalogue (.xcstrings) back out by serialising it from memory.",
+  "criteria":{"true":"It parses a .xcstrings file into a data structure and then writes the entire structure back to that file, for example with a JSON dump",
+              "false":"It only reads the catalogue, edits the file in place without reserialising it, delegates to Apple's own tooling, or does not touch a .xcstrings at all"}}}}

@@ -264,7 +264,11 @@ fn scenario_10_json_output_pending_shape() {
 
 #[test]
 #[serial]
-fn scenario_10_validate_issues_at_most_five_tasks() {
+fn scenario_10_validate_issues_all_dirty_tasks_idempotently() {
+    // `musts validate` used to truncate to at most 5 tasks per run, which
+    // made re-running it mid-loop invalidate the ids it had just issued
+    // ("no longer applies"). It now emits every dirty task, so validate is
+    // idempotent and no live task id is silently dropped.
     let dir = TempDir::new().unwrap();
     let mut manifest = String::from("version: 1\nchecks:\n");
     for i in 0..6 {
@@ -275,21 +279,44 @@ fn scenario_10_validate_issues_at_most_five_tasks() {
     write_manifest(&dir.path().join("MUSTS.yml"), &manifest);
     install_stub_descriptor(dir.path(), "bazel/build");
 
-    let out = bin()
-        .env("MUSTS_STUB_RESOLVE_SHAPE", "multi_task")
-        .arg("--workspace")
-        .arg(dir.path())
-        .arg("validate")
-        .arg("--json")
-        .assert()
-        .failure()
-        .code(1);
-    let stdout = std::str::from_utf8(&out.get_output().stdout).unwrap();
-    let v: serde_json::Value = serde_json::from_str(stdout).expect("valid JSON");
-    let tasks = v["tasks"].as_array().unwrap();
-    assert_eq!(tasks.len(), 5);
-    assert_eq!(tasks[0]["id"], "stub-task-0");
-    assert_eq!(tasks[4]["id"], "stub-task-4");
+    let run_validate = || {
+        let out = bin()
+            .env("MUSTS_STUB_RESOLVE_SHAPE", "multi_task")
+            .arg("--workspace")
+            .arg(dir.path())
+            .arg("validate")
+            .arg("--json")
+            .assert()
+            .failure()
+            .code(1);
+        let stdout = std::str::from_utf8(&out.get_output().stdout)
+            .unwrap()
+            .to_string();
+        serde_json::from_str::<serde_json::Value>(&stdout).expect("valid JSON")
+    };
+
+    let v = run_validate();
+    let ids: Vec<String> = v["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+    // All six tasks are emitted — no ≤5 truncation.
+    assert_eq!(ids.len(), 6, "expected all dirty tasks, got {ids:?}");
+    assert!(ids.contains(&"stub-task-5".to_string()));
+
+    // Re-running validate yields the same set (idempotent). The previously
+    // "not issued in this batch" id is now a live task, so evidence for it
+    // is never rejected with "no longer applies".
+    let v2 = run_validate();
+    let ids2: Vec<String> = v2["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ids2, "validate must be idempotent across runs");
 
     bin()
         .arg("--workspace")
@@ -297,11 +324,9 @@ fn scenario_10_validate_issues_at_most_five_tasks() {
         .arg("evidence")
         .arg("stub-task-5")
         .arg("--text")
-        .arg("not issued in this batch")
+        .arg("now a live task")
         .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("no longer applies"));
+        .stderr(predicate::str::contains("no longer applies").not());
 }
 
 // ---------------------------------------------------------------------------
