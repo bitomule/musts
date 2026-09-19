@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.6.0] - 2026-09-19
+
+### Added
+
+- Musts calibrate, and the control that makes a judgment check mean something ([#99](https://github.com/bitomule/musts/pull/99))
+
 ## [0.5.3] - 2026-09-19
 
 ### Internal
