@@ -10,7 +10,7 @@
 //! characters intentionally.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -53,15 +53,24 @@ pub struct Command {
 }
 
 impl Command {
-    /// Absolute path of the program — relative entries are resolved against
-    /// the descriptor root.
+    /// Where to find the program.
+    ///
+    /// Three cases, and the middle one is the point: a bare name with no path separator
+    /// (`musts-jev`) is a PATH lookup, because a capability that ships with musts is on the
+    /// same PATH as musts itself and asking people to write an absolute path to it makes an
+    /// installed capability feel uninstalled. Anything carrying a separator stays relative
+    /// to the descriptor root exactly as before — that is the case an extension shipping its
+    /// own `bin/foo` depends on.
     pub fn program_path(&self, descriptor_root: &Path) -> PathBuf {
         let first = Path::new(&self.argv[0]);
         if first.is_absolute() {
-            first.to_path_buf()
-        } else {
-            descriptor_root.join(first)
+            return first.to_path_buf();
         }
+        if first.components().count() == 1 && !self.argv[0].contains(MAIN_SEPARATOR) {
+            // Hand the bare name to the OS and let it search PATH.
+            return first.to_path_buf();
+        }
+        descriptor_root.join(first)
     }
 
     /// Arguments after the program.
@@ -484,5 +493,44 @@ capabilities:
             abs_cmd.program_path(descriptor_root),
             PathBuf::from("/usr/bin/true")
         );
+    }
+}
+
+#[cfg(test)]
+mod program_path_tests {
+    use super::*;
+
+    fn cmd(argv: &[&str]) -> Command {
+        Command {
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_bare_name_is_left_for_the_os_to_find_on_path() {
+        // A capability that ships with musts sits on the same PATH as musts. Making people
+        // write an absolute path to it makes an installed capability feel uninstalled.
+        let p = cmd(&["musts-jev", "resolve"]).program_path(Path::new("/w/.musts/extensions/jev"));
+        assert_eq!(p, Path::new("musts-jev"));
+    }
+
+    #[test]
+    fn a_relative_path_still_resolves_against_the_descriptor_root() {
+        // The control: this is the case an extension shipping its own bin/foo depends on,
+        // and it must not change.
+        let p = cmd(&["bin/foo", "resolve"]).program_path(Path::new("/w/.musts/extensions/x"));
+        assert_eq!(p, Path::new("/w/.musts/extensions/x/bin/foo"));
+    }
+
+    #[test]
+    fn a_dot_relative_path_still_resolves_against_the_descriptor_root() {
+        let p = cmd(&["./foo"]).program_path(Path::new("/w/.musts/extensions/x"));
+        assert_eq!(p, Path::new("/w/.musts/extensions/x/./foo"));
+    }
+
+    #[test]
+    fn an_absolute_path_is_untouched() {
+        let p = cmd(&["/usr/bin/foo"]).program_path(Path::new("/w/x"));
+        assert_eq!(p, Path::new("/usr/bin/foo"));
     }
 }
