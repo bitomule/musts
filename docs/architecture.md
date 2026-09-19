@@ -8,7 +8,7 @@
 |---|---|
 | `crates/musts-protocol` | Pure serde types for the JSON-over-stdio extension protocol. Zero behaviour. |
 | `crates/musts-extension-util` | Helpers for Rust extension authors: stdio framing (`ipc_main`, `read_request`, `write_response`), MIME-based asset classification (`asset_kind::*`). |
-| `crates/musts-core` | All domain logic — manifests, snapshots, state, extension runtime, validate orchestrator, evidence pipeline. Also hosts the **built-in capabilities** under [`src/builtin/`](../crates/musts-core/src/builtin/): `agent`, `cargo/{fmt,clippy,test}`, `bazel/build`, `mav/expect`. |
+| `crates/musts-core` | All domain logic — manifests, snapshots, state, extension runtime, validate orchestrator, evidence pipeline. Also hosts the **built-in capabilities** under [`src/builtin/`](../crates/musts-core/src/builtin/): `agent`, `cargo/{fmt,clippy,test}`, `bazel/{build,test}`, `mav/expect`. |
 | `crates/musts` | The CLI binary. Argument parsing (`clap`), error rendering, exit codes. |
 | `tests/fixtures/stub_extension` | Configurable test stub used by the integration suite. Behaviour driven by `MUSTS_STUB_*` env vars (PLAN.md §7.2.1). |
 
@@ -46,17 +46,15 @@ workspace::resolve → bootstrap →
 fetch_task(task_id) → TaskNotFound (exit 2) if missing →
 compute_current_scope_hashes → recompute task_snapshot_hash →
   EvidenceStale (exit 2) if drifted →
-EvidenceStore::allocate(submission-NNN) →
-copy assets, MIME-detect, build EvidenceSubmission →
+describe_asset(path) in place (MIME-detect, size; no copy) → build EvidenceSubmission →
 extension.evidence → EvidenceValidationResponse →
   if !accepted: EvidenceRejected (exit 1, message + missing list) →
   reject over-claims (EvidenceOverclaim, exit 2) →
 insert atomic ledger rows (one per accepted-now check, keyed by declaring-manifest scope_hash) →
-write evidence.json LAST →
 exit 0.
 ```
 
-Atomic: every accept is one SQLite transaction. The `evidence.json` marker file is written *after* the commit so an interrupted submission leaves an identifiable orphan that the next `validate`'s GC reclaims.
+Atomic: every accept is one SQLite transaction. Evidence is **not** archived — assets are validated where they live and the committed `.musts/ledger.lock.yaml` (plus the per-machine `evidence_records` table) is the durable record. `musts run <task-id>` wraps this: it executes a deterministic built-in's command, captures the log outside the workspace, and drives the same pipeline from the real exit code.
 
 ## Snapshots
 
@@ -72,7 +70,16 @@ Atomic: every accept is one SQLite transaction. The `evidence.json` marker file 
 
 What this buys: the team commits the lock alongside the manifests; a clone runs `musts validate` and only sees tasks for scopes its own changes have invalidated (the blake3 scope hashes match the lock for everything else). `state.sqlite` and `evidence/` stay gitignored — they are a perf cache and an asset payload, not the source of truth.
 
-What this does not buy: merge conflict resolution between branches that each accepted evidence at different scope hashes. The format is intentionally simple — a YAML list — so `git merge` with line-based conflict markers gives a usable starting point.
+### Merging the lock
+
+`satisfied` is append-only: two branches that each record evidence can add entries, never contradict them, so **the union of both sides is always the correct merge**. Two things make git do that on its own:
+
+- **One line per entry**, written as a YAML flow mapping (`- {check: "root/build-ios", scope_hash: "833bc590…"}`). The default block style splits an entry over two lines, and every entry for the same check then shares an identical `- check: …` first line; a line-based merge aligns on those and splices two entries into one record with a duplicate `scope_hash` key — an unparseable ledger. This is a formatting change only: a flow mapping is an ordinary mapping, the file stays `version: 1`, and older musts releases keep reading it (`flow_style_output_is_still_read_by_a_plain_serde_derive` pins that down).
+- **`.musts/.gitattributes`**, written next to the lock, setting `ledger.lock.yaml merge=union`. `union` is a built-in git driver, so no per-clone `git config` is needed — but the file has to be **committed** to take effect. An existing `.gitattributes` that already mentions the lock is left untouched.
+
+Before this, both branches appending entries produced a conflict on every merge, and resolving it by taking one side silently discarded proven-green entries. That loss shows up later as "the merge invalidated the ledger". A lock that still contains conflict markers is now rejected with a message saying to keep both sides, rather than being half-parsed.
+
+What this does *not* buy — and cannot — is inheriting green state across a merge whose result nobody validated. If `main` moved while a branch was open, the tree that lands is a combination neither side ever checked, so the checks covering it reopen. That is the correct answer, not a bug: two individually-green trees do not make their merge green. The levers are to keep branches up to date before merging (so the branch validates the tree that actually lands) and to scope checks narrowly with `paths:`/nested manifests, so unrelated churn does not invalidate an expensive check. `crates/musts/tests/git_merge_ledger_e2e.rs` pins down both halves.
 
 ## Cross-process locking
 

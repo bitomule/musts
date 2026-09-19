@@ -65,6 +65,7 @@ pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
             title: format!("Run `{}`", capability.command()),
             satisfies: vec![check.id.clone()],
             parallelizable: true,
+            command: Some(capability.command_argv()),
             instructions: vec![
                 format!("Run `{}` from the workspace root.", capability.command()),
                 "Capture combined stdout/stderr to a file (outside the workspace so the snapshot \
@@ -218,6 +219,25 @@ impl Capability {
             Capability::Clippy => "cargo clippy --workspace --all-targets -- -D warnings",
             Capability::Test => "cargo test --workspace",
         }
+    }
+
+    /// The command as an argv vector for `musts run` to execute directly
+    /// (no shell). Mirrors [`command`].
+    fn command_argv(self) -> Vec<String> {
+        let parts: &[&str] = match self {
+            Capability::Fmt => &["cargo", "fmt", "--check"],
+            Capability::Clippy => &[
+                "cargo",
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            Capability::Test => &["cargo", "test", "--workspace"],
+        };
+        parts.iter().map(|s| s.to_string()).collect()
     }
 
     fn text_description(self) -> &'static str {

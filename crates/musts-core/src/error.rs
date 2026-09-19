@@ -57,11 +57,20 @@ pub enum Error {
         stderr: String,
     },
 
-    #[error("no extension implements capability `{capability}` referenced by check `{check_id}` in {manifest_path}")]
+    #[error(
+        "no extension implements capability `{capability}` referenced by check `{check_id}` \
+             in {manifest_path}\n  searched: .musts/extensions/*/extension.yml under the workspace \
+             root, then the built-in registry\n  available: {available}"
+    )]
     MissingExtension {
         manifest_path: PathBuf,
         check_id: String,
         capability: String,
+        /// Every capability that *is* implemented, built-in and
+        /// descriptor-backed, comma-separated. Without it the error names
+        /// the thing that is missing but not the thing to write instead,
+        /// which for a typo'd `uses:` is the only question being asked.
+        available: String,
     },
 
     #[error(".musts/ is not writable; musts needs to create state.sqlite")]

@@ -5,3 +5,4 @@
 **/CHANGELOG.md
 **/Cargo.toml
 Cargo.lock
+.musts/jev-shadow/

@@ -13,8 +13,11 @@ use clap::{Parser, Subcommand};
 use musts_core::bootstrap::StateSession;
 use musts_core::evidence::{submit, EvidenceSubmissionResult};
 use musts_core::extension::runtime::RuntimeOptions;
+use musts_core::lint;
 use musts_core::manifest::discover as discover_manifests;
 use musts_core::report::{render_json, render_text, ValidateReport};
+use musts_core::run::RunOutcome;
+use musts_core::stats;
 use musts_core::validate::{self, ValidateOptions};
 use musts_core::workspace;
 use musts_core::Error;
@@ -42,6 +45,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Execute a deterministic task's command and record evidence from
+    /// the real result — no need to re-run the check yourself. Works only
+    /// for runnable built-in checks (`cargo/*`, `bazel/build`); judgment
+    /// tasks (`agent`, `mav`) still use `musts evidence`.
+    Run {
+        /// Task id from the validate report.
+        task_id: String,
+    },
     /// Record evidence for a task issued by the most recent `musts validate`.
     Evidence {
         /// Task id from the validate report.
@@ -52,6 +63,30 @@ enum Command {
         /// Asset file path. Repeat for multiple assets.
         #[arg(long = "asset", value_name = "PATH")]
         assets: Vec<PathBuf>,
+    },
+    /// Check every MUSTS.yml for authoring mistakes that make the loop
+    /// cost more than it is worth.
+    ///
+    /// Catches facts that assert a command's exit status (use a runnable
+    /// capability instead), path conditions written as prose (put them in
+    /// `paths:`), globs that match more than they look like they do, and
+    /// unknown keys. Exits 1 when any error-level finding is present.
+    Lint {
+        /// Emit machine-readable JSON instead of the report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report what each check has cost and what it has caught.
+    ///
+    /// Reads the committed ledger (and local history, when present) to
+    /// show how many times each check has been reopened and re-proven,
+    /// and how often it was ever actually red. A check reopened dozens of
+    /// times that has never gone red is paying for validation work with
+    /// no observed safety value.
+    Stats {
+        /// Emit machine-readable JSON instead of the table.
+        #[arg(long)]
+        json: bool,
     },
     /// Manage the agent-facing musts skill.
     Skill {
@@ -91,11 +126,14 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     match &cli.command {
         Command::Validate { json } => validate_command(cli.workspace.as_deref(), *json),
+        Command::Run { task_id } => run_command(cli.workspace.as_deref(), task_id),
         Command::Evidence {
             task_id,
             text,
             assets,
         } => evidence_command(cli.workspace.as_deref(), task_id, text.as_deref(), assets),
+        Command::Lint { json } => lint_command(cli.workspace.as_deref(), *json),
+        Command::Stats { json } => stats_command(cli.workspace.as_deref(), *json),
         Command::Skill { command } => match command {
             SkillCommand::Install { agent } => skill_install(agent.as_deref()),
         },
@@ -123,6 +161,8 @@ fn validate_command(
             tasks: vec![],
             ignored_checks: vec![],
             notes: vec![],
+            warnings: vec![],
+            repeated_task_ids: vec![],
         };
         if json {
             println!("{}", serde_json::to_string_pretty(&render_json(&report))?);
@@ -159,6 +199,59 @@ fn validate_command(
     }
 }
 
+/// Purely static: reads manifests and the file tree, touches no state,
+/// takes no lock.
+fn lint_command(
+    explicit_workspace: Option<&std::path::Path>,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let report = match lint::run(&root) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    if json {
+        println!("{}", lint::render_json(&report));
+    } else {
+        print!("{}", lint::render_text(&report));
+    }
+    // Warnings are advice and must not gate CI; errors mean the manifest
+    // does not do what it says.
+    Ok(ExitCode::from(u8::from(report.has_errors())))
+}
+
+/// Read-only, so it deliberately does **not** take the workspace lock: a
+/// long `validate` in another terminal should never stop you from reading
+/// the ledger. SQLite handles the concurrent reader.
+fn stats_command(
+    explicit_workspace: Option<&std::path::Path>,
+    json: bool,
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let declared = match stats::declared_checks(&root) {
+        Ok(d) => d,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let report = match stats::collect(&root, &root.join(".musts"), &declared) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    if json {
+        println!("{}", stats::render_json(&report));
+    } else {
+        print!("{}", stats::render_text(&report));
+    }
+    Ok(ExitCode::from(0))
+}
+
 fn evidence_command(
     explicit_workspace: Option<&std::path::Path>,
     task_id: &str,
@@ -183,6 +276,55 @@ fn evidence_command(
     };
     match submit(&mut session, &root, &runtime_options, &inputs) {
         Ok(result) => {
+            print_evidence_result(&result);
+            Ok(ExitCode::from(0))
+        }
+        Err(err) => Ok(report_error(err)),
+    }
+}
+
+fn run_command(
+    explicit_workspace: Option<&std::path::Path>,
+    task_id: &str,
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let mut session = match StateSession::acquire(&root) {
+        Ok(s) => s,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let runtime_options = RuntimeOptions::from_env(root.clone());
+    match musts_core::run::execute(&mut session, &root, &runtime_options, task_id) {
+        Ok(RunOutcome::NotRunnable { reason }) => {
+            eprintln!("error: {reason}");
+            Ok(ExitCode::from(2))
+        }
+        Ok(RunOutcome::Failed {
+            command,
+            code,
+            output,
+            log_path,
+        }) => {
+            // Surface the failing command's output so the agent can act on
+            // it — this is exactly when the tokens are worth spending.
+            print!("{output}");
+            if !output.ends_with('\n') {
+                println!();
+            }
+            let code_str = code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string());
+            eprintln!(
+                "`{command}` failed (exit {code_str}). Full log: {}. Fix it and re-run `musts run {task_id}`.",
+                log_path.display()
+            );
+            Ok(ExitCode::from(1))
+        }
+        Ok(RunOutcome::Recorded { command, result }) => {
+            println!("`{command}` exited 0.");
             print_evidence_result(&result);
             Ok(ExitCode::from(0))
         }

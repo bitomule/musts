@@ -8,7 +8,7 @@
     {
       "name": "musts",
       "source": "./",
-      "description": "Bundles the musts skill and a Stop hook that runs `musts validate` and re-injects pending tasks until the loop is clean."
+      "description": "Bundles the musts skill and a PreToolUse hook that runs `musts validate` before each `git commit` and blocks it until the loop is clean."
     }
   ]
 }

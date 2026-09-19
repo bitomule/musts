@@ -96,10 +96,30 @@ checks:
 Semantics:
 
 - `paths` accepts either a single string or a list of strings. Absent or empty means "no filter" — the legacy behaviour applies (all files under the manifest's folder, minus the same-capability carve-out).
-- Patterns are matched against the workspace-relative path. `**/Tracking*.swift` matches at any depth; `tests/**` is rooted at the workspace.
+- Patterns are matched against the path relative to the declaring manifest's folder. `**/Tracking*.swift` matches at any depth; `tests/**` is rooted at that folder.
+- `*` stops at `/` and only `**` descends, as in `.gitignore`. `UI/*View.swift` covers `UI/HomeView.swift` but not `UI/Deep/FooView.swift` — write `UI/**/*View.swift` for the whole subtree. Before 0.4 `*` crossed `/` as well, so a pattern written then covers fewer files now; `musts lint` names every one of them under `glob-star-stops-at-slash`.
 - On case-insensitive filesystems (default macOS / Windows) matching is case-insensitive — mirrors the workspace's own behaviour so `**/Tracking*.swift` keeps matching `Tracking.swift` regardless of how the file is stored.
 - A check whose `paths` currently matches **no** file is "not applicable" and is dropped from the task list. When a matching file is added later, the next `musts validate` picks it up automatically.
 - An invalid glob is a manifest error (exit 2) — surfaced at parse time, with the check id and the offending pattern.
+
+### Carving files back out: `exclude_paths`
+
+`exclude_paths` takes the same shape as `paths` and subtracts matching files from the effective scope **after** `paths` is applied. Use it when a file lives inside a check's folder but shouldn't re-open the check when it changes — for example a version file bumped by release automation, or generated sources:
+
+```yaml
+checks:
+  app-build:
+    uses: bazel/build
+    exclude_paths:
+      - "tools/config.bzl"      # release automation bumps build_number here
+      - "**/*.generated.swift"
+    with:
+      target: //App:App
+```
+
+- Applies after `paths`: with both set, a file must match `paths` (or `paths` is absent) **and not** match `exclude_paths`.
+- A check whose combined filter matches no file is "not applicable" and dropped, same as `paths`.
+- **No `!` negation.** musts does not implement gitignore-style negation. `globset` treats a leading `!` as a literal character, so `paths: ["!foo"]` used to silently match nothing. A leading `!` in `paths` or `exclude_paths` is now a manifest error (exit 2) telling you to use `exclude_paths` instead.
 
 ## What a workspace expects
 
