@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.5.0] - 2026-09-19
+
+### Added
+
+- Musts calibrate, and the control that makes a judgment check mean something ([#99](https://github.com/bitomule/musts/pull/99))
+  - The `jev` capability's `with` schema gains `control:`, so a manifest
+    declaring it no longer validates against 0.4.x — that version answers
+    `Additional properties are not allowed ('control' was unexpected)`.
+
 ## [0.4.2] - 2026-09-19
 
 ### Fixed
