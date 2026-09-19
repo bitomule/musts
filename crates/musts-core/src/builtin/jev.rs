@@ -51,6 +51,20 @@ pub fn resolve(req: &ResolveRequest) -> Result<ResolveResponse, Error> {
         let ask = w.get("ask").and_then(Value::as_str).unwrap_or("?");
         let expect = w.get("expect").and_then(Value::as_str).unwrap_or("yes");
         let mode = w.get("mode").and_then(Value::as_str).unwrap_or("shadow");
+        // Two argv entries, not one string. A shell-quoted `--flag 'value'` is a single
+        // unrecognised argument once it reaches argv, and nothing catches that until the
+        // task is actually run — which is exactly what the end-to-end run caught.
+        let question_argv: Vec<String> = match w.get("question") {
+            Some(inline) => vec!["--question-json".to_string(), inline.to_string()],
+            None => vec![
+                "--questions".to_string(),
+                w.get("questions")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?")
+                    .to_string(),
+            ],
+        };
+        // The human-readable form keeps the quoting, because a person pastes it into a shell.
         let question = match w.get("question") {
             Some(inline) => format!("--question-json '{inline}'"),
             None => format!(
@@ -69,17 +83,19 @@ pub fn resolve(req: &ResolveRequest) -> Result<ResolveResponse, Error> {
             title: format!("Ask jev `{ask}` about {} file(s)", req.changed_files.len()),
             satisfies: vec![check.id.clone()],
             parallelizable: true,
-            command: Some(vec![
-                "musts-jev".to_string(),
-                question.clone(),
-                "--ask".to_string(),
+            command: Some({
+                let mut argv = vec!["musts-jev".to_string()];
+                argv.extend(question_argv);
+                argv.extend(["--ask".to_string(),
                 ask.to_string(),
                 "--expect".to_string(),
                 expect.to_string(),
                 "--mode".to_string(),
                 mode.to_string(),
                 sample.to_string(),
-            ]),
+                ]);
+                argv
+            }),
             instructions: vec![
                 format!("Run once per file in scope: `musts-jev {question} --ask {ask} --expect {expect} --mode {mode} {sample}`"),
                 "Submit its output. The summary says how many files were judged and how many were not — a green with nothing judged proves nothing.".to_string(),
