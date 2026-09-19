@@ -46,7 +46,12 @@ checks:
       - "crates/**/*.rs"
       - "tests/**/*.rs"
     with:
-      questions: .musts/extensions/jev/questions/self-comparing.json
       ask: self_comparing
       expect: "no"
       mode: shadow
+      question:
+        type: noul
+        instructions: "An assertion in this file compares an expression against itself."
+        criteria:
+          "true": "An assertion has the same expression, or the same literal, on both sides — such as assert_eq!(total, total)"
+          "false": "Every assertion compares two different expressions"
