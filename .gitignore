@@ -59,3 +59,6 @@ fixtures/*/.musts/ledger.lock.yaml
 *.profraw
 *.profdata
 tarpaulin-report.html
+
+# Measurement rows from `uses: jev` shadow runs: scratch, per-machine, never shared.
+.musts/jev-shadow/
