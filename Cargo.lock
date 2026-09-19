@@ -994,6 +994,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "fs2",
+ "jevi",
  "musts-core",
  "predicates",
  "rusqlite",
@@ -1037,14 +1038,6 @@ version = "0.1.2"
 dependencies = [
  "musts-protocol",
  "serde",
- "serde_json",
-]
-
-[[package]]
-name = "musts-jev"
-version = "0.1.0"
-dependencies = [
- "jevi",
  "serde_json",
 ]
 

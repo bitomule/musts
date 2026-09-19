@@ -1,6 +1,10 @@
 name: jev
 version: 0.2.0
 
+# `musts-jev` ships with `musts`: `cargo install musts` puts both binaries on the same
+# PATH. A judgment check nobody can find is a judgment check nobody uses, which is why it
+# is not a separate crate. Build without it with `--no-default-features`.
+
 # A thin wrapper over what jev already accepts: the repo writes the question, this sends one
 # file and reads the verdict. It knows no domain. The rules that hold for every question —
 # criteria mandatory, no numeric threshold anywhere, unsure is green, the green is never
