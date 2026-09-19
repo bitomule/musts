@@ -136,6 +136,11 @@ fn unavailable() -> Option<&'static str> {
 }
 
 fn run() -> Result<ExitCode, String> {
+    match std::env::args().nth(1).as_deref() {
+        Some("resolve") => return protocol::resolve().map(|_| ExitCode::SUCCESS),
+        Some("evidence") => return protocol::evidence().map(|_| ExitCode::SUCCESS),
+        _ => {}
+    }
     let args = parse_args()?;
 
     if let Some(reason) = unavailable() {
@@ -240,5 +245,110 @@ fn main() -> ExitCode {
             eprintln!("BROKEN: {msg}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// The musts extension protocol: one JSON document in on stdin, one out on stdout.
+///
+/// `musts run` deliberately refuses to execute a descriptor-backed extension's command
+/// (crates/musts-core/src/run.rs), so the task this emits is one the agent runs itself and
+/// then submits. That is the honest shape until `jev` is registered as a core capability.
+mod protocol {
+    use serde_json::{json, Value};
+
+    fn read_stdin() -> Result<Value, String> {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("cannot read request: {e}"))?;
+        serde_json::from_str(&buf).map_err(|e| format!("request is not JSON: {e}"))
+    }
+
+    pub fn resolve() -> Result<(), String> {
+        let req = read_stdin()?;
+        let empty = vec![];
+        let checks = req["checks"].as_array().unwrap_or(&empty);
+        let files: Vec<&str> = req["changed_files"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+
+        let tasks: Vec<Value> = checks
+            .iter()
+            .map(|c| {
+                let id = c["id"].as_str().unwrap_or("?");
+                let w = &c["with"];
+                let (q, ask) = (w["questions"].as_str().unwrap_or("?"), w["ask"].as_str().unwrap_or("?"));
+                let expect = w["expect"].as_str().unwrap_or("yes");
+                let mode = w["mode"].as_str().unwrap_or("shadow");
+                let sample = files.first().copied().unwrap_or("<file>");
+                json!({
+                    "id": format!("jev-{}", id.replace(|ch: char| !ch.is_alphanumeric(), "-")),
+                    "extension": req["capability"],
+                    "title": format!("Ask jev `{ask}` about {} file(s)", files.len()),
+                    "satisfies": [id],
+                    "parallelizable": true,
+                    "instructions": [
+                        format!("Run this once per file in scope: `musts-jev --questions {q} --ask {ask} --expect {expect} --mode {mode} {sample}`"),
+                        "Submit its output. The summary line says how many files were judged and how many were not — a green with nothing judged proves nothing.".to_string(),
+                        "UNSURE is green: this check reports what fired, never what is verified.".to_string(),
+                    ],
+                    "evidence_contract": {
+                        "text": { "required": true, "description": "The run's summary line." },
+                        "assets": [ { "kind": "log", "required": true } ]
+                    }
+                })
+            })
+            .collect();
+
+        println!(
+            "{}",
+            json!({ "protocol_version": 1, "tasks": tasks,
+                               "ignored_checks": [], "notes": [] })
+        );
+        Ok(())
+    }
+
+    pub fn evidence() -> Result<(), String> {
+        let req = read_stdin()?;
+        // A run that judged nothing is not evidence that anything is fine. Read the COUNT
+        // out of the log, never the words: the first version looked for "judged" in the
+        // submission text and accepted "0 of 0 files judged, nothing fired" — a green
+        // recorded over zero files, which is exactly the coverage-that-isn't this capability
+        // exists to avoid.
+        let root = req["workspace_root"].as_str().unwrap_or(".");
+        let judged: u64 = req["submission"]["assets"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a["path"].as_str())
+            .and_then(|p| std::fs::read_to_string(std::path::Path::new(root).join(p)).ok())
+            .and_then(|log| {
+                log.lines().rev().find_map(|l| {
+                    let l = l.trim();
+                    l.strip_suffix(" files produced a verdict line.")
+                        .and_then(|head| head.split(" of ").next())
+                        .and_then(|n| n.parse().ok())
+                })
+            })
+            .unwrap_or(0);
+        if judged == 0 {
+            println!(
+                "{}",
+                json!({ "protocol_version": 1, "accepted": false,
+                "missing": [{ "kind": "log",
+                    "message": "The run judged nothing. Say why, or run it where jev is reachable." }],
+                "message": "Nothing was judged." })
+            );
+            return Ok(());
+        }
+        println!(
+            "{}",
+            json!({ "protocol_version": 1, "accepted": true,
+            "satisfies": req["task"]["satisfies"],
+            "summary": "jev verdicts recorded.",
+            "normalized_assets": [] })
+        );
+        Ok(())
     }
 }

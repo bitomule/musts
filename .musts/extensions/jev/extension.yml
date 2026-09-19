@@ -1,14 +1,13 @@
 name: jev
-version: 0.1.0
+version: 0.2.0
 
-# musts' own use of the capability shipped in docs/examples/jev-check/.
-# Deliberately separate: the capability is generic and publishable, this file
-# and the questions next to it are musts' own configuration for its own code.
+# This repo's own wiring of the capability. The commands point at the locally built binary;
+# a consumer that installed it (`cargo install musts-jev`) writes just `musts-jev` instead.
 capabilities:
   check:
     uses: jev
     schema: ../../../docs/examples/jev-check/schemas/jev.schema.json
     resolve:
-      command: ["../../../docs/examples/jev-check/jev-check.sh", "resolve"]
+      command: ["../../../target/debug/musts-jev", "resolve"]
     evidence:
-      command: ["../../../docs/examples/jev-check/jev-check.sh", "evidence"]
+      command: ["../../../target/debug/musts-jev", "evidence"]

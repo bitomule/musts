@@ -37,3 +37,16 @@ checks:
       - "fixtures/**"
       - "docs/examples/**"
       - "rust-toolchain.toml"
+
+  # The capability judging this repo's own code. Shadow: it records verdicts and grants and
+  # blocks nothing. Its green means "nothing fired", never "verified".
+  self-comparing-assertions:
+    uses: jev
+    paths:
+      - "crates/**/*.rs"
+      - "tests/**/*.rs"
+    with:
+      questions: .musts/extensions/jev/questions/self-comparing.json
+      ask: self_comparing
+      expect: "no"
+      mode: shadow
