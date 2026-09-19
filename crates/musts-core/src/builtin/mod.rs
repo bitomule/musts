@@ -15,7 +15,9 @@ use crate::error::Error;
 
 pub mod agent;
 pub mod bazel_build;
+pub mod bazel_test;
 pub mod cargo;
+pub mod jev;
 pub mod mav_expect;
 mod util;
 
@@ -37,7 +39,18 @@ pub fn lookup(uses: &str) -> Option<&'static BuiltinCapability> {
     REGISTRY.iter().find(|c| c.uses == uses)
 }
 
+/// Every capability id this build implements without an extension.
+pub fn registered_capabilities() -> impl Iterator<Item = &'static str> {
+    REGISTRY.iter().map(|c| c.uses)
+}
+
 const REGISTRY: &[BuiltinCapability] = &[
+    BuiltinCapability {
+        uses: "jev",
+        schema: jev::schema,
+        resolve: jev::resolve,
+        evidence: jev::evidence,
+    },
     BuiltinCapability {
         uses: "agent",
         schema: agent::schema,
@@ -67,6 +80,12 @@ const REGISTRY: &[BuiltinCapability] = &[
         schema: bazel_build::schema,
         resolve: bazel_build::resolve,
         evidence: bazel_build::evidence,
+    },
+    BuiltinCapability {
+        uses: "bazel/test",
+        schema: bazel_test::schema,
+        resolve: bazel_test::resolve,
+        evidence: bazel_test::evidence,
     },
     BuiltinCapability {
         uses: "mav/expect",

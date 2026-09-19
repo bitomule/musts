@@ -403,7 +403,7 @@ musts --version
 musts --help
 ```
 
-- `validate` issues at most 5 pending tasks per run. Agents record evidence for that batch, then run `validate` again to receive the next batch.
+- `validate` issues **every** dirty task per run (no batching), so it is idempotent — re-running never invalidates the ids it just issued. Deterministic built-in checks can be closed with `musts run <task-id>`; judgment checks record evidence with `musts evidence`.
 - `--json` on `validate`: emit the same data as the text report but in a stable JSON shape. The shape is **frozen at first ship** and `insta`-snapshotted; future fields are added with care. Exit codes are unchanged under `--json` (0 = clean, 1 = pending). The contract:
 
   ```json

@@ -99,6 +99,9 @@ pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
             title,
             satisfies: bucket.satisfies,
             parallelizable: true,
+            // No machine command: fact verification is a judgment call the
+            // agent must make and summarise; `musts run` can't do it.
+            command: None,
             instructions,
             // No required `assets` — the agent decides what to attach.
             evidence_contract: EvidenceContract {

@@ -1,6 +1,6 @@
 [package]
 name = "musts"
-version = "0.1.5"
+version = "0.5.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -15,8 +15,24 @@ readme = "../../README.md"
 name = "musts"
 path = "src/main.rs"
 
+# The `uses: jev` runner, shipped with musts so that `cargo install musts` brings the
+# capability with it. A judgment check nobody can find is a judgment check nobody uses.
+#
+# It is a separate binary, not a subcommand, so the `musts` binary itself is byte-identical
+# whether this is built or not — the cost is one extra executable, not a heavier musts.
+# `--no-default-features` builds without it for anyone who wants no HTTPS client in the tree.
+[[bin]]
+name = "musts-jev"
+path = "src/bin/musts-jev/main.rs"
+required-features = ["jev"]
+
+[features]
+default = ["jev"]
+jev = ["dep:jevi"]
+
 [dependencies]
-musts-core = { path = "../musts-core", version = "0.1.5" }
+musts-core = { path = "../musts-core", version = "0.4.2" }
+jevi = { version = "0.1.2", optional = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

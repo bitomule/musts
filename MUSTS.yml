@@ -1,9 +1,57 @@
 version: 1
 
+# Every check declares the files it actually reads. Without `paths:` a check's
+# scope is the whole manifest folder, so editing a README reopened the full
+# suite.
+#
+# `docs/examples/**` is in the compile/test scope on purpose: the shell
+# extension e2e test loads the eslint-check example from there
+# (crates/musts/tests/shell_extension_e2e.rs).
+#
+# Cargo.toml / Cargo.lock are deliberately absent: `.mustsignore` already
+# keeps them out of every scope, so naming them here would be a pattern
+# that can never match. The cargo CI jobs cover dependency changes.
+
 checks:
   fmt:
     uses: cargo/fmt
+    paths:
+      - "crates/**/*.rs"
+      - "tests/**/*.rs"
+      - "rust-toolchain.toml"
+
   clippy:
     uses: cargo/clippy
+    paths:
+      - "crates/**"
+      - "tests/**"
+      - "fixtures/**"
+      - "docs/examples/**"
+      - "rust-toolchain.toml"
+
   test:
     uses: cargo/test
+    paths:
+      - "crates/**"
+      - "tests/**"
+      - "fixtures/**"
+      - "docs/examples/**"
+      - "rust-toolchain.toml"
+
+  # The capability judging this repo's own code. Shadow: it records verdicts and grants and
+  # blocks nothing. Its green means "nothing fired", never "verified".
+  self-comparing-assertions:
+    uses: jev
+    paths:
+      - "crates/**/*.rs"
+      - "tests/**/*.rs"
+    with:
+      ask: self_comparing
+      expect: "no"
+      mode: shadow
+      question:
+        type: noul
+        instructions: "An assertion in this file compares an expression against itself."
+        criteria:
+          "true": "An assertion has the same expression, or the same literal, on both sides — such as assert_eq!(total, total)"
+          "false": "Every assertion compares two different expressions"

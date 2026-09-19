@@ -27,17 +27,10 @@ use crate::manifest::{
     check_id, discover as discover_manifests, parse as parse_manifest, scope_path_for,
     validate_with_payload, Check, Manifest, ManifestEntry, ROOT_SCOPE,
 };
-use crate::report::{CapabilityNote, ValidateReport};
+use crate::report::{CapabilityNote, ManifestIssue, ValidateReport};
 use crate::snapshot::{
     compute_scope_hash, hash_bytes, hash_file, normalise_rel_path, FileFingerprint, ScopeInput,
 };
-
-/// Maximum number of pending tasks issued by one `musts validate` run.
-///
-/// Agents should work in small batches: validate emits up to this many
-/// evidence targets, the agent records those evidences, then the next
-/// validate emits the next batch.
-pub const MAX_VALIDATE_TASKS: usize = 5;
 
 /// Configuration for one validate run. Built by the CLI layer; tests
 /// pass an explicit value.
@@ -62,41 +55,38 @@ pub fn compute_current_scope_hashes(
     let manifest_entries = discover_manifests(workspace_root)?;
     let manifests = load_manifests(workspace_root, &manifest_entries)?;
     let descriptors = discover_descriptors(workspace_root)?;
-    let ext_descriptor_hash = aggregate_descriptor_hash(&descriptors);
+    let cap_index = build_capability_index(&descriptors);
     let scope_files = compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
     let mut out = BTreeMap::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
-        let manifest_bytes = std::fs::read(&m.entry.abs_path).map_err(|source| Error::Io {
-            path: m.entry.abs_path.clone(),
-            source,
-        })?;
-        let manifest_hash = hash_bytes(&manifest_bytes);
         for (local_id, check) in &m.parsed.checks {
             let cid = check_id(&scope, local_id);
             let descendant_paths =
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
             let path_filter = compile_path_filter(&m.entry.rel_path, check)?;
+            let scope_prefix = normalise_prefix(&m.scope_prefix);
             let effective_files = filter_effective_files(
                 effective_files_for(
                     &scope_files,
-                    &normalise_prefix(&m.scope_prefix),
+                    &scope_prefix,
                     &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
                 ),
-                path_filter.as_ref(),
+                &path_filter,
+                &scope_prefix,
             );
-            // A check with an explicit `paths:` filter that currently
-            // matches nothing is "not applicable" — it has no effective
-            // scope to validate, so don't record a hash for it. The
-            // task list excludes it the same way; if files appear later
-            // the next `validate` will pick it up.
-            if path_filter.is_some() && effective_files.is_empty() {
+            // A check with an explicit `paths:`/`exclude_paths:` filter
+            // that currently matches nothing is "not applicable" — it has
+            // no effective scope to validate, so don't record a hash for
+            // it. The task list excludes it the same way; if files appear
+            // later the next `validate` will pick it up.
+            if path_filter.is_active() && effective_files.is_empty() {
                 continue;
             }
             let scope_hash = compute_scope_hash(&ScopeInput {
                 files: effective_files,
-                manifest_hash: manifest_hash.clone(),
-                ext_descriptor_hash: ext_descriptor_hash.clone(),
+                manifest_hash: check_declaration_hash(check),
+                ext_descriptor_hash: capability_descriptor_hash(&check.uses, &cap_index),
                 descendant_manifest_paths: descendant_paths,
             });
             out.insert(cid, scope_hash);
@@ -105,73 +95,11 @@ pub fn compute_current_scope_hashes(
     Ok(out)
 }
 
-/// Best-effort GC of `.musts/evidence/<task>/submission-NNN/` directories
-/// per `docs/PLAN.md` §4.4.1:
-///
-/// - missing `evidence.json` → aborted submission, delete.
-/// - present `evidence.json` but no matching `evidence_records` row → the
-///   ledger transaction never committed, delete.
-///
-/// Submissions whose ledger row exists are kept as history.
-fn gc_orphan_submissions(session: &StateSession) {
-    let evidence_root = session.musts_dir.join("evidence");
-    let Ok(read) = std::fs::read_dir(&evidence_root) else {
-        return;
-    };
-    for task_entry in read.flatten() {
-        if !task_entry.path().is_dir() {
-            continue;
-        }
-        let Ok(submissions) = std::fs::read_dir(task_entry.path()) else {
-            continue;
-        };
-        for sub in submissions.flatten() {
-            let sub_path = sub.path();
-            if !sub_path.is_dir() {
-                continue;
-            }
-            let evidence_json = sub_path.join("evidence.json");
-            let task_id = task_entry.file_name().to_string_lossy().to_string();
-            let submission_id = sub_path
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let keep = if evidence_json.is_file() {
-                ledger_has_submission(&session.db, &task_id, &submission_id).unwrap_or(false)
-            } else {
-                false
-            };
-            if !keep {
-                if let Err(err) = std::fs::remove_dir_all(&sub_path) {
-                    tracing::warn!(path = ?sub_path, %err, "could not GC orphan submission");
-                }
-            }
-        }
-    }
-}
-
-fn ledger_has_submission(
-    db: &crate::state::Db,
-    task_id: &str,
-    submission_id: &str,
-) -> Result<bool> {
-    let mut stmt = db.conn().prepare(
-        "SELECT 1 FROM evidence_records WHERE task_id = ?1 AND submission_id = ?2 LIMIT 1",
-    )?;
-    let exists = stmt.exists(params![task_id, submission_id])?;
-    Ok(exists)
-}
-
 /// Run the orchestrator and return the rendered report. Persists tasks
 /// + notes into the state DB held by `session`.
 pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<ValidateReport> {
     let workspace_root = &opts.workspace_root;
     let now_unix = unix_seconds_now();
-
-    // 0. Best-effort cleanup of orphan submission dirs from interrupted
-    //    earlier evidence calls (PLAN.md §4.4.1).
-    gc_orphan_submissions(session);
 
     // 0b. Load the portable, repo-committed ledger lock. Empty when the
     //    file doesn't exist (fresh workspace) — the local
@@ -184,7 +112,6 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
 
     // 2. Discover extensions.
     let descriptors = discover_descriptors(workspace_root)?;
-    let ext_descriptor_hash = aggregate_descriptor_hash(&descriptors);
     let cap_index = build_capability_index(&descriptors);
 
     // 3. Schema-validate every `with` payload (manifest-error path).
@@ -200,6 +127,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                     manifest_path: m.entry.rel_path.clone(),
                     check_id: cid.clone(),
                     capability: check.uses.clone(),
+                    available: available_capabilities(&cap_index),
                 });
             }
             let schema = capability_schema(&cap_index, &check.uses);
@@ -218,44 +146,72 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     //    ledger row for the current scope_hash; Phase 4 adds the writes).
     let scope_files = compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
     let mut per_check = Vec::new();
+    // Checks whose `paths:` currently match nothing. Reported, never
+    // silently dropped — see the push site below.
+    let mut inapplicable: Vec<musts_protocol::IgnoredCheck> = Vec::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
-        let manifest_bytes = std::fs::read(&m.entry.abs_path).map_err(|source| Error::Io {
-            path: m.entry.abs_path.clone(),
-            source,
-        })?;
-        let manifest_hash = hash_bytes(&manifest_bytes);
         for (local_id, check) in &m.parsed.checks {
             let cid = check_id(&scope, local_id);
             let descendant_paths =
                 descendant_same_capability_manifest_paths(&manifests, m, &check.uses);
             let path_filter = compile_path_filter(&m.entry.rel_path, check)?;
+            let scope_prefix = normalise_prefix(&m.scope_prefix);
             let effective_files = filter_effective_files(
                 effective_files_for(
                     &scope_files,
-                    &normalise_prefix(&m.scope_prefix),
+                    &scope_prefix,
                     &descendant_prefixes(workspace_root, &manifests, m, &check.uses),
                 ),
-                path_filter.as_ref(),
+                &path_filter,
+                &scope_prefix,
             );
-            // Skip checks whose `paths:` filter matches no current
-            // files: there is nothing for the extension to validate
-            // and emitting a task would dead-end. The check rejoins
-            // the loop automatically when a matching file appears.
-            if path_filter.is_some() && effective_files.is_empty() {
+            // A filter matching nothing means there is nothing to
+            // validate, so no task is emitted — but say so out loud.
+            //
+            // This used to `continue` in silence: the check vanished from
+            // every surface, and `validate` reported "clean" as if it had
+            // passed. That is how one repo's check went 89 days without
+            // running once. A check that cannot fire is a very different
+            // thing from a check that fired and was satisfied, and only
+            // one of them deserves silence.
+            if path_filter.is_active() && effective_files.is_empty() {
+                inapplicable.push(musts_protocol::IgnoredCheck {
+                    id: cid.clone(),
+                    reason: inapplicable_reason(check, &scope_prefix, &scope_files),
+                });
                 continue;
             }
             let effective_file_paths: Vec<String> =
                 effective_files.iter().map(|(p, _)| p.clone()).collect();
+            let legacy_files = effective_files.clone();
+            let legacy_descendants = descendant_paths.clone();
             let scope_hash = compute_scope_hash(&ScopeInput {
                 files: effective_files,
-                manifest_hash: manifest_hash.clone(),
-                ext_descriptor_hash: ext_descriptor_hash.clone(),
+                manifest_hash: check_declaration_hash(check),
+                ext_descriptor_hash: capability_descriptor_hash(&check.uses, &cap_index),
                 descendant_manifest_paths: descendant_paths,
             });
             persist_scope_snapshot(&mut session.db, &cid, &scope_hash, now_unix)?;
+            // Narrowing the hash inputs changed every hash, so every
+            // ledger entry written by an older musts would miss and every
+            // check in every repo would reopen at once — the exact cost
+            // this change exists to remove. Accept a hit on the legacy
+            // hash too, for one release. Nothing is recorded under it, so
+            // a check stays legacy-green only until its tree changes, at
+            // which point both hashes move and it reopens honestly.
             let already_green = check_has_green_evidence(&session.db, &cid, &scope_hash)?
-                || ledger_lock.contains(&cid, &scope_hash);
+                || ledger_lock.contains(&cid, &scope_hash)
+                || {
+                    let legacy = compute_scope_hash(&ScopeInput {
+                        files: legacy_files,
+                        manifest_hash: legacy_manifest_hash(m)?,
+                        ext_descriptor_hash: legacy_aggregate_descriptor_hash(&descriptors),
+                        descendant_manifest_paths: legacy_descendants,
+                    });
+                    check_has_green_evidence(&session.db, &cid, &legacy)?
+                        || ledger_lock.contains(&cid, &legacy)
+                };
             per_check.push(PreparedCheck {
                 check_id: cid,
                 local_id: local_id.clone(),
@@ -300,6 +256,11 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         // own `.musts/extensions/<name>/extension.yml`. Only when no
         // external implementor is installed do we fall back to the
         // built-in registry.
+        // A built-in resolve is the only trusted source of a runnable
+        // `command`; an external descriptor's tasks have their command
+        // stripped at ingest so `musts run` never executes extension-
+        // supplied argv.
+        let command_trusted = !cap_index.contains_key(capability.as_str());
         let outcome: Result<musts_protocol::ResolveResponse> =
             if let Some((descriptor, cap)) = cap_index.get(capability.as_str()).copied() {
                 let runner = ExtensionRunner {
@@ -317,6 +278,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 ingest_resolve_response(
                     response,
                     capability,
+                    command_trusted,
                     checks_for_cap,
                     &mut tasks,
                     &mut ignored_checks,
@@ -333,24 +295,85 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
         }
     }
 
-    truncate_task_batch(&mut tasks, &mut tasks_to_persist);
+    // Which tasks are byte-identical requests to the previous validate run
+    // (same id + same task_snapshot_hash)? Load the prior snapshot hashes
+    // BEFORE persist_tasks overwrites the table so the renderer can print
+    // unchanged tasks compactly instead of re-injecting the full body.
+    let prior = load_prior_task_snapshot_hashes(&session.db)?;
+    let repeated_task_ids: Vec<String> = tasks_to_persist
+        .iter()
+        .filter(|t| prior.get(&t.id).is_some_and(|h| h == &t.task_snapshot_hash))
+        .map(|t| t.id.clone())
+        .collect();
+
     persist_tasks(&mut session.db, &tasks_to_persist, &notes, now_unix)?;
 
     if let Some(err) = first_error {
         return Err(err);
     }
 
+    let mut warnings = crate::diagnose::workspace_warnings(
+        workspace_root,
+        &session.musts_dir,
+        &ledger_lock,
+        !tasks.is_empty(),
+    );
+    warnings.extend(manifest_warnings(&manifests));
+
+    // Inapplicable checks first: "this check cannot fire" outranks "a
+    // capability chose not to emit a task for it".
+    inapplicable.extend(ignored_checks);
+    let ignored_checks = inapplicable;
+
     Ok(ValidateReport {
         workspace_root: workspace_root.display().to_string(),
         tasks,
         ignored_checks,
         notes,
+        warnings,
+        repeated_task_ids,
     })
 }
 
-fn truncate_task_batch(tasks: &mut Vec<musts_protocol::Task>, persisted: &mut Vec<PersistedTask>) {
-    tasks.truncate(MAX_VALIDATE_TASKS);
-    persisted.truncate(MAX_VALIDATE_TASKS);
+/// Every capability a check could legally name right now, sorted, with
+/// descriptor-backed and built-in ones in one list — the distinction does
+/// not matter to someone fixing a `uses:` line.
+fn available_capabilities(index: &CapabilityIndex<'_>) -> String {
+    let mut all: BTreeSet<String> = index.keys().map(|k| (*k).to_string()).collect();
+    all.extend(builtin::registered_capabilities().map(str::to_string));
+    all.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+/// Flatten every manifest's parse warnings, tagged with the file they
+/// came from.
+fn manifest_warnings(manifests: &[LoadedManifest]) -> Vec<ManifestIssue> {
+    manifests
+        .iter()
+        .flat_map(|m| {
+            m.parsed.warnings.iter().map(|w| ManifestIssue {
+                manifest: m.entry.rel_path.display().to_string(),
+                message: w.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Load `task_id → task_snapshot_hash` for the tasks persisted by the
+/// previous `musts validate`. Used to flag unchanged tasks for compact
+/// rendering. Returns an empty map on a fresh workspace.
+fn load_prior_task_snapshot_hashes(db: &crate::state::Db) -> Result<BTreeMap<String, String>> {
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT task_id, task_snapshot_hash FROM tasks")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out = BTreeMap::new();
+    for r in rows {
+        let (id, hash) = r?;
+        out.insert(id, hash);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +447,20 @@ fn scope_depth(scope_path: &str) -> u32 {
     }
 }
 
-fn aggregate_descriptor_hash(descriptors: &[ExtensionDescriptor]) -> String {
+/// Pre-narrowing hash of the whole manifest file. Retained only to
+/// recognise ledger entries written by an older musts — see the
+/// legacy-hash branch in [`run`]. Delete with the compatibility window.
+fn legacy_manifest_hash(m: &LoadedManifest) -> Result<String> {
+    let bytes = std::fs::read(&m.entry.abs_path).map_err(|source| Error::Io {
+        path: m.entry.abs_path.clone(),
+        source,
+    })?;
+    Ok(hash_bytes(&bytes))
+}
+
+/// Pre-narrowing aggregate over every loaded descriptor. Same lifetime as
+/// [`legacy_manifest_hash`].
+fn legacy_aggregate_descriptor_hash(descriptors: &[ExtensionDescriptor]) -> String {
     let mut hasher = blake3::Hasher::new();
     let mut sorted: Vec<&ExtensionDescriptor> = descriptors.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
@@ -435,6 +471,108 @@ fn aggregate_descriptor_hash(descriptors: &[ExtensionDescriptor]) -> String {
         hasher.update(b"\0");
     }
     hasher.finalize().to_hex().to_string()
+}
+
+/// Hash of the extension that implements `capability`, or a constant for
+/// built-ins.
+///
+/// This used to be an aggregate over *every* loaded descriptor, shared by
+/// every scope in the run. Registering one extension therefore reopened
+/// every check in the repo at once: measured in Todoke, adding a single
+/// extension reopened 5 checks, each needing fresh evidence, for a change
+/// that touched none of them.
+///
+/// A check can only be affected by the extension that implements the
+/// capability it uses, so that is all it hashes. Swapping an unrelated
+/// extension is now invisible to it.
+fn capability_descriptor_hash(capability: &str, index: &CapabilityIndex<'_>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    match index.get(capability) {
+        Some((descriptor, _)) => {
+            hasher.update(descriptor.name.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(&descriptor.descriptor_bytes);
+        }
+        // Built-ins have no descriptor to hash. Their behaviour is pinned
+        // by the binary version, which is deliberately *not* mixed in:
+        // upgrading musts would otherwise reopen every check everywhere.
+        None => {
+            hasher.update(b"builtin");
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Hash of one check's own declaration.
+///
+/// This used to be the hash of the whole `MUSTS.yml`, shared by every
+/// check in the file, which made the scope hash far more brittle than the
+/// design intends. Verified by ablation: appending a *comment* to a
+/// manifest reopened every check in it, and removing the comment made
+/// them green again; editing one check's `facts` reopened its sibling.
+///
+/// A check's outcome cannot depend on how a sibling is declared, so only
+/// its own fields are hashed.
+fn check_declaration_hash(check: &Check) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for part in [
+        check.local_id.as_str(),
+        check.uses.as_str(),
+        &canonical_json(&check.with_payload),
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\0");
+    }
+    // Pattern *order* is not semantically meaningful — both fields are
+    // matched as an unordered set — but reordering them is also not worth
+    // a special case, so they hash as written.
+    for field in [&check.paths, &check.exclude_paths] {
+        for pat in field {
+            hasher.update(pat.as_bytes());
+            hasher.update(b"\0");
+        }
+        hasher.update(b"\x01");
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// Serialise a JSON value with object keys sorted, so the hash does not
+/// depend on `serde_json`'s map ordering (which varies with the
+/// `preserve_order` feature) or on the order the author wrote them.
+fn canonical_json(value: &serde_json::Value) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    write_canonical(&mut out, value);
+    return out;
+
+    fn write_canonical(out: &mut String, value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                out.push('{');
+                for (i, k) in keys.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    let _ = write!(out, "{:?}:", k);
+                    write_canonical(out, &map[*k]);
+                }
+                out.push('}');
+            }
+            serde_json::Value::Array(items) => {
+                out.push('[');
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    write_canonical(out, v);
+                }
+                out.push(']');
+            }
+            other => out.push_str(&other.to_string()),
+        }
+    }
 }
 
 type CapabilityIndex<'a> = BTreeMap<&'a str, (&'a ExtensionDescriptor, &'a Capability)>;
@@ -675,31 +813,73 @@ fn descendant_same_capability_manifest_paths(
     out
 }
 
-/// Compile the check's `paths:` patterns into a `GlobSet` for fast
-/// matching. Returns `Ok(None)` when the check declares no patterns
-/// (the legacy "apply to everything in scope" path). Returns an error
-/// when a pattern fails to compile here — the parser already validates
-/// each pattern individually, so this only fires on a pathological
+/// A check's compiled effective-scope filter: an optional `paths:`
+/// include set and an optional `exclude_paths:` subtract set. Both are
+/// `None` when the corresponding manifest field is empty.
+#[derive(Default)]
+struct PathFilter {
+    include: Option<GlobSet>,
+    exclude: Option<GlobSet>,
+}
+
+impl PathFilter {
+    /// True when the check declares any `paths:` or `exclude_paths:`
+    /// filtering at all. A check with an active filter that matches no
+    /// files is treated as "not applicable" and dropped from the run.
+    fn is_active(&self) -> bool {
+        self.include.is_some() || self.exclude.is_some()
+    }
+}
+
+/// Compile the check's `paths:` and `exclude_paths:` patterns into
+/// `GlobSet`s for fast matching. Each field is `None` when empty (the
+/// legacy "apply to everything in scope" path for `paths`; "subtract
+/// nothing" for `exclude_paths`). Returns an error when a pattern fails
+/// to compile here — the parser already validates each pattern
+/// individually, so this only fires on a pathological
 /// `GlobSetBuilder::build` failure.
 ///
 /// Globs are compiled case-insensitively because `normalise_rel_path`
 /// always lowercases the scope-file map keys for OS-portable scope
 /// hashes. Writing `**/Tracking*.swift` keeps matching regardless of
 /// the file's on-disk case.
-fn compile_path_filter(manifest_rel: &std::path::Path, check: &Check) -> Result<Option<GlobSet>> {
-    if check.paths.is_empty() {
+///
+/// `*` stops at `/` and only `**` descends, as in `.gitignore`. It used
+/// to cross `/` too, which meant `UI/*View.swift` silently covered every
+/// view at any depth: the pattern read as one directory level and
+/// behaved as a whole subtree. Authors compensated by enumerating files
+/// by hand — one manifest listed 70 paths, and its header comment blamed
+/// exactly this. See `lint`'s `glob-star-stops-at-slash` rule, which
+/// reports every pattern whose meaning narrowed under the new semantics.
+fn compile_path_filter(manifest_rel: &std::path::Path, check: &Check) -> Result<PathFilter> {
+    Ok(PathFilter {
+        include: compile_glob_set(manifest_rel, check, "paths", &check.paths)?,
+        exclude: compile_glob_set(manifest_rel, check, "exclude_paths", &check.exclude_paths)?,
+    })
+}
+
+/// Build a case-insensitive `GlobSet` from `patterns`, or `None` when
+/// there are none. `field` is used only for error messages.
+fn compile_glob_set(
+    manifest_rel: &std::path::Path,
+    check: &Check,
+    field: &str,
+    patterns: &[String],
+) -> Result<Option<GlobSet>> {
+    if patterns.is_empty() {
         return Ok(None);
     }
     let mut builder = GlobSetBuilder::new();
-    for pat in &check.paths {
+    for pat in patterns {
         let glob = GlobBuilder::new(pat)
             .case_insensitive(true)
+            .literal_separator(true)
             .build()
             .map_err(|err| Error::Manifest {
                 path: manifest_rel.to_path_buf(),
                 message: format!(
-                    "check `{}`: invalid glob `{}`: {}",
-                    check.local_id, pat, err
+                    "check `{}`: `{}`: invalid glob `{}`: {}",
+                    check.local_id, field, pat, err
                 ),
             })?;
         builder.add(glob);
@@ -707,28 +887,138 @@ fn compile_path_filter(manifest_rel: &std::path::Path, check: &Check) -> Result<
     let set = builder.build().map_err(|err| Error::Manifest {
         path: manifest_rel.to_path_buf(),
         message: format!(
-            "check `{}`: could not build glob set: {}",
-            check.local_id, err
+            "check `{}`: `{}`: could not build glob set: {}",
+            check.local_id, field, err
         ),
     })?;
     Ok(Some(set))
 }
 
-/// Narrow `files` to entries matching the supplied filter. Passing
-/// `None` is a no-op (legacy "all files in scope"). The match is
-/// against the workspace-relative path string, so a pattern like
-/// `**/Tracking*.swift` works regardless of how deep the file is.
+/// Narrow `files` to the check's effective scope: keep entries matching
+/// the `include` set (or all when `include` is `None`), then drop any
+/// entry matching the `exclude` set. Matching is against the
+/// workspace-relative path string, so a pattern like `**/Tracking*.swift`
+/// works regardless of how deep the file is.
+/// Narrow `files` to the check's `paths:`/`exclude_paths:` filter.
+///
+/// Patterns match against the path **relative to the declaring
+/// manifest's folder**, not to the workspace root. A manifest at
+/// `App/macOSUI/MainWindow/` writes `MacOSMainView.swift`, and reads the
+/// way every author expects it to.
+///
+/// It used to be workspace-relative, which meant that same manifest had
+/// to repeat its own location in every pattern. Two independent authors
+/// wrote the intuitive form instead, and because a filter matching
+/// nothing silently removed the check, one of them went unnoticed for 89
+/// days. The mirror-image mistake — a pattern still carrying the scope
+/// prefix — is now reported rather than silently matching nothing; see
+/// `scope_prefixed_pattern`.
 fn filter_effective_files(
     files: Vec<(String, String)>,
-    filter: Option<&GlobSet>,
+    filter: &PathFilter,
+    scope_prefix: &str,
 ) -> Vec<(String, String)> {
-    let Some(set) = filter else {
-        return files;
-    };
     files
         .into_iter()
-        .filter(|(rel, _)| set.is_match(rel))
+        .filter(|(rel, _)| {
+            let local = strip_scope_prefix(rel, scope_prefix);
+            let included = filter
+                .include
+                .as_ref()
+                .is_none_or(|set| set.is_match(local));
+            let excluded = filter
+                .exclude
+                .as_ref()
+                .is_some_and(|set| set.is_match(local));
+            included && !excluded
+        })
         .collect()
+}
+
+/// Why a check's `paths:` currently match nothing, in the most useful
+/// terms available.
+///
+/// The migration hazard for manifest-relative patterns is a pattern that
+/// still carries the manifest's own folder — the exact inverse of the
+/// mistake that motivated the change. Naming it turns a silent
+/// non-firing check into a one-line fix.
+fn inapplicable_reason(
+    check: &Check,
+    scope_prefix: &str,
+    scope_files: &BTreeMap<String, String>,
+) -> String {
+    if let Some((written, without)) = scope_prefixed_pattern(check, scope_prefix, scope_files) {
+        return format!(
+            "`paths:` match no file, so this check cannot fire. `{written}` still carries this \
+             manifest's own folder — `paths:` are relative to the manifest, so write `{without}`."
+        );
+    }
+    let patterns: Vec<&str> = check
+        .paths
+        .iter()
+        .chain(check.exclude_paths.iter())
+        .map(String::as_str)
+        .collect();
+    format!(
+        "`paths:` match no file, so this check cannot fire — nothing to validate. Patterns: {}. \
+         They are relative to this manifest's folder.",
+        patterns.join(", ")
+    )
+}
+
+/// A `paths:` entry that would match if its leading scope prefix were
+/// removed. Returns `(as written, as it should be)`.
+fn scope_prefixed_pattern(
+    check: &Check,
+    scope_prefix: &str,
+    scope_files: &BTreeMap<String, String>,
+) -> Option<(String, String)> {
+    if scope_prefix.is_empty() {
+        return None;
+    }
+    // `scope_prefix` carries no trailing slash, so add one before
+    // stripping — otherwise the suggestion comes back as `/Foo/**`.
+    let prefix = format!("{scope_prefix}/");
+    for pat in &check.paths {
+        let Some(stripped) = pat.to_lowercase().strip_prefix(&prefix).map(str::to_string) else {
+            continue;
+        };
+        let Ok(matcher) = GlobBuilder::new(&stripped)
+            .case_insensitive(true)
+            .literal_separator(true)
+            .build()
+            .map(|g| g.compile_matcher())
+        else {
+            continue;
+        };
+        let matches = scope_files
+            .keys()
+            .filter_map(|f| f.strip_prefix(&prefix))
+            .any(|local| matcher.is_match(local));
+        if matches {
+            // Slice the original so the suggestion keeps the author's case.
+            return Some((pat.clone(), pat[prefix.len()..].to_string()));
+        }
+    }
+    None
+}
+
+/// A workspace-relative path rendered relative to `scope_prefix`.
+///
+/// `scope_prefix` is already normalised (NFC, lowercased) and either
+/// empty for a root manifest or `"app/shared"`-shaped — **no trailing
+/// slash**, which is why the separator is added here rather than assumed.
+/// Paths that do not sit under it are returned unchanged:
+/// `effective_files_for` has already restricted the set, so that case
+/// does not arise in practice, and mangling a path would be worse than
+/// passing it through.
+fn strip_scope_prefix<'a>(rel: &'a str, scope_prefix: &str) -> &'a str {
+    if scope_prefix.is_empty() {
+        return rel;
+    }
+    rel.strip_prefix(scope_prefix)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(rel)
 }
 
 /// Filter the workspace-wide file map down to a check's effective scope.
@@ -838,9 +1128,11 @@ fn build_resolve_request(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_resolve_response(
     response: ResolveResponse,
     capability: &str,
+    command_trusted: bool,
     dirty: &[&PreparedCheck],
     tasks: &mut Vec<musts_protocol::Task>,
     ignored_checks: &mut Vec<musts_protocol::IgnoredCheck>,
@@ -849,7 +1141,16 @@ fn ingest_resolve_response(
 ) {
     let by_id: BTreeMap<&str, &PreparedCheck> =
         dirty.iter().map(|c| (c.check_id.as_str(), *c)).collect();
-    for task in response.tasks {
+    for mut task in response.tasks {
+        // `musts run` executes a task's `command`. Only trust it when the
+        // task came from a built-in capability — an external extension
+        // (even one claiming a built-in's name) could otherwise inject an
+        // arbitrary argv that survives in the persisted payload and runs
+        // later, after the extension is gone. Strip it so a `command` in
+        // the ledger is always built-in-authored.
+        if !command_trusted {
+            task.command = None;
+        }
         let mut scope_hashes: BTreeMap<String, String> = BTreeMap::new();
         for s in &task.satisfies {
             if let Some(c) = by_id.get(s.as_str()) {
@@ -971,51 +1272,112 @@ mod tests {
         assert_eq!(scope_depth("App/Login"), 2);
     }
 
-    #[test]
-    fn truncate_task_batch_keeps_report_and_persisted_tasks_aligned() {
-        let mut tasks: Vec<musts_protocol::Task> = (0..7)
-            .map(|i| musts_protocol::Task {
-                id: format!("task-{i}"),
-                extension: "agent".into(),
-                title: format!("Task {i}"),
-                satisfies: vec![format!("root/check-{i}")],
-                parallelizable: true,
-                instructions: vec![],
-                evidence_contract: musts_protocol::EvidenceContract {
-                    text: musts_protocol::TextContract {
-                        required: true,
-                        description: None,
-                    },
-                    assets: vec![],
+    fn prepared(check_id: &str) -> PreparedCheck {
+        PreparedCheck {
+            check_id: check_id.into(),
+            local_id: "x".into(),
+            manifest_rel: PathBuf::from("MUSTS.yml"),
+            scope_path: "root".into(),
+            depth: 0,
+            capability: "cargo/test".into(),
+            with_payload: serde_json::json!({}),
+            scope_hash: "h".into(),
+            dirty: true,
+            effective_files: vec![],
+        }
+    }
+
+    fn task_with_command(id: &str, satisfies: &str) -> musts_protocol::Task {
+        musts_protocol::Task {
+            id: id.into(),
+            extension: "cargo/test".into(),
+            title: "t".into(),
+            satisfies: vec![satisfies.into()],
+            parallelizable: true,
+            command: Some(vec!["cargo".into(), "test".into()]),
+            instructions: vec![],
+            evidence_contract: musts_protocol::EvidenceContract {
+                text: musts_protocol::TextContract {
+                    required: true,
+                    description: None,
                 },
-            })
-            .collect();
-        let mut persisted: Vec<PersistedTask> = (0..7)
-            .map(|i| PersistedTask {
-                id: format!("task-{i}"),
-                capability: "agent".into(),
-                title: format!("Task {i}"),
-                satisfies_json: "[]".into(),
-                scope_hashes_json: "{}".into(),
-                task_snapshot_hash: format!("hash-{i}"),
-                payload_json: "{}".into(),
-            })
-            .collect();
+                assets: vec![],
+            },
+        }
+    }
 
-        truncate_task_batch(&mut tasks, &mut persisted);
+    #[test]
+    fn ingest_strips_command_when_untrusted() {
+        // A task whose command came from an external extension must not
+        // survive into the report or the persisted payload — otherwise
+        // `musts run` could execute extension-supplied argv.
+        let dirty = prepared("root/test");
+        let dirty_refs = [&dirty];
+        let resp = ResolveResponse {
+            protocol_version: PROTOCOL_VERSION,
+            tasks: vec![task_with_command("evil", "root/test")],
+            ignored_checks: vec![],
+            notes: vec![],
+        };
+        let mut tasks = Vec::new();
+        let mut ignored = Vec::new();
+        let mut notes = Vec::new();
+        let mut persist = Vec::new();
+        ingest_resolve_response(
+            resp,
+            "cargo/test",
+            false, // untrusted (external)
+            &dirty_refs,
+            &mut tasks,
+            &mut ignored,
+            &mut notes,
+            &mut persist,
+        );
+        assert_eq!(tasks[0].command, None, "untrusted command must be stripped");
+        assert!(
+            !persist[0].payload_json.contains("command"),
+            "stripped command must not persist in the payload"
+        );
+    }
 
-        assert_eq!(tasks.len(), MAX_VALIDATE_TASKS);
-        assert_eq!(persisted.len(), MAX_VALIDATE_TASKS);
-        assert_eq!(tasks.last().unwrap().id, "task-4");
-        assert_eq!(persisted.last().unwrap().id, "task-4");
+    #[test]
+    fn ingest_keeps_command_when_trusted() {
+        let dirty = prepared("root/test");
+        let dirty_refs = [&dirty];
+        let resp = ResolveResponse {
+            protocol_version: PROTOCOL_VERSION,
+            tasks: vec![task_with_command("cargo-test-root", "root/test")],
+            ignored_checks: vec![],
+            notes: vec![],
+        };
+        let mut tasks = Vec::new();
+        let mut ignored = Vec::new();
+        let mut notes = Vec::new();
+        let mut persist = Vec::new();
+        ingest_resolve_response(
+            resp,
+            "cargo/test",
+            true, // trusted (built-in)
+            &dirty_refs,
+            &mut tasks,
+            &mut ignored,
+            &mut notes,
+            &mut persist,
+        );
+        assert_eq!(tasks[0].command, Some(vec!["cargo".into(), "test".into()]));
     }
 
     fn make_check(local_id: &str, paths: Vec<&str>) -> Check {
+        make_check_ex(local_id, paths, vec![])
+    }
+
+    fn make_check_ex(local_id: &str, paths: Vec<&str>, exclude_paths: Vec<&str>) -> Check {
         Check {
             local_id: local_id.into(),
             uses: "cargo/test".into(),
             with_payload: serde_json::Value::Object(Default::default()),
             paths: paths.into_iter().map(String::from).collect(),
+            exclude_paths: exclude_paths.into_iter().map(String::from).collect(),
         }
     }
 
@@ -1025,7 +1387,7 @@ mod tests {
             ("a.rs".into(), "h1".into()),
             ("b.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files.clone(), None);
+        let out = filter_effective_files(files.clone(), &PathFilter::default(), "");
         assert_eq!(out, files);
     }
 
@@ -1038,7 +1400,7 @@ mod tests {
             ("App/OtherFile.swift".into(), "h2".into()),
             ("Tests/TrackingEventsTests.swift".into(), "h3".into()),
         ];
-        let out = filter_effective_files(files, filter.as_ref());
+        let out = filter_effective_files(files, &filter, "");
         assert_eq!(
             out,
             vec![
@@ -1060,7 +1422,7 @@ mod tests {
             ("tests/it.rs".into(), "h2".into()),
             ("src/main.rs".into(), "h3".into()),
         ];
-        let out = filter_effective_files(files, filter.as_ref());
+        let out = filter_effective_files(files, &filter, "");
         assert_eq!(
             out,
             vec![
@@ -1078,7 +1440,7 @@ mod tests {
             ("App/A.swift".into(), "h1".into()),
             ("App/B.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files, filter.as_ref());
+        let out = filter_effective_files(files, &filter, "");
         assert!(out.is_empty());
     }
 
@@ -1093,10 +1455,140 @@ mod tests {
             ("app/trackingevents.swift".into(), "h1".into()),
             ("app/other.swift".into(), "h2".into()),
         ];
-        let out = filter_effective_files(files, filter.as_ref());
+        let out = filter_effective_files(files, &filter, "");
         assert_eq!(
             out,
             vec![("app/trackingevents.swift".to_string(), "h1".to_string())]
+        );
+    }
+
+    #[test]
+    fn exclude_paths_subtracts_from_all_files_when_no_include() {
+        // No `paths:` → start from every file, then drop excludes.
+        let check = make_check_ex("build", vec![], vec!["tools/config.bzl"]);
+        let filter = compile_path_filter(std::path::Path::new("MUSTS.yml"), &check).unwrap();
+        assert!(filter.is_active());
+        let files = vec![
+            ("app/main.swift".into(), "h1".into()),
+            ("tools/config.bzl".into(), "h2".into()),
+        ];
+        let out = filter_effective_files(files, &filter, "");
+        assert_eq!(out, vec![("app/main.swift".to_string(), "h1".to_string())]);
+    }
+
+    #[test]
+    fn exclude_paths_applies_after_include() {
+        // Include the swift files, then carve out the generated one.
+        let check = make_check_ex("unit", vec!["**/*.swift"], vec!["**/*.generated.swift"]);
+        let filter = compile_path_filter(std::path::Path::new("MUSTS.yml"), &check).unwrap();
+        let files = vec![
+            ("app/a.swift".into(), "h1".into()),
+            ("app/b.generated.swift".into(), "h2".into()),
+            ("app/notes.md".into(), "h3".into()),
+        ];
+        let out = filter_effective_files(files, &filter, "");
+        assert_eq!(out, vec![("app/a.swift".to_string(), "h1".to_string())]);
+    }
+
+    fn check_with(uses: &str, with: serde_json::Value, paths: &[&str]) -> Check {
+        Check {
+            local_id: "c".into(),
+            uses: uses.into(),
+            with_payload: with,
+            paths: paths.iter().map(|s| (*s).to_string()).collect(),
+            exclude_paths: vec![],
+        }
+    }
+
+    #[test]
+    fn check_declaration_hash_ignores_sibling_checks_entirely() {
+        // The hash takes a single Check, so a sibling cannot reach it.
+        // This is the property that stopped a comment (or another
+        // check's edit) from reopening the whole file.
+        let a = check_with("agent", serde_json::json!({"facts": ["x"]}), &["src/a"]);
+        let b = check_with("agent", serde_json::json!({"facts": ["x"]}), &["src/a"]);
+        assert_eq!(check_declaration_hash(&a), check_declaration_hash(&b));
+    }
+
+    #[test]
+    fn check_declaration_hash_changes_with_every_field_that_matters() {
+        let base = check_with("agent", serde_json::json!({"facts": ["x"]}), &["src/a"]);
+        let h = check_declaration_hash(&base);
+
+        let mut uses = base.clone();
+        uses.uses = "cargo/test".into();
+        assert_ne!(h, check_declaration_hash(&uses), "uses");
+
+        let mut with = base.clone();
+        with.with_payload = serde_json::json!({"facts": ["y"]});
+        assert_ne!(h, check_declaration_hash(&with), "with");
+
+        let mut paths = base.clone();
+        paths.paths = vec!["src/b".into()];
+        assert_ne!(h, check_declaration_hash(&paths), "paths");
+
+        let mut excl = base.clone();
+        excl.exclude_paths = vec!["src/gen".into()];
+        assert_ne!(h, check_declaration_hash(&excl), "exclude_paths");
+
+        let mut id = base;
+        id.local_id = "other".into();
+        assert_ne!(h, check_declaration_hash(&id), "local_id");
+    }
+
+    #[test]
+    fn canonical_json_is_key_order_independent() {
+        let a = serde_json::json!({"b": 1, "a": {"d": 2, "c": 3}});
+        let b = serde_json::json!({"a": {"c": 3, "d": 2}, "b": 1});
+        assert_eq!(canonical_json(&a), canonical_json(&b));
+    }
+
+    #[test]
+    fn canonical_json_still_separates_different_values() {
+        let a = serde_json::json!({"a": 1});
+        let b = serde_json::json!({"a": 2});
+        assert_ne!(canonical_json(&a), canonical_json(&b));
+        // Array order *is* meaningful.
+        assert_ne!(
+            canonical_json(&serde_json::json!([1, 2])),
+            canonical_json(&serde_json::json!([2, 1]))
+        );
+    }
+
+    #[test]
+    fn paths_and_exclude_paths_are_not_interchangeable_in_the_hash() {
+        // A separator between the two lists stops ["a"]/[] hashing the
+        // same as []/["a"], which would let an author swap an include
+        // for an exclude and inherit the old evidence.
+        let mut inc = check_with("agent", serde_json::json!({}), &["a"]);
+        inc.exclude_paths = vec![];
+        let mut exc = check_with("agent", serde_json::json!({}), &[]);
+        exc.exclude_paths = vec!["a".into()];
+        assert_ne!(check_declaration_hash(&inc), check_declaration_hash(&exc));
+    }
+
+    /// The legacy helpers exist only to recognise ledger entries written
+    /// before the narrowing. If their algorithm drifts they stop matching
+    /// and every repo silently reopens — the failure this compatibility
+    /// window exists to prevent. Pin them.
+    #[test]
+    fn legacy_aggregate_descriptor_hash_is_byte_stable() {
+        let descriptors: Vec<ExtensionDescriptor> = vec![];
+        assert_eq!(
+            legacy_aggregate_descriptor_hash(&descriptors),
+            blake3::Hasher::new().finalize().to_hex().to_string(),
+            "an empty descriptor set must hash as the empty blake3, as it did before"
+        );
+    }
+
+    #[test]
+    fn builtin_capabilities_share_one_descriptor_hash() {
+        // No descriptor means nothing extension-shaped can perturb the
+        // check, and upgrading the musts binary must not either.
+        let index = CapabilityIndex::new();
+        assert_eq!(
+            capability_descriptor_hash("agent", &index),
+            capability_descriptor_hash("cargo/test", &index)
         );
     }
 }

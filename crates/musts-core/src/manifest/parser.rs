@@ -10,8 +10,20 @@
 //!   narrow the check's effective scope to files matching at least one
 //!   pattern. Patterns are validated at parse time so a malformed glob
 //!   becomes a manifest error.
+//! - `exclude_paths` is an optional list of the same shape that carves
+//!   files back **out** of the effective scope (applied after `paths`).
+//!   A file in scope for `exclude_paths` never contributes to the check's
+//!   scope hash, so edits to it don't re-open the check.
+//! - Leading-`!` patterns (gitignore negation) are **rejected** in both
+//!   fields: `globset::Glob` treats `!` as a literal, so an author writing
+//!   `!foo` used to get a pattern that silently matched nothing. Use
+//!   `exclude_paths` for exclusions instead.
 //! - Duplicate local IDs **inside the same manifest** are rejected with a
 //!   clear error pointing at the offending id.
+//! - Unrecognised keys are **warned about, not rejected** — collected into
+//!   `Manifest::warnings` and surfaced by `validate`. See
+//!   [`ManifestWarning`] for why silence was the wrong default and why
+//!   this is not yet a hard error.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -31,7 +43,50 @@ pub struct Manifest {
     pub version: u32,
     /// Checks keyed by local id. `BTreeMap` keeps iteration deterministic.
     pub checks: BTreeMap<String, Check>,
+    /// Keys musts did not recognise, in file order. Non-fatal, but
+    /// surfaced by `validate` — see [`ManifestWarning`].
+    pub warnings: Vec<ManifestWarning>,
 }
+
+/// A key musts parsed past rather than acted on.
+///
+/// Silently ignoring an unknown key is the worst possible behaviour for a
+/// *filter*. `excludes:` where the real key is `exclude_paths:` reads as a
+/// working exclusion and does nothing, so the check fires on everything it
+/// was meant to skip — forever, with no signal. Found in the wild: one
+/// repo had been paying for that typo since the file was written.
+///
+/// A hard parse error is the honest answer and is where this ends up. It
+/// is a warning for one release so that manifests carrying a stray key do
+/// not all go red on upgrade.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestWarning {
+    /// `None` for a key at the top level of the file.
+    pub check_local_id: Option<String>,
+    /// The key as written.
+    pub key: String,
+    /// Closest valid key, when one is close enough to be worth naming.
+    pub suggestion: Option<&'static str>,
+}
+
+impl std::fmt::Display for ManifestWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = match &self.check_local_id {
+            Some(id) => format!("check `{id}`: unknown key `{}`", self.key),
+            None => format!("unknown top-level key `{}`", self.key),
+        };
+        match self.suggestion {
+            Some(s) => write!(f, "{what} — did you mean `{s}`? It is being ignored"),
+            None => write!(f, "{what} is being ignored"),
+        }
+    }
+}
+
+/// Keys a check may declare. Anything else is reported.
+const KNOWN_CHECK_KEYS: &[&str] = &["uses", "with", "paths", "exclude_paths"];
+
+/// Keys the file may declare at the top level.
+const KNOWN_TOP_KEYS: &[&str] = &["version", "checks"];
 
 /// A single declared check.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,10 +99,15 @@ pub struct Check {
     pub with_payload: serde_json::Value,
     /// Optional gitignore-style glob patterns. When non-empty, the
     /// check's effective scope is narrowed to files matching at least
-    /// one pattern (relative to the workspace root). An empty vector
+    /// one pattern (relative to the declaring manifest's folder). An
+    /// empty vector
     /// means "no filter — apply to every file under the declaring
     /// manifest's folder, modulo the standard same-capability carve-out".
     pub paths: Vec<String>,
+    /// Optional gitignore-style glob patterns that subtract files from
+    /// the effective scope after `paths` has been applied. An empty
+    /// vector means "subtract nothing".
+    pub exclude_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +128,8 @@ struct RawCheck {
     with: serde_yaml::Value,
     #[serde(default)]
     paths: RawPaths,
+    #[serde(default)]
+    exclude_paths: RawPaths,
 }
 
 /// `paths:` accepts either a single string or a list of strings. Absent
@@ -118,6 +180,14 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
         });
     }
 
+    // Unknown keys are collected, not rejected — see [`ManifestWarning`].
+    // The top-level scan re-parses the file as a bare mapping because
+    // `ManifestFile` has already dropped anything it did not name.
+    let mut warnings = Vec::new();
+    if let Ok(top) = serde_yaml::from_slice::<serde_yaml::Mapping>(bytes) {
+        warnings.extend(unknown_keys(&top, KNOWN_TOP_KEYS, None));
+    }
+
     let mut checks: BTreeMap<String, Check> = BTreeMap::new();
     for (raw_key, raw_value) in &file.checks {
         let local_id = match raw_key.as_str() {
@@ -129,6 +199,10 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
                 });
             }
         };
+
+        if let serde_yaml::Value::Mapping(map) = raw_value {
+            warnings.extend(unknown_keys(map, KNOWN_CHECK_KEYS, Some(&local_id)));
+        }
 
         let raw_check: RawCheck =
             serde_yaml::from_value(raw_value.clone()).map_err(|source| Error::ManifestYaml {
@@ -145,7 +219,9 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
         })?;
 
         let paths = raw_check.paths.into_vec();
-        validate_path_patterns(path, &local_id, &paths)?;
+        validate_path_patterns(path, &local_id, "paths", &paths)?;
+        let exclude_paths = raw_check.exclude_paths.into_vec();
+        validate_path_patterns(path, &local_id, "exclude_paths", &exclude_paths)?;
 
         if checks
             .insert(
@@ -155,6 +231,7 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
                     uses: raw_check.uses,
                     with_payload,
                     paths,
+                    exclude_paths,
                 },
             )
             .is_some()
@@ -170,19 +247,100 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Manifest> {
         path: path.to_path_buf(),
         version: file.version,
         checks,
+        warnings,
     })
 }
 
-/// Validate every path pattern as a gitignore-style glob. Returns a
-/// manifest error pointing at the offending check + pattern on the
-/// first failure. Empty patterns are rejected — they would otherwise
-/// match nothing and silently disable the check.
-fn validate_path_patterns(manifest_path: &Path, local_id: &str, paths: &[String]) -> Result<()> {
+/// Collect every key in `mapping` that is not in `known`.
+fn unknown_keys(
+    mapping: &serde_yaml::Mapping,
+    known: &[&'static str],
+    check_local_id: Option<&str>,
+) -> Vec<ManifestWarning> {
+    mapping
+        .keys()
+        .filter_map(serde_yaml::Value::as_str)
+        .filter(|k| !known.contains(k))
+        .map(|k| ManifestWarning {
+            check_local_id: check_local_id.map(str::to_string),
+            key: k.to_string(),
+            suggestion: nearest_key(k, known),
+        })
+        .collect()
+}
+
+/// Closest valid key to `written`, or `None` when nothing is close
+/// enough to name without misleading.
+///
+/// Ranked on shared prefix first, edit distance second. Raw edit distance
+/// alone gets the real-world case wrong: `excludes` is 5 edits from
+/// `paths` but 6 from `exclude_paths`, so it would suggest the one key
+/// that changes the check's meaning instead of the one the author meant.
+fn nearest_key(written: &str, known: &[&'static str]) -> Option<&'static str> {
+    known
+        .iter()
+        .map(|cand| {
+            (
+                common_prefix_len(written, cand),
+                edit_distance(written, cand),
+                *cand,
+            )
+        })
+        .filter(|(prefix, distance, _)| *prefix >= 3 || *distance <= 2)
+        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)))
+        .map(|(_, _, cand)| cand)
+}
+
+fn common_prefix_len(a: &str, b: &str) -> usize {
+    a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count()
+}
+
+/// Plain Levenshtein. Keys are a handful of chars, so the quadratic
+/// table is free and not worth a dependency.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut cur = vec![0; b_chars.len() + 1];
+    for (i, ac) in a.chars().enumerate() {
+        cur[0] = i + 1;
+        for (j, bc) in b_chars.iter().enumerate() {
+            let substitution = prev[j] + usize::from(ac != *bc);
+            cur[j + 1] = substitution.min(prev[j + 1] + 1).min(cur[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b_chars.len()]
+}
+
+/// Validate every path pattern as a gitignore-style glob. `field` names
+/// the manifest key (`paths` / `exclude_paths`) so errors point at the
+/// right place. Returns a manifest error naming the offending check and
+/// pattern on the first failure. Empty patterns are rejected because they
+/// would otherwise match nothing and silently disable the check. A leading
+/// `!` is rejected too: `globset::Glob` treats it as a literal character
+/// rather than gitignore negation, so `!foo` silently matched nothing;
+/// authors who want exclusions must use `exclude_paths`.
+fn validate_path_patterns(
+    manifest_path: &Path,
+    local_id: &str,
+    field: &str,
+    paths: &[String],
+) -> Result<()> {
     for pat in paths {
         if pat.trim().is_empty() {
             return Err(Error::Manifest {
                 path: manifest_path.to_path_buf(),
-                message: format!("check `{local_id}`: `paths` contains an empty pattern"),
+                message: format!("check `{local_id}`: `{field}` contains an empty pattern"),
+            });
+        }
+        if pat.trim_start().starts_with('!') {
+            return Err(Error::Manifest {
+                path: manifest_path.to_path_buf(),
+                message: format!(
+                    "check `{local_id}`: `{field}` pattern `{pat}` uses `!` negation, which musts \
+                     does not support (it would silently match nothing). Move the exclusion into \
+                     an `exclude_paths:` entry without the `!`."
+                ),
             });
         }
         globset::Glob::new(pat).map_err(|err| Error::Manifest {
@@ -447,5 +605,217 @@ checks:
             panic!("expected Manifest error");
         };
         assert!(message.contains("empty pattern"));
+    }
+
+    #[test]
+    fn exclude_paths_defaults_to_empty() {
+        let yaml = br#"
+version: 1
+checks:
+  free:
+    uses: custom/noop
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
+        assert!(manifest.checks["free"].exclude_paths.is_empty());
+    }
+
+    #[test]
+    fn parses_exclude_paths_list_and_single() {
+        let yaml = br#"
+version: 1
+checks:
+  build:
+    uses: bazel/build
+    with: { target: //x }
+    exclude_paths:
+      - "tools/config.bzl"
+      - "**/*.generated.swift"
+  unit:
+    uses: cargo/test
+    paths: "**/*.swift"
+    exclude_paths: "**/*Snapshot*.swift"
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
+        assert_eq!(
+            manifest.checks["build"].exclude_paths,
+            vec![
+                "tools/config.bzl".to_string(),
+                "**/*.generated.swift".to_string(),
+            ]
+        );
+        assert_eq!(
+            manifest.checks["unit"].paths,
+            vec!["**/*.swift".to_string()]
+        );
+        assert_eq!(
+            manifest.checks["unit"].exclude_paths,
+            vec!["**/*Snapshot*.swift".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_bang_negation_in_paths_with_guidance() {
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    paths:
+      - "**/*.swift"
+      - "!**/*Snapshot*.swift"
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("bad"));
+        assert!(message.contains('!'));
+        assert!(message.contains("exclude_paths"));
+    }
+
+    #[test]
+    fn rejects_bang_negation_with_leading_whitespace() {
+        // A stray leading space must not sneak a `!` pattern past the
+        // guard (it would compile to a literal glob that matches nothing).
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    paths:
+      - " !**/*Snapshot*.swift"
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("exclude_paths"));
+    }
+
+    #[test]
+    fn rejects_bang_negation_in_exclude_paths() {
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    exclude_paths:
+      - "!keep.swift"
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("exclude_paths"));
+    }
+
+    #[test]
+    fn rejects_empty_exclude_pattern() {
+        let yaml = br#"
+version: 1
+checks:
+  bad:
+    uses: cargo/test
+    exclude_paths:
+      - ""
+"#;
+        let err = parse(&p(), yaml).unwrap_err();
+        let Error::Manifest { message, .. } = err else {
+            panic!("expected Manifest error");
+        };
+        assert!(message.contains("empty pattern"));
+        assert!(message.contains("exclude_paths"));
+    }
+
+    #[test]
+    fn unknown_check_key_is_warned_not_rejected() {
+        let yaml = br#"
+version: 1
+checks:
+  unit-tests:
+    uses: agent
+    paths: ["src/**"]
+    excludes: ["src/UI/**"]
+"#;
+        let manifest = parse(&p(), yaml).unwrap();
+        assert_eq!(manifest.warnings.len(), 1);
+        let w = &manifest.warnings[0];
+        assert_eq!(w.check_local_id.as_deref(), Some("unit-tests"));
+        assert_eq!(w.key, "excludes");
+        assert_eq!(w.suggestion, Some("exclude_paths"));
+        // The typo is ignored, which is exactly the damage being reported.
+        assert!(manifest.checks["unit-tests"].exclude_paths.is_empty());
+    }
+
+    #[test]
+    fn excludes_suggests_exclude_paths_not_paths() {
+        // Raw Levenshtein makes `paths` (5 edits) look closer than
+        // `exclude_paths` (6), and `paths` is the one key whose
+        // substitution silently changes what the check covers.
+        assert_eq!(
+            nearest_key("excludes", KNOWN_CHECK_KEYS),
+            Some("exclude_paths")
+        );
+    }
+
+    #[test]
+    fn near_misses_are_suggested() {
+        assert_eq!(nearest_key("use", KNOWN_CHECK_KEYS), Some("uses"));
+        assert_eq!(nearest_key("path", KNOWN_CHECK_KEYS), Some("paths"));
+        assert_eq!(nearest_key("wth", KNOWN_CHECK_KEYS), Some("with"));
+        assert_eq!(
+            nearest_key("exclude_path", KNOWN_CHECK_KEYS),
+            Some("exclude_paths")
+        );
+    }
+
+    #[test]
+    fn unrelated_keys_get_no_suggestion() {
+        assert_eq!(nearest_key("zzzzzzzz", KNOWN_CHECK_KEYS), None);
+        assert_eq!(nearest_key("timeout_seconds", KNOWN_CHECK_KEYS), None);
+    }
+
+    #[test]
+    fn unknown_top_level_key_is_warned() {
+        let yaml = b"version: 1\nchecks: {}\nsettings: {}\n";
+        let manifest = parse(&p(), yaml).unwrap();
+        assert_eq!(manifest.warnings.len(), 1);
+        assert!(manifest.warnings[0].check_local_id.is_none());
+        assert_eq!(manifest.warnings[0].key, "settings");
+    }
+
+    #[test]
+    fn a_valid_manifest_warns_about_nothing() {
+        let yaml = br#"
+version: 1
+checks:
+  c:
+    uses: agent
+    paths: ["a/**"]
+    exclude_paths: ["a/gen/**"]
+    with: { facts: ["f"] }
+"#;
+        assert!(parse(&p(), yaml).unwrap().warnings.is_empty());
+    }
+
+    #[test]
+    fn warning_display_names_the_check_the_key_and_the_fix() {
+        let w = ManifestWarning {
+            check_local_id: Some("unit-tests".into()),
+            key: "excludes".into(),
+            suggestion: Some("exclude_paths"),
+        };
+        let s = w.to_string();
+        assert!(s.contains("unit-tests"));
+        assert!(s.contains("excludes"));
+        assert!(s.contains("exclude_paths"));
+        assert!(s.contains("ignored"));
+    }
+
+    #[test]
+    fn edit_distance_is_symmetric_and_zero_on_equal() {
+        assert_eq!(edit_distance("paths", "paths"), 0);
+        assert_eq!(edit_distance("paths", "path"), 1);
+        assert_eq!(edit_distance("abc", "cba"), edit_distance("cba", "abc"));
     }
 }

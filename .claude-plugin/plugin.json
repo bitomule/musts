@@ -1,7 +1,7 @@
 {
   "name": "musts",
   "displayName": "Musts",
-  "description": "Validation loop for Claude Code — runs `musts validate` on every Stop and re-injects the task list until the loop is clean.",
+  "description": "Validation loop for Claude Code — runs `musts validate` before each `git commit` and blocks the commit until the loop is clean.",
   "author": {
     "name": "David Collado",
     "email": "bitomule@gmail.com"
@@ -9,7 +9,7 @@
   "homepage": "https://github.com/bitomule/musts",
   "repository": "https://github.com/bitomule/musts",
   "license": "MIT",
-  "keywords": ["validation", "musts", "loop", "claude-code", "stop-hook"],
+  "keywords": ["validation", "musts", "loop", "claude-code", "pretooluse-hook"],
   "skills": "./plugin/skills/",
   "hooks": "./plugin/hooks/hooks.json"
 }
