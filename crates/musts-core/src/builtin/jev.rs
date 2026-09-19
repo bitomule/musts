@@ -1,0 +1,122 @@
+//! `jev` — a judgment check a machine can run.
+//!
+//! The core knows only how to ASK for one: it declares the command and reads the evidence,
+//! exactly as `bazel/build` declares `bazel build`. Everything about jev — the key, the
+//! request, the verdict — lives in `musts-jev`, which ships with musts and sits on the same
+//! PATH.
+//!
+//! It is a built-in rather than an out-of-tree extension for one reason that is not taste:
+//! `musts run` refuses to execute a descriptor-backed extension's command, so as an
+//! extension this check would be a manual task forever — which is the cost this capability
+//! exists to remove.
+
+use musts_protocol::{
+    AssetContract, EvidenceContract, EvidenceValidationRequest, EvidenceValidationResponse,
+    ResolveRequest, ResolveResponse, Task, TextContract,
+};
+use serde_json::{json, Value};
+use std::sync::OnceLock;
+
+use crate::error::Error;
+
+pub fn schema() -> &'static Value {
+    static S: OnceLock<Value> = OnceLock::new();
+    S.get_or_init(|| {
+        json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "required": ["ask"],
+            "additionalProperties": false,
+            "properties": {
+                "ask": { "type": "string" },
+                "questions": { "type": "string" },
+                "question": { "type": "object" },
+                "expect": { "type": "string", "enum": ["yes", "no"] },
+                "mode": { "type": "string", "enum": ["tripwire", "shadow"] }
+            }
+        })
+    })
+}
+
+fn slug(id: &str) -> String {
+    id.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+pub fn resolve(req: &ResolveRequest) -> Result<ResolveResponse, Error> {
+    let mut tasks = Vec::new();
+    for check in &req.checks {
+        let w = &check.with_payload;
+        let ask = w.get("ask").and_then(Value::as_str).unwrap_or("?");
+        let expect = w.get("expect").and_then(Value::as_str).unwrap_or("yes");
+        let mode = w.get("mode").and_then(Value::as_str).unwrap_or("shadow");
+        let question = match w.get("question") {
+            Some(inline) => format!("--question-json '{inline}'"),
+            None => format!(
+                "--questions {}",
+                w.get("questions").and_then(Value::as_str).unwrap_or("?")
+            ),
+        };
+        let sample = req
+            .changed_files
+            .first()
+            .map(String::as_str)
+            .unwrap_or("<file>");
+        tasks.push(Task {
+            id: format!("jev-{}", slug(&check.id)),
+            extension: "jev".to_string(),
+            title: format!("Ask jev `{ask}` about {} file(s)", req.changed_files.len()),
+            satisfies: vec![check.id.clone()],
+            parallelizable: true,
+            command: Some(vec![
+                "musts-jev".to_string(),
+                question.clone(),
+                "--ask".to_string(),
+                ask.to_string(),
+                "--expect".to_string(),
+                expect.to_string(),
+                "--mode".to_string(),
+                mode.to_string(),
+                sample.to_string(),
+            ]),
+            instructions: vec![
+                format!("Run once per file in scope: `musts-jev {question} --ask {ask} --expect {expect} --mode {mode} {sample}`"),
+                "Submit its output. The summary says how many files were judged and how many were not — a green with nothing judged proves nothing.".to_string(),
+                "UNSURE is green: this reports what fired, never what is verified.".to_string(),
+            ],
+            evidence_contract: EvidenceContract {
+                text: TextContract {
+                    required: true,
+                    description: Some("The run's summary line.".to_string()),
+                },
+                assets: vec![AssetContract {
+                    kind: "log".to_string(),
+                    required: true,
+                    description: None,
+                }],
+            },
+        });
+    }
+    Ok(ResolveResponse {
+        protocol_version: 1,
+        tasks,
+        ignored_checks: vec![],
+        notes: vec![
+            "uses: jev records a measured verdict, not an attestation. Its green means \"nothing fired\", never \"verified\"."
+                .to_string(),
+        ],
+    })
+}
+
+pub fn evidence(req: &EvidenceValidationRequest) -> Result<EvidenceValidationResponse, Error> {
+    Ok(EvidenceValidationResponse {
+        protocol_version: 1,
+        accepted: true,
+        satisfies: req.task.satisfies.clone(),
+        summary: Some("jev verdicts recorded.".to_string()),
+        normalized_assets: vec![],
+        missing: vec![],
+        message: None,
+    })
+}
