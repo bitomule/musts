@@ -353,6 +353,58 @@ ships `calibrate` will reject a manifest that declares it — upgrade
 before adding the block. This repo's own manifest therefore picks it up
 in a follow-up, once a release carrying `calibrate` is installed.
 
+### Asking about one place instead of one file
+
+A `uses: jev` question is answered about the whole file by default, which is
+right for a question about a file. For a question about what one call
+*sends* it is not: in a 2,000-line feature file the call is 0.1% of the
+state, and a verdict per file cannot say which line.
+
+```yaml
+  analytics-privacy:
+    uses: jev
+    paths:
+      - "Boxy/**/*.swift"
+    with:
+      questions: builtin:swift-analytics-privacy
+      ask: analytics_user_data
+      expect: "no"
+      mode: shadow
+      sites: swift-analytics
+      changed_since: origin/main
+```
+
+- **`sites:`** cuts the state down to one emission site per request, and the
+  report then names `path:line`. `swift-analytics` finds calls on a receiver
+  named for tracking (`tracking.execute(...)`, `trackingClient.track(...)`)
+  and the `case` declarations of the app's own event enum. Measured against
+  `grep` on two real apps: 109 of 109 sites in one, 41 of 41 in the other,
+  none extra.
+- **`changed_since:`** keeps only the sites the change touched. Without it a
+  one-line edit to a 109-site app asks about every site in the file it
+  touched, and pays for each.
+- **`questions: builtin:<name>`** addresses a question set that ships inside
+  the binary, so repos asking the same question ask the same text instead of
+  each holding a copy that can drift.
+
+`musts-jev sites [--changed-since <rev>] <file>...` prints what a run would
+ask about without asking. It is the only way to separate "it found nothing"
+from "it looked at nothing", and both print a green.
+
+### `WARN`: an abstention that leans the wrong way
+
+`UNSURE` is green, because a tripwire that fires on abstention is noise. But
+on one planted violation run six times, the probability came back 0.87 to
+0.93 — straddling the edge of the abstention band, so the same unchanged file
+read `FAIL` four times and `UNSURE` twice, and the `UNSURE` was printed
+exactly like the clean twin of that file, which answers 0.11.
+
+`WARN` is an abstention that fell on the violating side of even. Nothing is
+fitted to produce it and it moves no exit code: a tripwire still fails only
+on a decided verdict. It exists so a report distinguishes "almost certainly"
+from "certainly not", and `calibrate` counts it as fired so a control does
+not hold or not hold depending on the run.
+
 ## Stability
 
 `musts` is pre-1.0. The CLI surface, extension protocol, and `MUSTS.yml`
