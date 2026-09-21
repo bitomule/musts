@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.8.0] - 2026-09-21
+
+### Added
+
+- Judge the change, not the file it was in ([#106](https://github.com/bitomule/musts/pull/106))
+
 ## [0.7.0] - 2026-09-21
 
 ### Added
