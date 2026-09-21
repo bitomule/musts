@@ -33,6 +33,8 @@ pub fn schema() -> &'static Value {
                 "question": { "type": "object" },
                 "expect": { "type": "string", "enum": ["yes", "no"] },
                 "mode": { "type": "string", "enum": ["tripwire", "shadow"] },
+                "sites": { "type": "string", "enum": ["swift-analytics"] },
+                "changed_since": { "type": "string" },
                 // The two planted files `musts calibrate` judges the question
                 // against: one that really breaks the rule, one near-miss that
                 // does not. They live in the manifest rather than in the
@@ -87,6 +89,23 @@ pub fn resolve(req: &ResolveRequest) -> Result<ResolveResponse, Error> {
                 w.get("questions").and_then(Value::as_str).unwrap_or("?")
             ),
         };
+        // `sites` narrows the state from the whole file to one emission site, and
+        // `changed_since` narrows it again to the sites the change touched. Both are
+        // pass-through: the core declares the command, it does not know what a site is.
+        let mut narrowing = Vec::new();
+        if let Some(s) = w.get("sites").and_then(Value::as_str) {
+            narrowing.push("--sites".to_string());
+            narrowing.push(s.to_string());
+        }
+        if let Some(r) = w.get("changed_since").and_then(Value::as_str) {
+            narrowing.push("--changed-since".to_string());
+            narrowing.push(r.to_string());
+        }
+        let narrowing_text = if narrowing.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", narrowing.join(" "))
+        };
         let sample = req
             .changed_files
             .first()
@@ -101,18 +120,20 @@ pub fn resolve(req: &ResolveRequest) -> Result<ResolveResponse, Error> {
             command: Some({
                 let mut argv = vec!["musts-jev".to_string()];
                 argv.extend(question_argv);
-                argv.extend(["--ask".to_string(),
-                ask.to_string(),
-                "--expect".to_string(),
-                expect.to_string(),
-                "--mode".to_string(),
-                mode.to_string(),
-                sample.to_string(),
+                argv.extend([
+                    "--ask".to_string(),
+                    ask.to_string(),
+                    "--expect".to_string(),
+                    expect.to_string(),
+                    "--mode".to_string(),
+                    mode.to_string(),
                 ]);
+                argv.extend(narrowing.iter().cloned());
+                argv.push(sample.to_string());
                 argv
             }),
             instructions: vec![
-                format!("Run once per file in scope: `musts-jev {question} --ask {ask} --expect {expect} --mode {mode} {sample}`"),
+                format!("Run once per file in scope: `musts-jev {question} --ask {ask} --expect {expect} --mode {mode}{narrowing_text} {sample}`"),
                 "Submit its output. The summary says how many files were judged and how many were not — a green with nothing judged proves nothing.".to_string(),
                 "UNSURE is green: this reports what fired, never what is verified.".to_string(),
             ],

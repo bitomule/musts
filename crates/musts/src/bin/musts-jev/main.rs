@@ -24,7 +24,8 @@ use std::process::ExitCode;
 use serde_json::{json, Value};
 
 const USAGE: &str = "usage: musts-jev --questions <path> --ask <id> [--expect yes|no] \
-                     [--mode shadow|tripwire] [--root <dir>] [--json] <file>";
+                     [--mode shadow|tripwire] [--root <dir>] [--json] \
+                     [--sites swift-analytics] [--changed-since <rev>] <file>";
 
 /// jevi's CLI silently truncates a state at 80_000 characters and says nothing about it in
 /// its output: 120, 140 and 160 KiB of real source all came back with the same token count,
@@ -49,6 +50,11 @@ struct Args {
     /// `Option` is the kind of coupling that breaks on a refactor nobody
     /// connects to the breakage.
     json: bool,
+    /// Which emission sites to cut the state down to. `None` sends the whole file, which is
+    /// what every question before this one wanted.
+    sites: Option<String>,
+    /// A revision to diff against. Present, only the sites the change touched are judged.
+    changed_since: Option<String>,
     file: String,
 }
 
@@ -59,6 +65,8 @@ fn parse_args() -> Result<Args, String> {
     let mut root = ".".to_string();
     let mut inline: Option<String> = None;
     let mut json = false;
+    let mut sites: Option<String> = None;
+    let mut changed_since: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -71,6 +79,8 @@ fn parse_args() -> Result<Args, String> {
             "--mode" => mode = take("--mode")?,
             "--root" => root = take("--root")?,
             "--json" => json = true,
+            "--sites" => sites = Some(take("--sites")?),
+            "--changed-since" => changed_since = Some(take("--changed-since")?),
             o if o.starts_with("--") => return Err(format!("unknown flag {o}")),
             o => files.push(o.to_string()),
         }
@@ -103,6 +113,8 @@ fn parse_args() -> Result<Args, String> {
         mode,
         root,
         json,
+        sites,
+        changed_since,
         file: files.remove(0),
     })
 }
@@ -143,6 +155,20 @@ fn vet(raw: &str, ask: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Question sets that ship with the binary, addressed as `builtin:<name>`.
+///
+/// A question asked by five repos is one text, not five copies of it. Measured here already:
+/// removing one piece of a question took detection from 8/18 to 3/18 — and five editable
+/// copies is the cheapest way to lose a piece without anyone noticing which repo lost it.
+fn builtin_question_set(name: &str) -> Result<&'static str, String> {
+    match name {
+        "swift-analytics-privacy" => Ok(include_str!("questions/swift-analytics-privacy.json")),
+        other => Err(format!(
+            "no built-in question set `{other}`. Known: swift-analytics-privacy."
+        )),
+    }
+}
+
 /// Not for CI, and never load-bearing.
 fn unavailable() -> Option<&'static str> {
     if std::env::var_os("CI").is_some() {
@@ -159,6 +185,7 @@ fn run() -> Result<ExitCode, String> {
         Some("resolve") => return protocol::resolve().map(|_| ExitCode::SUCCESS),
         Some("evidence") => return protocol::evidence().map(|_| ExitCode::SUCCESS),
         Some("set-key") => return jevkey::set_key().map(|_| ExitCode::SUCCESS),
+        Some("sites") => return list_sites(),
         _ => {}
     }
     let args = parse_args()?;
@@ -184,11 +211,17 @@ fn run() -> Result<ExitCode, String> {
             let doc = json!({ "version": 1, "questions": { &args.ask: question } });
             (doc.to_string(), format!("{} (inline)", args.ask))
         }
-        None => (
-            std::fs::read_to_string(&args.questions)
-                .map_err(|e| format!("cannot read {}: {e}", args.questions))?,
-            args.questions.clone(),
-        ),
+        None => match args.questions.strip_prefix("builtin:") {
+            Some(name) => (
+                builtin_question_set(name)?.to_string(),
+                args.questions.clone(),
+            ),
+            None => (
+                std::fs::read_to_string(&args.questions)
+                    .map_err(|e| format!("cannot read {}: {e}", args.questions))?,
+                args.questions.clone(),
+            ),
+        },
     };
     vet(&raw, &args.ask)?;
 
@@ -221,85 +254,269 @@ fn run() -> Result<ExitCode, String> {
     let source = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
 
-    // The whole state: the file and its path. Nothing computed, nothing narrated. Measured:
-    // one unverified sentence added to a state moved a probability from 0.06 to 0.74.
-    let state = json!({ "path": args.file, "source": source });
+    // What gets judged, and what a red is able to point at. Without `--sites` it is the whole
+    // file, exactly as before. With it, one request per emission site: a question about a
+    // call's arguments, asked about a 2,000-line feature file, is a question about 0.1% of
+    // its state, and the verdict that comes back cannot say which line.
+    //
+    // Either way the state is only what is there — the path, the site, and the lines its
+    // values come from. Nothing computed, nothing narrated. Measured: one unverified sentence
+    // added to a state moved a probability from 0.06 to 0.74.
+    let units: Vec<(String, Value)> = match args.sites.as_deref() {
+        None => vec![(
+            args.file.clone(),
+            json!({ "path": args.file, "source": source }),
+        )],
+        Some("swift-analytics") => {
+            let touched = match &args.changed_since {
+                Some(r) => Some(changed_lines(&args.root, &args.file, r)?),
+                None => None,
+            };
+            musts_core::sites::swift_analytics(&args.file, &source)
+                .into_iter()
+                .filter(|s| match &touched {
+                    None => true,
+                    Some(lines) => {
+                        let span = s.line..=s.line + s.text.matches('\n').count();
+                        lines.iter().any(|l| span.contains(l))
+                    }
+                })
+                .map(|s| {
+                    (
+                        format!("{}:{}", args.file, s.line),
+                        json!({ "path": args.file, "line": s.line, "kind": s.kind.as_str(),
+                                "site": s.text, "lines_above": s.context }),
+                    )
+                })
+                .collect()
+        }
+        Some(other) => return Err(format!("unknown --sites selector `{other}`")),
+    };
 
-    match jevi::ask(&cfg, &prepared, &state, &opts) {
-        // Infrastructure degrades; a malformed request is our own bug and goes red. Two
-        // shapes of failure that a single `ok: false` used to flatten into one, which left a
-        // permanently broken check reporting that all was well.
-        Err(e @ jevi::Error::NoAnswer { .. }) => {
-            if args.json {
-                emit_json(&args.file, "skipped", None, None, Some(e.kind()));
-            } else {
-                println!("SKIP   {}  {}", args.file, e.kind());
-                println!(
-                    "\n0 judged, 1 not evaluated. This check proves nothing about this change."
-                );
-            }
-            Ok(ExitCode::SUCCESS)
+    // Not an error and not a pass. A file can be in a check's `paths:` and contain nothing
+    // this question is about, and saying "ok" there is the lie this whole capability is built
+    // to avoid.
+    if units.is_empty() {
+        if !args.json {
+            println!(
+                "\n0 judged, 0 not evaluated. No emission site in scope; this check proves nothing about this change."
+            );
         }
-        Err(e) => {
-            if args.json {
-                emit_json(&args.file, "broken", None, None, Some(e.kind()));
-            } else {
-                println!("BROKEN {}  {}: {e}", args.file, e.kind());
-            }
-            Ok(ExitCode::FAILURE)
-        }
-        Ok(answered) => {
-            let idx = answered.names.iter().position(|n| n == &args.ask);
-            let Some(o) = idx.and_then(|i| answered.outcomes.get(i)) else {
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let mut judged = 0usize;
+    let mut not_evaluated = 0usize;
+    let mut fired = false;
+
+    for (label, state) in &units {
+        match jevi::ask(&cfg, &prepared, state, &opts) {
+            // Infrastructure degrades; a malformed request is our own bug and goes red. Two
+            // shapes of failure that a single `ok: false` used to flatten into one, which left
+            // a permanently broken check reporting that all was well.
+            Err(e @ jevi::Error::NoAnswer { .. }) => {
+                not_evaluated += 1;
                 if args.json {
-                    emit_json(&args.file, "broken", None, None, Some("answer missing"));
+                    emit_json(label, "skipped", None, None, Some(e.kind()));
                 } else {
-                    println!("BROKEN {}  answer for `{}` missing", args.file, args.ask);
+                    println!("SKIP   {label}  {}", e.kind());
+                }
+            }
+            Err(e) => {
+                if args.json {
+                    emit_json(label, "broken", None, None, Some(e.kind()));
+                } else {
+                    println!("BROKEN {label}  {}: {e}", e.kind());
                 }
                 return Ok(ExitCode::FAILURE);
-            };
-            let verdict = o.verdict.as_str();
-            let model = answered.model.clone().unwrap_or_default();
-            let decided = match verdict {
-                "unsure" => "UNSURE",
-                v if v == args.expect => "ok",
-                _ => "FAIL",
-            };
-            if args.json {
-                emit_json(&args.file, decided, o.number, Some(&model), None);
-                // A machine reading this has the verdict in the object; a
-                // second exit-code channel would only let the two disagree.
-                return Ok(ExitCode::SUCCESS);
             }
-            println!("{decided:6} {}  p={:?} {model}", args.file, o.number);
-
-            if args.mode == "shadow" {
-                let dir = Path::new(&args.root).join(".musts/jev-shadow");
-                let _ = std::fs::create_dir_all(&dir);
-                let row = json!({ "file": args.file, "question": args.ask,
-                                  "verdict": verdict, "p": o.number, "model": model });
-                use std::io::Write;
-                if let Ok(mut h) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(dir.join(format!("{}.jsonl", args.ask)))
-                {
-                    let _ = writeln!(h, "{row}");
+            Ok(answered) => {
+                let idx = answered.names.iter().position(|n| n == &args.ask);
+                let Some(o) = idx.and_then(|i| answered.outcomes.get(i)) else {
+                    if args.json {
+                        emit_json(label, "broken", None, None, Some("answer missing"));
+                    } else {
+                        println!("BROKEN {label}  answer for `{}` missing", args.ask);
+                    }
+                    return Ok(ExitCode::FAILURE);
+                };
+                judged += 1;
+                let verdict = o.verdict.as_str();
+                let model = answered.model.clone().unwrap_or_default();
+                // Four labels, not three, and the fourth is the one that was missing.
+                //
+                // Measured on one planted violation run six times: p came back 0.89, 0.89,
+                // 0.90, 0.90, 0.91, 0.91 — straddling the abstention band's edge, so the same
+                // file read FAIL four times and UNSURE twice. Printed as `UNSURE` it is
+                // indistinguishable from the clean twin of that file, which answers 0.13. A
+                // report where "almost certainly a violation" and "certainly not" share a word
+                // is a report nobody can act on.
+                //
+                // `WARN` is not a tuned cut and nothing is fitted to produce it: it is which
+                // side of even an abstention fell on, and it moves no exit code. `fired` below
+                // still takes only a decided verdict, so tripwire behaves exactly as before.
+                let leaning_violation = o.number.is_some_and(|p| {
+                    if args.expect == "no" {
+                        p >= 0.5
+                    } else {
+                        p < 0.5
+                    }
+                });
+                let decided = match verdict {
+                    "unsure" if leaning_violation => "WARN",
+                    "unsure" => "UNSURE",
+                    v if v == args.expect => "ok",
+                    _ => "FAIL",
+                };
+                if decided == "FAIL" {
+                    fired = true;
                 }
-                println!("SHADOW: recorded. Nothing granted, nothing blocked.");
-                return Ok(ExitCode::SUCCESS);
-            }
+                if args.json {
+                    emit_json(label, decided, o.number, Some(&model), None);
+                    continue;
+                }
+                println!("{decided:6} {label}  p={:?} {model}", o.number);
 
-            // Two states. `unsure` is green. That is honest only because this check's green
-            // means "nothing fired", never "verified": measured, it abstains on 14% of the
-            // files it judges, and a quiet tripwire proves nothing.
-            Ok(if verdict != "unsure" && verdict != args.expect {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            })
+                if args.mode == "shadow" {
+                    let dir = Path::new(&args.root).join(".musts/jev-shadow");
+                    let _ = std::fs::create_dir_all(&dir);
+                    let row = json!({ "file": label, "question": args.ask,
+                                      "verdict": verdict, "p": o.number, "model": model });
+                    use std::io::Write;
+                    if let Ok(mut h) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(dir.join(format!("{}.jsonl", args.ask)))
+                    {
+                        let _ = writeln!(h, "{row}");
+                    }
+                }
+            }
         }
     }
+
+    if args.json {
+        // A machine reading this has every verdict in the objects above; a second
+        // exit-code channel would only let the two disagree.
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // The denominator, always. A green with nothing judged is the failure mode this line
+    // exists to make impossible to miss.
+    println!("\n{judged} judged, {not_evaluated} not evaluated.");
+
+    if args.mode == "shadow" {
+        println!("SHADOW: recorded. Nothing granted, nothing blocked.");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // Two states. `unsure` is green. That is honest only because this check's green
+    // means "nothing fired", never "verified": measured, it abstains on 14% of the
+    // files it judges, and a quiet tripwire proves nothing.
+    Ok(if fired {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// `musts-jev sites [--root <dir>] [--changed-since <rev>] <file>...` — what the run would
+/// ask about, without asking and without spending anything.
+///
+/// This is the only way to see the guard's scope separately from its judgment, which is the
+/// difference between "it found nothing" and "it looked at nothing". Both print a green, and
+/// they are not the same result.
+fn list_sites() -> Result<ExitCode, String> {
+    let mut root = ".".to_string();
+    let mut since: Option<String> = None;
+    let mut files: Vec<String> = Vec::new();
+    let mut it = std::env::args().skip(2);
+    while let Some(arg) = it.next() {
+        let mut take = |name: &str| it.next().ok_or_else(|| format!("{name} needs a value"));
+        match arg.as_str() {
+            "--root" => root = take("--root")?,
+            "--changed-since" => since = Some(take("--changed-since")?),
+            o if o.starts_with("--") => return Err(format!("unknown flag {o}")),
+            o => files.push(o.to_string()),
+        }
+    }
+    if files.is_empty() {
+        return Err(
+            "usage: musts-jev sites [--root <dir>] [--changed-since <rev>] <file>...".into(),
+        );
+    }
+    let mut total = 0usize;
+    for file in &files {
+        let source = std::fs::read_to_string(Path::new(&root).join(file))
+            .map_err(|e| format!("cannot read {file}: {e}"))?;
+        let touched = match &since {
+            Some(r) => Some(changed_lines(&root, file, r)?),
+            None => None,
+        };
+        for s in musts_core::sites::swift_analytics(file, &source) {
+            if let Some(lines) = &touched {
+                let span = s.line..=s.line + s.text.matches('\n').count();
+                if !lines.iter().any(|l| span.contains(l)) {
+                    continue;
+                }
+            }
+            total += 1;
+            println!(
+                "{file}:{}  {}  {}",
+                s.line,
+                s.kind.as_str(),
+                s.text
+                    .replace('\n', " ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+    }
+    println!("\n{total} site(s) in {} file(s).", files.len());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The lines `<file>` gained or changed since `<ref>`, 1-indexed against the working tree.
+///
+/// Requirement one of this capability: judge the sites a change touched, not every site in
+/// every file it happened to be in. A one-line edit to a 214-site file is 214 requests
+/// without this and one with it.
+///
+/// A `git` that fails is a red, not a silent fallback to judging everything: paying for 214
+/// requests because a ref was misspelled is exactly the surprise nobody budgets for.
+fn changed_lines(root: &str, file: &str, since: &str) -> Result<Vec<usize>, String> {
+    let out = std::process::Command::new("git")
+        .args(["-C", root, "diff", "--unified=0", since, "--", file])
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git diff {since} -- {file} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let mut lines = Vec::new();
+    for hunk in String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with("@@"))
+    {
+        // `@@ -a,b +c,d @@` — only the `+` side, which is the tree as it is now.
+        let Some(plus) = hunk.split('+').nth(1) else {
+            continue;
+        };
+        let plus = plus.split([' ', '@']).next().unwrap_or("");
+        let mut parts = plus.split(',');
+        let Some(start) = parts.next().and_then(|s| s.parse::<usize>().ok()) else {
+            continue;
+        };
+        let count = parts
+            .next()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1);
+        lines.extend(start..start + count);
+    }
+    Ok(lines)
 }
 
 /// One object per call, for `musts calibrate` and anything else that has to

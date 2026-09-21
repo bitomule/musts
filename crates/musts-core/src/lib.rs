@@ -17,6 +17,7 @@ pub mod lint;
 pub mod manifest;
 pub mod report;
 pub mod run;
+pub mod sites;
 pub mod snapshot;
 pub mod state;
 pub mod stats;

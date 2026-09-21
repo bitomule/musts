@@ -47,6 +47,11 @@ struct JevCheck {
     /// The `--questions`/`--question-json` argument, ready to pass on.
     question_arg: Vec<String>,
     control: Option<(String, String)>,
+    /// Passed through so a calibration measures the check as it actually runs. A question
+    /// narrowed to emission sites in production and calibrated against whole files is
+    /// calibrated against something else, and the controls would then hold for a mode nobody
+    /// uses.
+    sites: Option<String>,
     scope: PathFilter,
     /// Manifest folder, workspace-relative. `paths:` are relative to it.
     manifest_dir: PathBuf,
@@ -172,13 +177,13 @@ fn calibrate_one(
                 violating: ControlResult {
                     file: violating.clone(),
                     p: v.p.unwrap_or(0.0),
-                    fired: v.verdict == "FAIL",
+                    fired: fired(&v.verdict),
                     verdict: v.verdict,
                 },
                 clean: ControlResult {
                     file: clean.clone(),
                     p: c.p.unwrap_or(0.0),
-                    fired: c.verdict == "FAIL",
+                    fired: fired(&c.verdict),
                     verdict: c.verdict,
                 },
             })
@@ -303,6 +308,15 @@ fn stage(root: &Path, work: &Path, commit: &str, file: &str) -> Option<String> {
     Some(file.to_string())
 }
 
+/// Did the check say something about this file? `WARN` counts: it is an abstention that
+/// landed on the violating side of even, and it reaches the report exactly as a `FAIL` does.
+/// Reading only `FAIL` made a planted control hold or not hold depending on which side of the
+/// abstention band that run came back on — measured at 0.87 to 0.93 on one unchanged file,
+/// which is a calibration that flips on nothing.
+fn fired(verdict: &str) -> bool {
+    verdict == "FAIL" || verdict == "WARN"
+}
+
 struct Answer {
     verdict: String,
     p: Option<f64>,
@@ -325,16 +339,28 @@ fn ask(jev: &Path, check: &JevCheck, root: &Path, file: &str) -> anyhow::Result<
         // log, which is a record of what the check saw in real runs.
         .args(["--mode", "tripwire"])
         .args(["--root", &root.to_string_lossy()])
-        .arg("--json")
-        .arg(file);
+        .arg("--json");
+    if let Some(sites) = &check.sites {
+        cmd.args(["--sites", sites]);
+    }
+    cmd.arg(file);
     let out = cmd
         .output()
         .with_context(|| format!("could not run {}", jev.display()))?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let line = stdout
+    // With `--sites` one call answers about several sites, so there are several objects. The
+    // run itself is red if ANY site fired, and a calibration that read the last object would
+    // score a ten-site file by whichever site happens to come last — scoring the wrong line
+    // and never saying so.
+    let objects: Vec<&str> = stdout
         .lines()
-        .rev()
-        .find(|l| l.trim_start().starts_with('{'))
+        .filter(|l| l.trim_start().starts_with('{'))
+        .collect();
+    let line = objects
+        .iter()
+        .find(|l| l.contains("\"verdict\":\"FAIL\"") || l.contains("\"verdict\":\"WARN\""))
+        .or_else(|| objects.last())
+        .copied()
         .ok_or_else(|| {
             anyhow!(
                 "{} answered nothing readable for {file}: {}",
@@ -447,6 +473,12 @@ fn jev_checks(root: &Path) -> anyhow::Result<Vec<JevCheck>> {
                 Expect::parse(w["expect"].as_str().unwrap_or("yes")).unwrap_or(Expect::Yes);
             let questions = w["questions"].as_str().map(str::to_string);
             let question_arg = match (&questions, w.get("question")) {
+                // `builtin:<name>` addresses a question set inside the binary; it is not a
+                // path and joining the workspace root onto it produces a file that will
+                // never exist.
+                (Some(path), _) if path.starts_with("builtin:") => {
+                    vec!["--questions".to_string(), path.clone()]
+                }
                 (Some(path), _) => vec![
                     "--questions".to_string(),
                     root.join(path).display().to_string(),
@@ -465,6 +497,7 @@ fn jev_checks(root: &Path) -> anyhow::Result<Vec<JevCheck>> {
                 questions,
                 question_arg,
                 control,
+                sites: w["sites"].as_str().map(str::to_string),
                 scope: PathFilter::compile(&check.paths, &check.exclude_paths)?,
                 manifest_dir: manifest_dir.clone(),
             });
@@ -487,6 +520,7 @@ mod tests {
             questions: None,
             question_arg: vec![],
             control: None,
+            sites: None,
             scope: PathFilter::compile(
                 &paths.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),
                 &exclude.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),
