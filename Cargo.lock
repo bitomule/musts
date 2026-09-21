@@ -1020,6 +1020,7 @@ dependencies = [
  "musts-protocol",
  "rstest",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml",

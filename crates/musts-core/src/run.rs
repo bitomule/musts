@@ -105,30 +105,41 @@ pub fn execute(
     }
 
     // Execute argv directly (no shell) from the workspace root.
+    //
+    // The workspace lock is released for the duration: the check's own
+    // command touches no musts state, and holding the lock across it
+    // turned every `musts run` into a workspace-wide stop sign for as
+    // long as the suite took — measured at 60,23 s held out of a 60,28 s
+    // run, which is how a second `musts run` in the same worktree got
+    // `another musts process is running` from its own first one. Writes
+    // are still serialised: the evidence submission below happens with
+    // the lock back in hand.
     let command_display = argv.join(" ");
     let log_path = temp_log_path(task_id);
-    let (combined, code, spawn_error) = match Command::new(&argv[0])
-        .args(&argv[1..])
-        .current_dir(workspace_root)
-        .output()
-    {
-        Ok(out) => {
-            let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            if !stderr.is_empty() {
-                if !combined.is_empty() && !combined.ends_with('\n') {
-                    combined.push('\n');
+    let (combined, code, spawn_error) = session.unlocked(|| {
+        match Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(workspace_root)
+            .output()
+        {
+            Ok(out) => {
+                let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if !stderr.is_empty() {
+                    if !combined.is_empty() && !combined.ends_with('\n') {
+                        combined.push('\n');
+                    }
+                    combined.push_str(&stderr);
                 }
-                combined.push_str(&stderr);
+                (combined, out.status.code(), None)
             }
-            (combined, out.status.code(), None)
+            Err(err) => (
+                format!("failed to spawn `{}`: {err}", argv[0]),
+                None,
+                Some(err),
+            ),
         }
-        Err(err) => (
-            format!("failed to spawn `{}`: {err}", argv[0]),
-            None,
-            Some(err),
-        ),
-    };
+    })?;
 
     // Prefix the log with the exact command so it is self-documenting and
     // never empty — a silently-succeeding command like `cargo fmt --check`

@@ -83,7 +83,15 @@ What this does *not* buy — and cannot — is inheriting green state across a m
 
 ## Cross-process locking
 
-Every state-writing command acquires an advisory file lock on `.musts/.lock` (`fs2::FileExt::try_lock_exclusive`). On contention we exit 2 with `"another musts process is running"`; we never block. The lock is held through the SQLite transaction that mutates `tasks` (validate) or `evidence_records` (evidence). Read-only paths (`--help`, `--version`) skip bootstrap entirely.
+Every state-writing command acquires an advisory file lock on `.musts/.lock` (`fs2::FileExt::try_lock_exclusive`). The lock is held through the SQLite transaction that mutates `tasks` (validate) or `evidence_records` (evidence). Read-only paths (`--help`, `--version`, `lint`, `stats`) skip it entirely.
+
+**Scope.** The lock is per workspace root, and a `git worktree` checkout is its own workspace root, so two worktrees of the same repository each have their own `.musts/.lock` and never contend. Contention is always another process in the *same* directory.
+
+**What it does not cover.** `musts run` releases the lock for the duration of the check's own command (`StateSession::unlocked`) and takes it back to record the evidence. The command touches no musts state, and holding the lock across it made every `musts run` a workspace-wide stop sign for as long as the suite took — measured at 13,038 ms held out of a 13,07 s run, against 24 ms out of 12,18 s afterwards, in two windows: 6 ms to read the task, 18 ms to write the result. Re-acquisition blocks rather than failing, because by then we are holding a result that cost minutes to produce.
+
+**Who holds it.** The holder writes `.musts/.lock.owner` — pid, working directory, command line, and the second it took the lock — and removes it on a clean exit. Contention reports all four. It is a sidecar rather than the body of `.lock` because the `flock` lives on that file's inode: a temp-and-rename over `.lock` would hand the next opener a different inode and the lock would stop excluding anything. A recorded pid that is no longer alive is reported as a stale record, not as the holder; `flock` is released by the kernel on process death, `kill -9` included, so a busy lock always has a live holder.
+
+**Patience.** Acquisition retries for 5 s (`MUSTS_LOCK_WAIT_MS` overrides; `0` restores fail-on-first-contention) before exiting 2. With write windows in the tens of milliseconds, failing a command because a sibling is mid-write costs more than waiting for it. A genuinely long-lived holder still ends the wait, and the error then names it.
 
 ## Convergence model
 

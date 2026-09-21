@@ -6,7 +6,20 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::bootstrap::LockOwner;
+
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Tail of the lock-busy message: who holds it, from where, since when.
+///
+/// Empty when nothing recorded the holder — an older musts wrote no
+/// sidecar, and the honest message then is the one without a name in it.
+fn describe_holder(holder: &Option<LockOwner>) -> String {
+    match holder {
+        Some(owner) => format!(" — wait for it, or stop it.\n{}", owner.describe()),
+        None => " — retry shortly".to_string(),
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -121,8 +134,16 @@ pub enum Error {
         source: rusqlite::Error,
     },
 
-    #[error("another musts process is running — retry shortly")]
-    LockBusy,
+    /// Contention on `<workspace>/.musts/.lock`.
+    ///
+    /// The holder is named whenever the sidecar could be read, because
+    /// the anonymous version of this message cost twenty minutes once: a
+    /// node read "another musts process" as "another *agent*", built a
+    /// theory about two worktrees contending, and the lock was held by
+    /// its own earlier run all along. The lock is per workspace root, so
+    /// the answer is always a process in this same directory.
+    #[error("another musts process is running in this workspace{}", describe_holder(.holder))]
+    LockBusy { holder: Option<LockOwner> },
 
     #[error("ledger lock at {path}: {message}")]
     LedgerLock { path: PathBuf, message: String },
@@ -151,7 +172,7 @@ impl Error {
             | Error::ExtensionTimeout { .. }
             | Error::MissingExtension { .. }
             | Error::StateDirReadOnly
-            | Error::LockBusy
+            | Error::LockBusy { .. }
             | Error::TaskNotFound { .. }
             | Error::EvidenceStale { .. }
             | Error::EvidenceOverclaim { .. }

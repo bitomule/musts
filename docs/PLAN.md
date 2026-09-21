@@ -293,7 +293,7 @@ The bootstrap sequence for any state-writing command, in order:
 
 1. **Ensure `.musts/` exists.** `fs::create_dir_all(".musts")`. If it exists but is not writable → exit 2 with the scenario-21 message. Concurrent first runs both `mkdir -p` idempotently; no race.
 2. **Open the lock file** with `OpenOptions::new().create(true).write(true).open(".musts/.lock")`. The file is *always* created if missing; multiple callers calling `create(true)` simultaneously is safe (POSIX guarantees one inode). Do **not** use `create_new` — that would turn a benign existing file into a hard error.
-3. **Acquire the lock** with `fs2`'s `FileExt::try_lock_exclusive` on the opened handle. On `WouldBlock`, exit 2 with `"another musts process is running — retry shortly"`. We do not block-wait in v1; the agent loop can retry trivially.
+3. **Acquire the lock** with `fs2`'s `FileExt::try_lock_exclusive` on the opened handle. On `WouldBlock`, retry for up to 5 s (`MUSTS_LOCK_WAIT_MS` overrides; `0` is the original fail-immediately behaviour), then exit 2 with `"another musts process is running in this workspace"` **plus the holder's pid, working directory, command line and age**, read from the `.musts/.lock.owner` sidecar the holder wrote. The original "retry shortly" without a name cost a real agent twenty minutes of wrong diagnosis; see `architecture.md` § Cross-process locking.
 4. **Open and migrate `state.sqlite`.** Migrations are idempotent (§7.1 test).
 5. Do the work. Drop the handle on exit — `fs2` releases the lock; the lock file itself persists, which is fine.
 
