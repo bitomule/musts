@@ -353,6 +353,71 @@ ships `calibrate` will reject a manifest that declares it — upgrade
 before adding the block. This repo's own manifest therefore picks it up
 in a follow-up, once a release carrying `calibrate` is installed.
 
+### Judging the change instead of the file
+
+A `uses: jev` question is answered about the whole file by default, which is right
+for a question about a file. For a question about what a change *did* it is the
+wrong unit, and not only because the file is bigger: where a value comes from is
+almost never visible at the place it is used, so the answer lives in the lines
+around the edit.
+
+```yaml
+  analytics-privacy:
+    uses: jev
+    paths:
+      - "Boxy/**/*.swift"
+    with:
+      questions: builtin:swift-analytics-privacy
+      ask: analytics_user_data
+      expect: "no"
+      mode: shadow
+      state: diff
+      changed_since: origin/main
+      context_lines: 20
+      control:
+        base: .musts/controls/analytics-privacy/base.swift
+        violating: .musts/controls/analytics-privacy/violating.swift
+        clean: .musts/controls/analytics-privacy/clean.swift
+```
+
+- **`state: diff`** sends what the change did, as a unified diff against
+  `changed_since`, instead of the file it happened in. Measured over 100 runs on
+  one-argument changes to real Swift: a leak added as an extra argument was caught
+  5/5 from the diff and 0/5 from the call plus six lines of context. The whole file
+  caught it too, but decays with size — the same leak fell from p 0.86 in a 10 KB
+  file to p 0.52 in a 34 KB one, while the clean twin of that file rose from 0.14 to
+  0.31. A diff does not grow with the file: ~2.2 KB per changed file whatever its
+  size.
+- **`context_lines:`** is the width of unchanged source either side of each hunk,
+  and it is load-bearing rather than cosmetic. A leak whose provenance sat 7 lines
+  above the changed line came back p 0.59 at 3 lines and p 0.93 at 20.
+- **`questions: builtin:<name>`** addresses a question set that ships inside the
+  binary, so repos asking the same question ask the same text instead of each
+  holding a copy that can drift.
+- **`control:`** gains a **`base`** when the state is a diff: the controls have to
+  reach the question as changes, so each is a one-edit variant of `base` and what is
+  judged is the difference. A diff question calibrated against whole files is
+  calibrated against a mode it never runs in.
+
+### `WARN`: an abstention that leans the wrong way
+
+`UNSURE` is green, because a tripwire that fires on abstention is noise. But run one
+planted violation six times and the probability came back **0.87, 0.88, 0.89, 0.90,
+0.91, 0.93** — straddling the edge of the abstention band. The same unchanged file
+read `FAIL` four times and `UNSURE` twice, and that `UNSURE` printed exactly like the
+clean twin of the file, which answers 0.11. A report where "almost certainly a
+violation" and "certainly not" share a word is one nobody can act on.
+
+`WARN` is an abstention that fell on the violating side of even. Nothing is fitted to
+produce it and it moves no exit code — a tripwire still fails only on a decided
+verdict. `calibrate` counts it as fired, so a control no longer holds or fails
+depending on which side of the band a run landed on.
+
+Each answered line also carries the provider's own token counts and latency
+(`in=1282 out=22 367ms`), reported rather than estimated: what a check costs is
+something people decide on, and a number derived from character counts is not one
+anybody can take to a billing page.
+
 ## Stability
 
 `musts` is pre-1.0. The CLI surface, extension protocol, and `MUSTS.yml`
