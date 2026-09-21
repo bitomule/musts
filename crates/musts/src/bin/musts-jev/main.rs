@@ -25,7 +25,8 @@ use serde_json::{json, Value};
 
 const USAGE: &str = "usage: musts-jev --questions <path> --ask <id> [--expect yes|no] \
                      [--mode shadow|tripwire] [--root <dir>] [--json] \
-                     [--sites swift-analytics] [--changed-since <rev>] <file>";
+                     [--state file|diff] [--changed-since <rev>] [--context-lines <n>] \
+                     [--diff-from <path>] <file>";
 
 /// jevi's CLI silently truncates a state at 80_000 characters and says nothing about it in
 /// its output: 120, 140 and 160 KiB of real source all came back with the same token count,
@@ -50,11 +51,17 @@ struct Args {
     /// `Option` is the kind of coupling that breaks on a refactor nobody
     /// connects to the breakage.
     json: bool,
-    /// Which emission sites to cut the state down to. `None` sends the whole file, which is
-    /// what every question before this one wanted.
-    sites: Option<String>,
-    /// A revision to diff against. Present, only the sites the change touched are judged.
+    /// `file` or `diff`. What the model is shown.
+    state: String,
+    /// The revision `--state diff` diffs against.
     changed_since: Option<String>,
+    /// A ready-made diff to judge instead of computing one. `musts calibrate` uses it to hand
+    /// over a control's diff, so a control is measured through the very same state shape
+    /// production uses — a control judged as a whole file would hold for a mode nobody runs.
+    diff_from: Option<String>,
+    /// Lines of unchanged source either side of each hunk. Measured: at 3 a leak whose
+    /// provenance sat 7 lines above the changed line came back p 0.59; at 20, p 0.93.
+    context_lines: usize,
     file: String,
 }
 
@@ -65,8 +72,10 @@ fn parse_args() -> Result<Args, String> {
     let mut root = ".".to_string();
     let mut inline: Option<String> = None;
     let mut json = false;
-    let mut sites: Option<String> = None;
+    let mut state = "file".to_string();
     let mut changed_since: Option<String> = None;
+    let mut diff_from: Option<String> = None;
+    let mut context_lines = 20usize;
     let mut files: Vec<String> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -79,8 +88,14 @@ fn parse_args() -> Result<Args, String> {
             "--mode" => mode = take("--mode")?,
             "--root" => root = take("--root")?,
             "--json" => json = true,
-            "--sites" => sites = Some(take("--sites")?),
+            "--state" => state = take("--state")?,
             "--changed-since" => changed_since = Some(take("--changed-since")?),
+            "--diff-from" => diff_from = Some(take("--diff-from")?),
+            "--context-lines" => {
+                context_lines = take("--context-lines")?
+                    .parse()
+                    .map_err(|_| "--context-lines takes a number".to_string())?;
+            }
             o if o.starts_with("--") => return Err(format!("unknown flag {o}")),
             o => files.push(o.to_string()),
         }
@@ -113,8 +128,10 @@ fn parse_args() -> Result<Args, String> {
         mode,
         root,
         json,
-        sites,
+        state,
         changed_since,
+        diff_from,
+        context_lines,
         file: files.remove(0),
     })
 }
@@ -185,7 +202,6 @@ fn run() -> Result<ExitCode, String> {
         Some("resolve") => return protocol::resolve().map(|_| ExitCode::SUCCESS),
         Some("evidence") => return protocol::evidence().map(|_| ExitCode::SUCCESS),
         Some("set-key") => return jevkey::set_key().map(|_| ExitCode::SUCCESS),
-        Some("sites") => return list_sites(),
         _ => {}
     }
     let args = parse_args()?;
@@ -250,61 +266,57 @@ fn run() -> Result<ExitCode, String> {
         },
     };
 
-    let path = Path::new(&args.root).join(&args.file);
-    let source = std::fs::read_to_string(&path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-
-    // What gets judged, and what a red is able to point at. Without `--sites` it is the whole
-    // file, exactly as before. With it, one request per emission site: a question about a
-    // call's arguments, asked about a 2,000-line feature file, is a question about 0.1% of
-    // its state, and the verdict that comes back cannot say which line.
+    // What gets judged. `file` sends the source, which is what every question before this one
+    // wanted. `diff` sends what the change did, and it is not a cheaper version of the same
+    // thing — it is more accurate. Measured over 100 runs on one-argument changes to real
+    // Swift: a leak added as an extra argument was caught 5/5 from the diff (p 0.93) and 0/5
+    // from the call plus six lines of context (p 0.14), because where a value comes from is
+    // almost never visible at the place it is sent. The whole file caught it too, but decays
+    // with size — the same leak fell from p 0.86 in a 10 KB file to p 0.52 in a 34 KB one,
+    // while the clean twin of that file rose from 0.14 to 0.31. A diff does not grow with the
+    // file.
     //
-    // Either way the state is only what is there — the path, the site, and the lines its
-    // values come from. Nothing computed, nothing narrated. Measured: one unverified sentence
-    // added to a state moved a probability from 0.06 to 0.74.
-    let units: Vec<(String, Value)> = match args.sites.as_deref() {
-        None => vec![(
-            args.file.clone(),
-            json!({ "path": args.file, "source": source }),
-        )],
-        Some("swift-analytics") => {
-            let touched = match &args.changed_since {
-                Some(r) => Some(changed_lines(&args.root, &args.file, r)?),
-                None => None,
-            };
-            musts_core::sites::swift_analytics(&args.file, &source)
-                .into_iter()
-                .filter(|s| match &touched {
-                    None => true,
-                    Some(lines) => {
-                        let span = s.line..=s.line + s.text.matches('\n').count();
-                        lines.iter().any(|l| span.contains(l))
-                    }
-                })
-                .map(|s| {
-                    (
-                        format!("{}:{}", args.file, s.line),
-                        json!({ "path": args.file, "line": s.line, "kind": s.kind.as_str(),
-                                "site": s.text, "lines_above": s.context }),
-                    )
-                })
-                .collect()
+    // Either way the state is only what is there. Nothing computed, nothing narrated.
+    // Measured: one unverified sentence added to a state moved a probability from 0.06 to 0.74.
+    let state = match args.state.as_str() {
+        "file" => {
+            let path = Path::new(&args.root).join(&args.file);
+            let source = std::fs::read_to_string(&path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            json!({ "path": args.file, "source": source })
         }
-        Some(other) => return Err(format!("unknown --sites selector `{other}`")),
+        "diff" => {
+            let diff = match &args.diff_from {
+                Some(p) => std::fs::read_to_string(p)
+                    .map_err(|e| format!("cannot read the diff at {p}: {e}"))?,
+                None => {
+                    let Some(since) = &args.changed_since else {
+                        return Err(
+                            "--state diff needs --changed-since <rev>, or --diff-from <path>"
+                                .into(),
+                        );
+                    };
+                    file_diff(&args.root, &args.file, since, args.context_lines)?
+                }
+            };
+            // An empty diff is neither a pass nor an error: the file is in the check's scope
+            // and this change did not touch it. Saying "ok" there is the quiet green this
+            // whole capability exists to remove.
+            if diff.trim().is_empty() {
+                if !args.json {
+                    println!(
+                        "\n0 judged, 0 not evaluated. {} has no changes to judge; this check proves nothing about this change.",
+                        args.file
+                    );
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
+            json!({ "path": args.file, "diff": diff })
+        }
+        other => return Err(format!("--state takes file or diff; `{other}` is neither")),
     };
 
-    // Not an error and not a pass. A file can be in a check's `paths:` and contain nothing
-    // this question is about, and saying "ok" there is the lie this whole capability is built
-    // to avoid.
-    if units.is_empty() {
-        if !args.json {
-            println!(
-                "\n0 judged, 0 not evaluated. No emission site in scope; this check proves nothing about this change."
-            );
-        }
-        return Ok(ExitCode::SUCCESS);
-    }
-
+    let units = [(args.file.clone(), state)];
     let mut judged = 0usize;
     let mut not_evaluated = 0usize;
     let mut fired = false;
@@ -343,6 +355,26 @@ fn run() -> Result<ExitCode, String> {
                 judged += 1;
                 let verdict = o.verdict.as_str();
                 let model = answered.model.clone().unwrap_or_default();
+                // The provider's own usage block, reported rather than estimated. What a
+                // check costs is a thing people decide on, and a number derived from
+                // character counts is a number nobody can take to a billing page.
+                // jevi passes the provider's usage block through untouched, so the field
+                // names are the provider's, not ours. Two spellings are in use across the
+                // ones jevi speaks to; anything else is printed raw rather than dropped,
+                // because a cost nobody can see is a cost nobody checks.
+                let field = |names: [&str; 2]| -> Option<u64> {
+                    let u = answered.usage.as_ref()?;
+                    names.iter().find_map(|n| u.get(*n).and_then(Value::as_u64))
+                };
+                let tokens_in = field(["prompt_tokens", "input_tokens"]);
+                let tokens_out = field(["completion_tokens", "output_tokens"]);
+                let cost = match (tokens_in, tokens_out) {
+                    (Some(i), Some(o)) => format!("  in={i} out={o} {}ms", answered.latency_ms),
+                    _ => match &answered.usage {
+                        Some(u) => format!("  usage={u} {}ms", answered.latency_ms),
+                        None => format!("  {}ms", answered.latency_ms),
+                    },
+                };
                 // Four labels, not three, and the fourth is the one that was missing.
                 //
                 // Measured on one planted violation run six times: p came back 0.89, 0.89,
@@ -375,13 +407,15 @@ fn run() -> Result<ExitCode, String> {
                     emit_json(label, decided, o.number, Some(&model), None);
                     continue;
                 }
-                println!("{decided:6} {label}  p={:?} {model}", o.number);
+                println!("{decided:6} {label}  p={:?} {model}{cost}", o.number);
 
                 if args.mode == "shadow" {
                     let dir = Path::new(&args.root).join(".musts/jev-shadow");
                     let _ = std::fs::create_dir_all(&dir);
                     let row = json!({ "file": label, "question": args.ask,
-                                      "verdict": verdict, "p": o.number, "model": model });
+                                      "verdict": verdict, "p": o.number, "model": model,
+                                      "tokens_in": tokens_in, "tokens_out": tokens_out,
+                                      "latency_ms": answered.latency_ms });
                     use std::io::Write;
                     if let Ok(mut h) = std::fs::OpenOptions::new()
                         .create(true)
@@ -420,74 +454,54 @@ fn run() -> Result<ExitCode, String> {
     })
 }
 
-/// `musts-jev sites [--root <dir>] [--changed-since <rev>] <file>...` — what the run would
-/// ask about, without asking and without spending anything.
+/// The path as the repository actually spells it.
 ///
-/// This is the only way to see the guard's scope separately from its judgment, which is the
-/// difference between "it found nothing" and "it looked at nothing". Both print a green, and
-/// they are not the same result.
-fn list_sites() -> Result<ExitCode, String> {
-    let mut root = ".".to_string();
-    let mut since: Option<String> = None;
-    let mut files: Vec<String> = Vec::new();
-    let mut it = std::env::args().skip(2);
-    while let Some(arg) = it.next() {
-        let mut take = |name: &str| it.next().ok_or_else(|| format!("{name} needs a value"));
-        match arg.as_str() {
-            "--root" => root = take("--root")?,
-            "--changed-since" => since = Some(take("--changed-since")?),
-            o if o.starts_with("--") => return Err(format!("unknown flag {o}")),
-            o => files.push(o.to_string()),
-        }
+/// musts hands a capability its changed files through `normalise_rel_path`, which lowercases
+/// every component so a ledger written on one filesystem reads the same on another. Opening
+/// such a path works on macOS, where the filesystem does not care; asking version control
+/// about it does not, because the index is case-sensitive everywhere. The result was an empty
+/// diff, which this check would have reported as "nothing to judge" — a green, forever, on
+/// every Mac. It is resolved here rather than left to the caller because an empty diff and a
+/// misspelled path are indistinguishable downstream, and only one of them is fine.
+///
+/// A path the index has never heard of is an error, not an empty diff.
+fn resolve_case(root: &str, file: &str) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(["-C", root, "ls-files", "--"])
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    let listing = String::from_utf8_lossy(&out.stdout);
+    let wanted = file.to_lowercase();
+    if let Some(real) = listing.lines().find(|l| l.to_lowercase() == wanted) {
+        return Ok(real.to_string());
     }
-    if files.is_empty() {
-        return Err(
-            "usage: musts-jev sites [--root <dir>] [--changed-since <rev>] <file>...".into(),
-        );
-    }
-    let mut total = 0usize;
-    for file in &files {
-        let source = std::fs::read_to_string(Path::new(&root).join(file))
-            .map_err(|e| format!("cannot read {file}: {e}"))?;
-        let touched = match &since {
-            Some(r) => Some(changed_lines(&root, file, r)?),
-            None => None,
-        };
-        for s in musts_core::sites::swift_analytics(file, &source) {
-            if let Some(lines) = &touched {
-                let span = s.line..=s.line + s.text.matches('\n').count();
-                if !lines.iter().any(|l| span.contains(l)) {
-                    continue;
-                }
-            }
-            total += 1;
-            println!(
-                "{file}:{}  {}  {}",
-                s.line,
-                s.kind.as_str(),
-                s.text
-                    .replace('\n', " ")
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            );
-        }
-    }
-    println!("\n{total} site(s) in {} file(s).", files.len());
-    Ok(ExitCode::SUCCESS)
+    Err(format!(
+        "`{file}` is not a tracked file in {root}. Nothing was judged, and this is reported          rather than treated as an empty diff: the two look identical afterwards and only one          of them is harmless."
+    ))
 }
 
-/// The lines `<file>` gained or changed since `<ref>`, 1-indexed against the working tree.
+/// What `<file>` gained and lost since `<since>`, as a unified diff with `context` lines
+/// either side of each hunk.
 ///
-/// Requirement one of this capability: judge the sites a change touched, not every site in
-/// every file it happened to be in. A one-line edit to a 214-site file is 214 requests
-/// without this and one with it.
+/// The context width is not cosmetic. Measured on a leak whose provenance — the declaration
+/// binding a user-typed value to a local — sat 7 lines above the changed line: at 3 lines the
+/// question came back p 0.59, at 20 lines p 0.93. The changed line says what is now sent; the
+/// lines around it are the only thing that says where it came from.
 ///
-/// A `git` that fails is a red, not a silent fallback to judging everything: paying for 214
-/// requests because a ref was misspelled is exactly the surprise nobody budgets for.
-fn changed_lines(root: &str, file: &str, since: &str) -> Result<Vec<usize>, String> {
+/// A `git` that fails is a red, not a silent empty diff: a check that quietly judges nothing
+/// is exactly the green this capability exists to remove.
+fn file_diff(root: &str, file: &str, since: &str, context: usize) -> Result<String, String> {
+    let file = &resolve_case(root, file)?;
     let out = std::process::Command::new("git")
-        .args(["-C", root, "diff", "--unified=0", since, "--", file])
+        .args([
+            "-C",
+            root,
+            "diff",
+            &format!("--unified={context}"),
+            since,
+            "--",
+            file,
+        ])
         .output()
         .map_err(|e| format!("cannot run git: {e}"))?;
     if !out.status.success() {
@@ -496,27 +510,7 @@ fn changed_lines(root: &str, file: &str, since: &str) -> Result<Vec<usize>, Stri
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    let mut lines = Vec::new();
-    for hunk in String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|l| l.starts_with("@@"))
-    {
-        // `@@ -a,b +c,d @@` — only the `+` side, which is the tree as it is now.
-        let Some(plus) = hunk.split('+').nth(1) else {
-            continue;
-        };
-        let plus = plus.split([' ', '@']).next().unwrap_or("");
-        let mut parts = plus.split(',');
-        let Some(start) = parts.next().and_then(|s| s.parse::<usize>().ok()) else {
-            continue;
-        };
-        let count = parts
-            .next()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(1);
-        lines.extend(start..start + count);
-    }
-    Ok(lines)
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// One object per call, for `musts calibrate` and anything else that has to

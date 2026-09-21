@@ -47,11 +47,16 @@ struct JevCheck {
     /// The `--questions`/`--question-json` argument, ready to pass on.
     question_arg: Vec<String>,
     control: Option<(String, String)>,
+    /// The unchanged file both controls are a one-change variant of. Required when
+    /// `state: diff`: a control has to reach the question as a diff, or it measures a mode
+    /// nobody runs.
+    control_base: Option<String>,
     /// Passed through so a calibration measures the check as it actually runs. A question
     /// narrowed to emission sites in production and calibrated against whole files is
     /// calibrated against something else, and the controls would then hold for a mode nobody
     /// uses.
-    sites: Option<String>,
+    state: Option<String>,
+    context_lines: Option<u64>,
     scope: PathFilter,
     /// Manifest folder, workspace-relative. `paths:` are relative to it.
     manifest_dir: PathBuf,
@@ -158,10 +163,35 @@ fn calibrate_one(
     scan: usize,
     model: &mut Option<String>,
 ) -> anyhow::Result<QuestionReport> {
+    let diff_state = check.state.as_deref() == Some("diff");
     let controls = match &check.control {
         Some((violating, clean)) => {
-            let v = ask(jev, check, root, violating)?;
-            let c = ask(jev, check, root, clean)?;
+            // A `state: diff` question is asked about a change, so its controls have to be
+            // changes too. `base` is the unchanged file; each control is a one-edit variant of
+            // it, and what reaches the question is the difference between them — the same
+            // shape, the same width of context, as a real run.
+            let (v, c) = if diff_state {
+                let Some(base) = &check.control_base else {
+                    return Err(anyhow!(
+                        "check `{}` declares state: diff and controls, but no `control.base`. \
+                         A diff question judged against whole files is calibrated against a \
+                         mode it never runs in.",
+                        check.check_id
+                    ));
+                };
+                let width = check.context_lines.unwrap_or(20);
+                let vd = control_diff(root, work, base, violating, width, "violating")?;
+                let cd = control_diff(root, work, base, clean, width, "clean")?;
+                (
+                    ask_diff(jev, check, root, violating, Some(&vd))?,
+                    ask_diff(jev, check, root, clean, Some(&cd))?,
+                )
+            } else {
+                (
+                    ask(jev, check, root, violating)?,
+                    ask(jev, check, root, clean)?,
+                )
+            };
             for (result, path) in [(&v, violating), (&c, clean)] {
                 if result.verdict == "skipped" || result.verdict == "broken" {
                     return Err(anyhow!(
@@ -325,6 +355,19 @@ struct Answer {
 }
 
 fn ask(jev: &Path, check: &JevCheck, root: &Path, file: &str) -> anyhow::Result<Answer> {
+    ask_diff(jev, check, root, file, None)
+}
+
+/// `diff` is a ready-made unified diff to judge. Present, it replaces the one `musts-jev`
+/// would compute — which is how a control and a historical sample reach a `state: diff`
+/// question in the shape production uses.
+fn ask_diff(
+    jev: &Path,
+    check: &JevCheck,
+    root: &Path,
+    file: &str,
+    diff: Option<&Path>,
+) -> anyhow::Result<Answer> {
     let mut cmd = Command::new(jev);
     cmd.args(&check.question_arg)
         .args(["--ask", &check.ask])
@@ -340,8 +383,14 @@ fn ask(jev: &Path, check: &JevCheck, root: &Path, file: &str) -> anyhow::Result<
         .args(["--mode", "tripwire"])
         .args(["--root", &root.to_string_lossy()])
         .arg("--json");
-    if let Some(sites) = &check.sites {
-        cmd.args(["--sites", sites]);
+    if let Some(state) = &check.state {
+        cmd.args(["--state", state]);
+    }
+    if let Some(n) = check.context_lines {
+        cmd.args(["--context-lines", &n.to_string()]);
+    }
+    if let Some(d) = diff {
+        cmd.args(["--diff-from", &d.to_string_lossy()]);
     }
     cmd.arg(file);
     let out = cmd
@@ -375,6 +424,38 @@ fn ask(jev: &Path, check: &JevCheck, root: &Path, file: &str) -> anyhow::Result<
         model: v["model"].as_str().map(str::to_string),
         note: v["note"].as_str().map(str::to_string),
     })
+}
+
+/// The difference between the unchanged control and one of its variants, written where
+/// `musts-jev --diff-from` can read it.
+///
+/// The plain `diff` tool rather than the version-control one: the controls are two ordinary
+/// files in the repo, not two revisions of one, and an exit status of 1 here means "they
+/// differ", which is the whole point.
+fn control_diff(
+    root: &Path,
+    work: &Path,
+    base: &str,
+    variant: &str,
+    context: u64,
+    label: &str,
+) -> anyhow::Result<PathBuf> {
+    let out = Command::new("diff")
+        .arg(format!("--unified={context}"))
+        .arg(root.join(base))
+        .arg(root.join(variant))
+        .output()
+        .with_context(|| format!("could not compare the {label} control against {base}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    if text.trim().is_empty() {
+        return Err(anyhow!(
+            "the {label} control `{variant}` is identical to `{base}`. A control that changes \
+             nothing cannot answer either way."
+        ));
+    }
+    let path = work.join(format!("control-{label}.diff"));
+    std::fs::write(&path, text.as_bytes())?;
+    Ok(path)
 }
 
 /// The commit where this question first existed: the boundary every
@@ -490,6 +571,7 @@ fn jev_checks(root: &Path) -> anyhow::Result<Vec<JevCheck>> {
                 .as_str()
                 .zip(w["control"]["clean"].as_str())
                 .map(|(v, c)| (v.to_string(), c.to_string()));
+            let control_base = w["control"]["base"].as_str().map(str::to_string);
             out.push(JevCheck {
                 check_id: manifest::check_id(&scope, local_id),
                 ask,
@@ -497,7 +579,9 @@ fn jev_checks(root: &Path) -> anyhow::Result<Vec<JevCheck>> {
                 questions,
                 question_arg,
                 control,
-                sites: w["sites"].as_str().map(str::to_string),
+                control_base,
+                state: w["state"].as_str().map(str::to_string),
+                context_lines: w["context_lines"].as_u64(),
                 scope: PathFilter::compile(&check.paths, &check.exclude_paths)?,
                 manifest_dir: manifest_dir.clone(),
             });
@@ -520,7 +604,9 @@ mod tests {
             questions: None,
             question_arg: vec![],
             control: None,
-            sites: None,
+            control_base: None,
+            state: None,
+            context_lines: None,
             scope: PathFilter::compile(
                 &paths.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),
                 &exclude.iter().map(|s| (*s).to_string()).collect::<Vec<_>>(),

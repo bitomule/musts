@@ -33,8 +33,9 @@ pub fn schema() -> &'static Value {
                 "question": { "type": "object" },
                 "expect": { "type": "string", "enum": ["yes", "no"] },
                 "mode": { "type": "string", "enum": ["tripwire", "shadow"] },
-                "sites": { "type": "string", "enum": ["swift-analytics"] },
+                "state": { "type": "string", "enum": ["file", "diff"] },
                 "changed_since": { "type": "string" },
+                "context_lines": { "type": "integer", "minimum": 0 },
                 // The two planted files `musts calibrate` judges the question
                 // against: one that really breaks the rule, one near-miss that
                 // does not. They live in the manifest rather than in the
@@ -47,7 +48,12 @@ pub fn schema() -> &'static Value {
                     "additionalProperties": false,
                     "properties": {
                         "violating": { "type": "string" },
-                        "clean": { "type": "string" }
+                        "clean": { "type": "string" },
+                        // The unchanged file both controls are a one-edit variant of.
+                        // Required when the check declares state: diff — a diff question
+                        // judged against whole files is calibrated against a mode it never
+                        // runs in.
+                        "base": { "type": "string" }
                     }
                 }
             }
@@ -89,13 +95,17 @@ pub fn resolve(req: &ResolveRequest) -> Result<ResolveResponse, Error> {
                 w.get("questions").and_then(Value::as_str).unwrap_or("?")
             ),
         };
-        // `sites` narrows the state from the whole file to one emission site, and
-        // `changed_since` narrows it again to the sites the change touched. Both are
-        // pass-through: the core declares the command, it does not know what a site is.
+        // `state: diff` shows the model what the change did rather than the file it was in.
+        // All three are pass-through: the core declares the command and reads the evidence, it
+        // does not know what a diff is.
         let mut narrowing = Vec::new();
-        if let Some(s) = w.get("sites").and_then(Value::as_str) {
-            narrowing.push("--sites".to_string());
+        if let Some(s) = w.get("state").and_then(Value::as_str) {
+            narrowing.push("--state".to_string());
             narrowing.push(s.to_string());
+        }
+        if let Some(n) = w.get("context_lines").and_then(Value::as_u64) {
+            narrowing.push("--context-lines".to_string());
+            narrowing.push(n.to_string());
         }
         if let Some(r) = w.get("changed_since").and_then(Value::as_str) {
             narrowing.push("--changed-since".to_string());
