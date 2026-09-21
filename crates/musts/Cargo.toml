@@ -1,6 +1,6 @@
 [package]
 name = "musts"
-version = "0.8.0"
+version = "0.8.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -31,7 +31,7 @@ default = ["jev"]
 jev = ["dep:jevi"]
 
 [dependencies]
-musts-core = { path = "../musts-core", version = "0.7.0" }
+musts-core = { path = "../musts-core", version = "0.7.1" }
 jevi = { version = "0.1.2", optional = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
