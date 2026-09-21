@@ -359,6 +359,11 @@ fn scenario_15_concurrent_validate_locks() {
     lock.try_lock_exclusive().unwrap();
 
     bin()
+        // No sidecar exists: this holder is the test, not a musts
+        // process. `MUSTS_LOCK_WAIT_MS=0` keeps the old
+        // fail-on-first-contention timing so the test does not sit
+        // through the default patience.
+        .env("MUSTS_LOCK_WAIT_MS", "0")
         .arg("--workspace")
         .arg(dir.path())
         .arg("validate")
@@ -366,6 +371,71 @@ fn scenario_15_concurrent_validate_locks() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains("another musts process is running"));
+
+    drop(lock);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 15b: lock contention names the holder
+// ---------------------------------------------------------------------------
+
+/// The lock-busy message must name the process that holds it. The
+/// anonymous version cost a real agent twenty minutes: it read "another
+/// musts process" as "another agent in another worktree", and the holder
+/// was its own earlier run in this same directory.
+#[test]
+#[serial]
+fn scenario_15b_lock_contention_names_the_holder() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        &dir.path().join("MUSTS.yml"),
+        "version: 1\nchecks:\n  c:\n    uses: bazel/build\n    with:\n      target: //x\n",
+    );
+    install_stub_descriptor(dir.path(), "bazel/build");
+
+    // Hold the lock the way musts itself does: take the flock *and*
+    // leave the sidecar that names the holder.
+    use fs2::FileExt;
+    use std::fs::OpenOptions;
+    let musts_dir = dir.path().join(".musts");
+    fs::create_dir_all(&musts_dir).unwrap();
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(musts_dir.join(".lock"))
+        .unwrap();
+    lock.try_lock_exclusive().unwrap();
+    fs::write(
+        musts_dir.join(".lock.owner"),
+        format!(
+            r#"{{"pid":{},"cwd":"/somewhere/else","command":"musts run cargo-test-root","since_unix":{}}}"#,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                - 252
+        ),
+    )
+    .unwrap();
+
+    bin()
+        .env("MUSTS_LOCK_WAIT_MS", "0")
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(format!(
+            "pid {}",
+            std::process::id()
+        )))
+        .stderr(predicate::str::contains("/somewhere/else"))
+        .stderr(predicate::str::contains("musts run cargo-test-root"))
+        .stderr(predicate::str::contains("holding for 4m 12s"));
 
     drop(lock);
 }

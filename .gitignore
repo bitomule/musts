@@ -30,6 +30,8 @@ Icon?
 **/.musts/state.sqlite-wal
 **/.musts/evidence/
 **/.musts/.lock
+**/.musts/.lock.owner
+**/.musts/.lock.tmp*
 
 # Fixture-installed extension symlinks (created by the README walkthrough)
 fixtures/*/.musts/extensions/*/bazel-extension
