@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.6.0] - 2026-09-21
+
+### Added
+
+- The workspace lock names its holder and stops covering the suite ([#104](https://github.com/bitomule/musts/pull/104)) **(breaking)**
+
 ## [0.5.0] - 2026-09-19
 
 ### Added
