@@ -233,3 +233,46 @@ fn mustsignore_negation_re_includes_specific_files() {
         .code(1)
         .stdout(predicate::str::contains("1. stub-task"));
 }
+
+// ---------------------------------------------------------------------------
+// Scenario: a repo cloned inside a folder that a parent repo's `.gitignore`
+// ignores. Ignore files above the workspace root must not apply.
+// ---------------------------------------------------------------------------
+
+fn workspace_inside_ignored_parent(parent_ignore: &[u8]) -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    write_file(&dir.path().join(".gitignore"), parent_ignore);
+    let workspace = dir.path().join("clone");
+    fs::create_dir_all(workspace.join(".git")).unwrap();
+    write_file(&workspace.join("MUSTS.yml"), stub_manifest());
+    install_stub_descriptor(&workspace, "bazel/build");
+    write_file(&workspace.join("App/Login.swift"), b"// login\n");
+    (dir, workspace)
+}
+
+#[test]
+#[serial]
+fn parent_gitignore_does_not_hide_manifests_of_a_nested_clone() {
+    let (_dir, workspace) = workspace_inside_ignored_parent(b"*\n");
+
+    run_validate(&workspace)
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("1. stub-task"));
+}
+
+#[test]
+#[serial]
+fn parent_gitignore_does_not_shrink_scope_hash_of_a_nested_clone() {
+    let (_dir, workspace) = workspace_inside_ignored_parent(b"*.swift\n");
+
+    run_validate(&workspace).failure().code(1);
+    run_evidence(&workspace, "stub-task").assert().success();
+    run_validate(&workspace).success().code(0);
+
+    fs::write(workspace.join("App/Login.swift"), b"// touched\n").unwrap();
+    run_validate(&workspace)
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("1. stub-task"));
+}

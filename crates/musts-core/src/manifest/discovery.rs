@@ -30,6 +30,9 @@ pub fn discover(workspace_root: &Path) -> Result<Vec<ManifestEntry>> {
         // not be a git checkout, e.g. when discovered via the
         // MUSTS.yml fallback rule).
         .require_git(false)
+        // The workspace may be a clone inside a folder some parent repo
+        // ignores; ignore files above the workspace root are not ours.
+        .parents(false)
         // `.mustsignore` is `.gitignore` for musts: files matched here are
         // excluded from the walk (and therefore from the scope hash), so
         // edits to them never re-invalidate checks. Must be committed —

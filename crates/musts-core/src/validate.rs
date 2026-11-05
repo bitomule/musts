@@ -685,11 +685,15 @@ fn compute_scope_file_inputs(
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| workspace_root.to_path_buf());
-        for entry in ignore::WalkBuilder::new(&scope_dir)
+        let filter_dir = scope_dir.clone();
+        // Walk from the workspace root so ignore files between it and the
+        // scope still apply, but none above it (see discovery::discover).
+        for entry in ignore::WalkBuilder::new(workspace_root)
             .standard_filters(true)
             .git_ignore(true)
             .git_exclude(true)
             .require_git(false)
+            .parents(false)
             // `.mustsignore` keeps matched files out of the scope hash so
             // edits to local logs / scratch artefacts don't re-invalidate
             // checks. Same syntax + precedence as `.gitignore`. See
@@ -697,7 +701,11 @@ fn compute_scope_file_inputs(
             .add_custom_ignore_filename(".mustsignore")
             .hidden(false)
             .follow_links(false)
-            .filter_entry(skip_built_in_ignores)
+            .filter_entry(move |entry| {
+                skip_built_in_ignores(entry)
+                    && (entry.path().starts_with(&filter_dir)
+                        || filter_dir.starts_with(entry.path()))
+            })
             .build()
         {
             let entry = entry.map_err(|err| Error::Io {
@@ -706,7 +714,9 @@ fn compute_scope_file_inputs(
                     .into_io_error()
                     .unwrap_or_else(|| std::io::Error::other("scope walk error")),
             })?;
-            if entry.file_type().is_some_and(|t| t.is_file()) {
+            if entry.file_type().is_some_and(|t| t.is_file())
+                && entry.path().starts_with(&scope_dir)
+            {
                 files.insert(entry.path().to_path_buf(), ());
             }
         }
