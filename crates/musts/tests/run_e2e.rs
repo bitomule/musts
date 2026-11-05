@@ -171,3 +171,84 @@ fn run_rejects_unknown_task_id() {
         .failure()
         .stderr(predicate::str::contains("does-not-exist"));
 }
+
+/// A workspace with one `bazel/test` check and a stub `bazel` that prints
+/// what Bazel prints when the patterns hold no test, and exits with the
+/// code Bazel uses for it.
+#[cfg(unix)]
+fn bazel_workspace_without_tests(targets: &str) -> (TempDir, TempDir) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    write(
+        &dir.path().join("MUSTS.yml"),
+        &format!(
+            "version: 1\nchecks:\n  unit:\n    uses: bazel/test\n    with:\n      targets: [{targets}]\n"
+        ),
+    );
+    let stub_dir = TempDir::new().unwrap();
+    let stub = stub_dir.path().join("bazel");
+    write(
+        &stub,
+        "#!/bin/sh\necho 'INFO: Build completed successfully, 0 total actions'\n\
+         echo 'No test targets were found, yet testing was requested' >&2\nexit 4\n",
+    );
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, stub_dir)
+}
+
+#[cfg(unix)]
+fn path_with(stub_dir: &Path) -> String {
+    format!(
+        "{}:{}",
+        stub_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+#[test]
+#[serial]
+#[cfg(unix)]
+fn run_records_a_bazel_test_whose_wildcards_hold_no_test() {
+    let (dir, stub_dir) = bazel_workspace_without_tests("\"//crates/x/...\"");
+    let root = dir.path();
+    bin()
+        .arg("--workspace")
+        .arg(root)
+        .arg("validate")
+        .assert()
+        .code(1);
+
+    bin()
+        .env("PATH", path_with(stub_dir.path()))
+        .arg("--workspace")
+        .arg(root)
+        .arg("run")
+        .arg("bazel-test-root")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Evidence accepted"));
+}
+
+#[test]
+#[serial]
+#[cfg(unix)]
+fn run_still_fails_a_bazel_test_naming_a_label_that_holds_no_test() {
+    let (dir, stub_dir) = bazel_workspace_without_tests("\"//crates/x:lib\"");
+    let root = dir.path();
+    bin()
+        .arg("--workspace")
+        .arg(root)
+        .arg("validate")
+        .assert()
+        .code(1);
+
+    bin()
+        .env("PATH", path_with(stub_dir.path()))
+        .arg("--workspace")
+        .arg(root)
+        .arg("run")
+        .arg("bazel-test-root")
+        .assert()
+        .failure();
+}

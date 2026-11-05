@@ -197,7 +197,9 @@ pub fn invocation_problem(inv: &Invocation, workspace_root: &Path) -> Option<Str
 }
 
 /// Judge one check's `targets:` against the invocation. `Ok` carries how
-/// many tests passed; `Err` the first target that is not proven.
+/// many tests passed; `Err` the first target that is not proven. A
+/// wildcard pattern that expands to no test at all is proven vacuously:
+/// there is nothing under it that could fail.
 pub fn targets_proven(inv: &Invocation, targets: &[String]) -> Result<usize, String> {
     let mut positives = Vec::new();
     let mut exclusions = Vec::new();
@@ -237,18 +239,19 @@ pub fn targets_proven(inv: &Invocation, targets: &[String]) -> Result<usize, Str
             }
             Pattern::Recursive(_) | Pattern::Package(_) => {
                 require_requested(inv, raw, pattern, &exclusions)?;
-                let mut under = 0;
+                let mut skipped = 0;
                 for test in inv.test_targets.iter().chain(inv.summaries.keys()) {
                     if !pattern.contains_label(test)
                         || exclusions.iter().any(|e| e.contains_label(test))
-                        || inv.aborted.get(test).map(String::as_str) == Some("SKIPPED")
                     {
                         continue;
                     }
-                    require_passed(inv, test)?;
-                    if passed.insert(test) {
-                        under += 1;
+                    if inv.aborted.get(test).map(String::as_str) == Some("SKIPPED") {
+                        skipped += 1;
+                        continue;
                     }
+                    require_passed(inv, test)?;
+                    passed.insert(test);
                 }
                 if let Some((label, reason)) = inv
                     .aborted
@@ -257,13 +260,39 @@ pub fn targets_proven(inv: &Invocation, targets: &[String]) -> Result<usize, Str
                 {
                     return Err(format!("{label} was aborted ({reason})"));
                 }
-                if under == 0 {
+                if skipped > 0 && !inv.summaries.keys().any(|t| pattern.contains_label(t)) {
                     return Err(format!("no test under {raw} passed in the invocation"));
                 }
             }
         }
     }
     Ok(passed.len())
+}
+
+/// Bazel's exit code for "the build passed but the patterns hold no test".
+const NO_TESTS_FOUND_EXIT: i32 = 4;
+
+/// Whether a `bazel test` that exited with `code` found no test to run
+/// and every target it was given was a wildcard, so the empty result is
+/// the vacuous proof `targets_proven` accepts. A named label that is not
+/// a test stays a failure.
+pub fn no_tests_is_vacuous(argv: &[String], code: Option<i32>) -> bool {
+    if code != Some(NO_TESTS_FOUND_EXIT) {
+        return false;
+    }
+    let mut targets = argv
+        .iter()
+        .skip(2)
+        .take_while(|a| !a.starts_with("--"))
+        .map(|a| a.trim_start_matches('-'))
+        .peekable();
+    targets.peek().is_some()
+        && targets.all(|t| {
+            matches!(
+                Pattern::parse(t),
+                Some(Pattern::Recursive(_) | Pattern::Package(_))
+            )
+        })
 }
 
 fn require_passed(inv: &Invocation, label: &str) -> Result<(), String> {
@@ -728,11 +757,98 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_pattern_with_no_test_under_it() {
+    fn a_pattern_with_no_test_target_is_vacuously_proven() {
         let inv = Stream::test(&["//a/..."]).finish();
+        assert_eq!(judge(&inv, &["//a/..."]), Ok(0));
+    }
+
+    #[test]
+    fn a_package_wildcard_with_no_test_target_is_vacuously_proven() {
+        let inv = Stream::test(&["//a:all"]).finish();
+        assert_eq!(judge(&inv, &["//a:all"]), Ok(0));
+    }
+
+    #[test]
+    fn a_pattern_whose_targets_are_not_tests_is_vacuously_proven() {
+        let mut s = Stream::test(&["//a/..."]);
+        s.configured("//a:lib", "rust_library rule");
+        assert_eq!(judge(&s.finish(), &["//a/..."]), Ok(0));
+    }
+
+    #[test]
+    fn an_empty_pattern_alongside_a_passing_one_counts_only_the_passing_tests() {
+        let inv = Stream::test(&["//a/...", "//b/..."])
+            .passed("//b:t")
+            .finish();
+        assert_eq!(judge(&inv, &["//a/...", "//b/..."]), Ok(1));
+    }
+
+    #[test]
+    fn an_empty_pattern_does_not_hide_a_failing_one() {
+        let inv = Stream::test(&["//a/...", "//b/..."])
+            .status("//b:t", "FAILED")
+            .finish();
+        assert_eq!(
+            judge(&inv, &["//a/...", "//b/..."]),
+            Err("//b:t FAILED".into())
+        );
+    }
+
+    #[test]
+    fn an_unrequested_pattern_is_not_vacuously_proven() {
+        let inv = Stream::test(&["//a/..."]).finish();
+        assert_eq!(
+            judge(&inv, &["//z/..."]),
+            Err("//z/... was not requested; the invocation requested //a/...".into())
+        );
+    }
+
+    #[test]
+    fn a_pattern_whose_only_tests_were_skipped_is_not_vacuously_proven() {
+        let inv = Stream::test(&["//a/..."])
+            .aborted("//a:t", "sh_test rule", "SKIPPED")
+            .finish();
         assert_eq!(
             judge(&inv, &["//a/..."]),
             Err("no test under //a/... passed in the invocation".into())
+        );
+    }
+
+    fn argv(args: &[&str]) -> Vec<String> {
+        ["bazel", "test"]
+            .iter()
+            .chain(args)
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn exit_4_over_wildcards_only_is_vacuous() {
+        let a = argv(&["//a/...", "-//a/x/...", "//b:all", "--test_output=errors"]);
+        assert!(no_tests_is_vacuous(&a, Some(4)));
+    }
+
+    #[test]
+    fn exit_4_over_a_named_label_is_not_vacuous() {
+        let a = argv(&["//a/...", "//b:lib", "--test_output=errors"]);
+        assert!(!no_tests_is_vacuous(&a, Some(4)));
+    }
+
+    #[test]
+    fn other_exit_codes_are_not_vacuous() {
+        let a = argv(&["//a/...", "--test_output=errors"]);
+        for code in [Some(0), Some(1), Some(3), None] {
+            assert!(!no_tests_is_vacuous(&a, code), "{code:?}");
+        }
+    }
+
+    #[test]
+    fn a_label_that_is_not_a_test_stays_unproven() {
+        let mut s = Stream::test(&["//a:lib"]);
+        s.configured("//a:lib", "rust_library rule");
+        assert_eq!(
+            judge(&s.finish(), &["//a:lib"]),
+            Err("//a:lib is not a test target".into())
         );
     }
 

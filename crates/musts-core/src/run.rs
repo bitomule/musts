@@ -153,7 +153,9 @@ pub fn execute(
         source,
     })?;
 
-    let succeeded = spawn_error.is_none() && code == Some(0);
+    let vacuous = stored.capability == "bazel/test"
+        && crate::builtin::bazel_bep::no_tests_is_vacuous(&argv, code);
+    let succeeded = spawn_error.is_none() && (code == Some(0) || vacuous);
     if !succeeded {
         return Ok(RunOutcome::Failed {
             command: command_display,

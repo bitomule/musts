@@ -120,7 +120,13 @@ proven ones are still recorded); 2 the task does not exist, is stale (run
 | `//x/... was not requested` | Same: request the check's pattern (or a wider one). |
 | `the invocation excluded -//x/…, inside //x/...` | Run without that negative pattern. |
 | `//x:y was aborted (REASON)` | Fix the build or analysis error. |
-| `no test under //x/... passed in the invocation` | The run produced no test results there. |
+| `no test under //x/... passed in the invocation` | Every test there was skipped (an upstream build failed): fix the build. |
+
+A wildcard pattern (`//x/...`, `//x:all`) that expands to no test target at
+all is proven vacuously: nothing under it can fail, so `musts record` accepts
+it, and `musts run` accepts Bazel's exit 4 (`No test targets were found`) when
+every target of the task is a wildcard. A named label that is not a test is
+still rejected.
 
 ## For a repo's `AGENTS.md`
 
