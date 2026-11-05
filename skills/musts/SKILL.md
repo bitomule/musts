@@ -66,6 +66,22 @@ musts run cargo-test-root
 - Refuses judgment tasks (`agent`, `mav`) and any check provided by an
   installed extension — use `musts evidence` for those.
 
+## `musts record` — a `bazel test` you already ran
+
+```bash
+musts record bazel-test-root
+```
+
+- If you just ran `bazel test` over every target of a `bazel/test` check and
+  have not edited since, record that run instead of `musts run`, which would
+  run the same tests again. Needs the repo's `.bazelrc` to write the stamped
+  build event file (`.musts/bep.json`); see `docs/record.md` in the musts repo.
+- Records the check only if every target passed (not flaky, not filtered)
+  and nothing in its scope changed since the run started.
+- "Not recorded" (exit 1) names the reason: test again on the final tree,
+  run the missing targets, or `musts run <task-id>`. Never pass
+  `--test_filter` or test tag/size filters to a run you mean to record.
+
 ## Dispatching to subagents
 
 When the report has multiple independent judgment tasks:

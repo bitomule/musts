@@ -15,6 +15,7 @@ pub mod evidence;
 pub mod extension;
 pub mod lint;
 pub mod manifest;
+pub mod record;
 pub mod report;
 pub mod run;
 pub mod snapshot;

@@ -279,6 +279,8 @@ sequence, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 musts validate                                 # report pending validation tasks
 musts validate --json                          # machine-readable report
 musts run <task-id>                            # execute a deterministic task and record it
+musts record <task-id>                         # record a bazel test you already ran (docs/record.md)
+musts stamp                                    # scope hashes for bazel's --workspace_status_command
 musts evidence <task-id> --text "..." \        # record evidence for a judgment task
     --asset path/to/log --asset path/to/screen.png
 musts lint                                     # authoring checks on every MUSTS.yml
@@ -290,6 +292,8 @@ musts calibrate --no-record                    # same, without updating .musts/c
 Exit codes:
 
 - `validate`: 0 clean, 1 pending tasks, 2 configuration / stale / lock error, 70 internal error.
+- `record`: 0 every check recorded, 1 a check rejected (the reason is printed), 2 unknown / stale / non-`bazel/test` task.
+- `stamp`: always 0 — it must never fail a build.
 - `evidence`: 0 accepted, 1 rejected by extension, 2 unknown task / stale snapshot / over-claim, 70 internal error.
 - `lint`: 0 clean or advice only, 1 an error-level finding (the manifest does not do what it says).
 - `stats`: always 0 — it reports, it does not judge.
@@ -431,6 +435,7 @@ Start at [`docs/README.md`](docs/README.md) for the documentation index.
 
 - [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) - Claude Code plugin and pre-commit validation hook.
 - [`docs/skill.md`](docs/skill.md) - copyable agent instructions for the validation loop.
+- [`docs/record.md`](docs/record.md) - record a `bazel test` the agent already ran instead of running it again.
 - [`docs/extensions.md`](docs/extensions.md) - how to write a third-party extension.
 - [`docs/architecture.md`](docs/architecture.md) - bird's-eye view of the crates.
 - [`docs/musts-design.md`](docs/musts-design.md) - design spec and protocol decisions.

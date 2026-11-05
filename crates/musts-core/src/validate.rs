@@ -50,13 +50,42 @@ pub fn compute_current_scope_hashes(
     session: &mut StateSession,
     workspace_root: &Path,
 ) -> Result<BTreeMap<String, String>> {
+    Ok(compute_current_scopes(session, workspace_root)?
+        .into_iter()
+        .map(|(cid, scope)| (cid, scope.hash))
+        .collect())
+}
+
+/// One file of a check's effective scope, as it is on disk now.
+#[derive(Debug, Clone)]
+pub struct ScopeFile {
+    /// Workspace-relative path with its real case.
+    pub rel_path: String,
+    pub mtime_ns: i128,
+}
+
+/// A check's current scope hash and the files it was computed from.
+#[derive(Debug, Clone)]
+pub struct CurrentScope {
+    pub hash: String,
+    pub files: Vec<ScopeFile>,
+}
+
+/// [`compute_current_scope_hashes`] plus each check's effective files, so
+/// `musts record` can tell whether any of them changed after a moment in
+/// time.
+pub fn compute_current_scopes(
+    session: &mut StateSession,
+    workspace_root: &Path,
+) -> Result<BTreeMap<String, CurrentScope>> {
     let now_unix = unix_seconds_now();
 
     let manifest_entries = discover_manifests(workspace_root)?;
     let manifests = load_manifests(workspace_root, &manifest_entries)?;
     let descriptors = discover_descriptors(workspace_root)?;
     let cap_index = build_capability_index(&descriptors);
-    let scope_files = compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
+    let (scope_files, file_meta) =
+        compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
     let mut out = BTreeMap::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
@@ -83,13 +112,40 @@ pub fn compute_current_scope_hashes(
             if path_filter.is_active() && effective_files.is_empty() {
                 continue;
             }
-            let scope_hash = compute_scope_hash(&ScopeInput {
+            let files = effective_files
+                .iter()
+                .filter_map(|(rel, _)| file_meta.get(rel))
+                .map(|(rel_path, mtime_ns)| ScopeFile {
+                    rel_path: rel_path.clone(),
+                    mtime_ns: *mtime_ns,
+                })
+                .collect();
+            let hash = compute_scope_hash(&ScopeInput {
                 files: effective_files,
                 manifest_hash: check_declaration_hash(check),
                 ext_descriptor_hash: capability_descriptor_hash(&check.uses, &cap_index),
                 descendant_manifest_paths: descendant_paths,
             });
-            out.insert(cid, scope_hash);
+            out.insert(cid, CurrentScope { hash, files });
+        }
+    }
+    Ok(out)
+}
+
+/// Every declared check's capability and `with` payload, by check id.
+pub fn declared_checks(
+    workspace_root: &Path,
+) -> Result<BTreeMap<String, (String, serde_json::Value)>> {
+    let manifest_entries = discover_manifests(workspace_root)?;
+    let manifests = load_manifests(workspace_root, &manifest_entries)?;
+    let mut out = BTreeMap::new();
+    for m in &manifests {
+        let scope = scope_path_for(&m.entry.rel_path);
+        for (local_id, check) in &m.parsed.checks {
+            out.insert(
+                check_id(&scope, local_id),
+                (check.uses.clone(), check.with_payload.clone()),
+            );
         }
     }
     Ok(out)
@@ -144,7 +200,8 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     // 4. Compute the per-check effective scope and scope hash, plus the
     //    list of dirty checks (Phase 3: a check is dirty iff no green
     //    ledger row for the current scope_hash; Phase 4 adds the writes).
-    let scope_files = compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
+    let (scope_files, _) =
+        compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
     let mut per_check = Vec::new();
     // Checks whose `paths:` currently match nothing. Reported, never
     // silently dropped — see the push site below.
@@ -610,12 +667,15 @@ fn capability_schema<'a>(
 /// Map of `workspace-relative rel_path → content_hash` for every file in
 /// **any** manifest's scope. Phase 1's [`hash_file`] is used; results
 /// are cached in the `file_fingerprints` table.
+/// Normalised rel-path → (rel-path with its real case, mtime in ns).
+type FileMeta = BTreeMap<String, (String, i128)>;
+
 fn compute_scope_file_inputs(
     workspace_root: &Path,
     manifests: &[LoadedManifest],
     session: &mut StateSession,
     now_unix: i64,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<(BTreeMap<String, String>, FileMeta)> {
     // Walk every manifest's folder once, deduplicate by absolute path.
     let mut files: BTreeMap<PathBuf, ()> = BTreeMap::new();
     for m in manifests {
@@ -659,6 +719,7 @@ fn compute_scope_file_inputs(
     // `foo.txt` can coexist and collide here. Detect that and refuse rather
     // than silently fold them into a single hash key.
     let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let mut meta = FileMeta::new();
     let mut origin_of_normalised: BTreeMap<String, String> = BTreeMap::new();
     for abs_path in files.keys() {
         let rel = abs_path
@@ -706,9 +767,10 @@ fn compute_scope_file_inputs(
         session
             .db
             .upsert_fingerprint(&raw_rel, mtime_ns, size_bytes, &hash, now_unix)?;
+        meta.insert(normalised.clone(), (raw_rel, mtime_ns));
         out.insert(normalised, hash);
     }
-    Ok(out)
+    Ok((out, meta))
 }
 
 fn mtime_nanos(metadata: &std::fs::Metadata) -> i128 {
