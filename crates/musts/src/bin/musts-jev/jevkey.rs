@@ -161,10 +161,12 @@ pub fn set_key() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// The precedence has to be visible in a test, not only in a README: the one thing
     /// nobody can check by reading is which source wins when two are set.
     #[test]
+    #[serial]
     fn the_environment_variable_wins_over_everything_else() {
         // Not a live keychain read — that would make the test depend on the machine. What is
         // asserted is the branch order: with the variable set, `resolve` returns it and its
@@ -177,6 +179,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn an_empty_variable_is_not_a_key() {
         // An exported-but-empty variable is the classic CI mistake; treating it as a key
         // would send an empty credential and fail confusingly far from the cause.
