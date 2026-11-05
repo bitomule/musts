@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.8.0] - 2026-11-05
+
+### Added
+
+- Record a bazel test the agent already ran (musts record) ([#112](https://github.com/bitomule/musts/pull/112))
+
 ## [0.7.1] - 2026-09-21
 
 ### Fixed
