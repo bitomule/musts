@@ -14,6 +14,7 @@ use serde_json::Value as JsonValue;
 use crate::error::Error;
 
 pub mod agent;
+pub mod bazel_bep;
 pub mod bazel_build;
 pub mod bazel_test;
 pub mod cargo;

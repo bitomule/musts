@@ -55,6 +55,25 @@ enum Command {
         /// Task id from the validate report.
         task_id: String,
     },
+    /// Record a `bazel test` you already ran instead of running it again.
+    ///
+    /// Reads the run's build event file (`--build_event_json_file`) and
+    /// records each check of the task (or the one check named) only when
+    /// every target of the check passed in that run and the tree it ran on
+    /// is the tree the check covers now. Anything else is rejected with the
+    /// exact reason and the check stays pending. Needs the `.bazelrc`
+    /// lines in docs/record.md.
+    Record {
+        /// Task id from the validate report, or one check id of that task.
+        id: String,
+        /// Build event JSON file of the run.
+        #[arg(long, value_name = "PATH", default_value = musts_core::record::DEFAULT_BEP_PATH)]
+        from: PathBuf,
+    },
+    /// Print the scope hash of every check as one Bazel workspace status
+    /// line. Meant for `--workspace_status_command`; always exits 0, so it
+    /// can never fail a build.
+    Stamp,
     /// Record evidence for a task issued by the most recent `musts validate`.
     Evidence {
         /// Task id from the validate report.
@@ -161,6 +180,8 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
             text,
             assets,
         } => evidence_command(cli.workspace.as_deref(), task_id, text.as_deref(), assets),
+        Command::Record { id, from } => record_command(cli.workspace.as_deref(), id, from),
+        Command::Stamp => Ok(stamp_command(cli.workspace.as_deref())),
         Command::Lint { json } => lint_command(cli.workspace.as_deref(), *json),
         Command::Stats { json } => stats_command(cli.workspace.as_deref(), *json),
         Command::Calibrate {
@@ -339,6 +360,75 @@ fn evidence_command(
         }
         Err(err) => Ok(report_error(err)),
     }
+}
+
+fn record_command(
+    explicit_workspace: Option<&std::path::Path>,
+    id: &str,
+    from: &std::path::Path,
+) -> anyhow::Result<ExitCode> {
+    let cwd = std::env::current_dir()?;
+    let root = match workspace::resolve(explicit_workspace, &cwd) {
+        Ok(r) => r,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let mut session = match StateSession::acquire(&root) {
+        Ok(s) => s,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let outcome = match musts_core::record::record(&mut session, &root, id, from) {
+        Ok(o) => o,
+        Err(err) => return Ok(report_error(err)),
+    };
+    let invocation = if outcome.invocation.is_empty() {
+        String::new()
+    } else {
+        format!(" from bazel invocation {}", outcome.invocation)
+    };
+    let recorded = outcome
+        .verdicts
+        .iter()
+        .filter(|v| v.outcome.is_ok())
+        .count();
+    if recorded > 0 {
+        println!("Recorded{invocation}:");
+        for v in &outcome.verdicts {
+            if let Ok(tests) = v.outcome {
+                let plural = if tests == 1 { "" } else { "s" };
+                println!(
+                    "  ✓ {} — {tests} test{plural} passed, tree unchanged since the invocation",
+                    v.check_id
+                );
+            }
+        }
+    }
+    if outcome.all_recorded() {
+        println!("Run `musts validate` to confirm the loop is clean.");
+        return Ok(ExitCode::from(0));
+    }
+    println!("Not recorded{invocation}:");
+    for v in &outcome.verdicts {
+        if let Err(reason) = &v.outcome {
+            println!("  ✗ {} — {reason}", v.check_id);
+        }
+    }
+    println!(
+        "The check stays pending: fix it and test again, or run `musts run {}`.",
+        outcome.task_id
+    );
+    Ok(ExitCode::from(1))
+}
+
+fn stamp_command(explicit_workspace: Option<&std::path::Path>) -> ExitCode {
+    let line = std::env::current_dir()
+        .map_err(|err| err.to_string())
+        .and_then(|cwd| workspace::resolve(explicit_workspace, &cwd).map_err(|err| err.to_string()))
+        .and_then(|root| musts_core::record::stamp_line(&root).map_err(|err| err.to_string()));
+    match line {
+        Ok(line) => println!("{line}"),
+        Err(err) => eprintln!("musts stamp: no stamp written ({err})"),
+    }
+    ExitCode::SUCCESS
 }
 
 fn run_command(

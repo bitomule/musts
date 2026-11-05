@@ -191,48 +191,26 @@ pub fn submit(
 
     // 8. Persist ledger rows atomically: one per accepted-now check,
     //    keyed by that check's declaring-manifest scope_hash.
-    let now_unix = unix_seconds_now();
     let submission_json = serde_json::to_string(&submission).unwrap_or_else(|_| "{}".into());
     let result_json = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
-    // Materialise per-check scope hashes first so the borrowed-from
-    // strings outlive the `EvidenceRow` Vec.
-    let resolved_hashes: Vec<String> = accepted_now
+    let accepted: Vec<(String, String)> = accepted_now
         .iter()
-        .map(|cid| stored_scope_hashes.get(cid).cloned().unwrap_or_default())
+        .map(|cid| {
+            let hash = stored_scope_hashes.get(cid).cloned().unwrap_or_default();
+            (cid.clone(), hash)
+        })
         .collect();
-    let rows: Vec<EvidenceRow<'_>> = accepted_now
-        .iter()
-        .zip(resolved_hashes.iter())
-        .map(|(cid, scope_hash)| EvidenceRow {
+    persist_accepted(
+        session,
+        &AcceptedEvidence {
             task_id: inputs.task_id,
             submission_id: &submission_id,
-            check_id: cid,
-            scope_hash,
-            accepted: true,
+            checks: &accepted,
             summary: response.summary.as_deref(),
             submission_json: &submission_json,
             result_json: &result_json,
-            submitted_at_unix: now_unix,
-        })
-        .collect();
-    insert_atomic(&mut session.db, &rows)?;
-
-    // 8b. Append the newly-green `(check_id, scope_hash)` pairs to the
-    //     portable ledger lock so a fresh clone inherits them. Reading
-    //     and writing the full lock each time is self-healing: a missed
-    //     write recovers on the next accepted submission of any check.
-    {
-        let mut lock = crate::state::lock::load(&session.musts_dir)?;
-        let mut changed = false;
-        for (cid, scope_hash) in accepted_now.iter().zip(resolved_hashes.iter()) {
-            if lock.record(cid, scope_hash) {
-                changed = true;
-            }
-        }
-        if changed {
-            crate::state::lock::save(&session.musts_dir, &lock)?;
-        }
-    }
+        },
+    )?;
 
     Ok(EvidenceSubmissionResult {
         task_id: inputs.task_id.to_string(),
@@ -240,6 +218,57 @@ pub fn submit(
         satisfied: accepted_now,
         summary: response.summary,
     })
+}
+
+/// Accepted evidence for one or more checks of a task, ready to persist.
+pub(crate) struct AcceptedEvidence<'a> {
+    pub task_id: &'a str,
+    pub submission_id: &'a str,
+    /// `(check_id, scope_hash)` of every check the evidence proves.
+    pub checks: &'a [(String, String)],
+    pub summary: Option<&'a str>,
+    pub submission_json: &'a str,
+    pub result_json: &'a str,
+}
+
+/// Write the green ledger rows atomically, then append the newly-green
+/// `(check_id, scope_hash)` pairs to the portable ledger lock so a fresh
+/// clone inherits them. Reading and writing the full lock each time is
+/// self-healing: a missed write recovers on the next accepted submission
+/// of any check.
+pub(crate) fn persist_accepted(
+    session: &mut StateSession,
+    evidence: &AcceptedEvidence<'_>,
+) -> Result<()> {
+    let now_unix = unix_seconds_now();
+    let rows: Vec<EvidenceRow<'_>> = evidence
+        .checks
+        .iter()
+        .map(|(cid, scope_hash)| EvidenceRow {
+            task_id: evidence.task_id,
+            submission_id: evidence.submission_id,
+            check_id: cid,
+            scope_hash,
+            accepted: true,
+            summary: evidence.summary,
+            submission_json: evidence.submission_json,
+            result_json: evidence.result_json,
+            submitted_at_unix: now_unix,
+        })
+        .collect();
+    insert_atomic(&mut session.db, &rows)?;
+
+    let mut lock = crate::state::lock::load(&session.musts_dir)?;
+    let mut changed = false;
+    for (cid, scope_hash) in evidence.checks {
+        if lock.record(cid, scope_hash) {
+            changed = true;
+        }
+    }
+    if changed {
+        crate::state::lock::save(&session.musts_dir, &lock)?;
+    }
+    Ok(())
 }
 
 /// Persist a rejected submission as `accepted = 0`.

@@ -118,6 +118,9 @@ pub enum Error {
         message: String,
     },
 
+    #[error("`musts record` cannot record task `{task_id}`: {reason}")]
+    RecordUnsupported { task_id: String, reason: String },
+
     // -----------------------------------------------------------------------
     // Internal / I/O errors (exit code 70)
     // -----------------------------------------------------------------------
@@ -176,6 +179,7 @@ impl Error {
             | Error::TaskNotFound { .. }
             | Error::EvidenceStale { .. }
             | Error::EvidenceOverclaim { .. }
+            | Error::RecordUnsupported { .. }
             | Error::LedgerLock { .. }
             | Error::CasePathCollision { .. } => 2,
             Error::EvidenceRejected { .. } => 1,

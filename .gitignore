@@ -29,6 +29,7 @@ Icon?
 **/.musts/state.sqlite-shm
 **/.musts/state.sqlite-wal
 **/.musts/evidence/
+**/.musts/bep.json
 **/.musts/.lock
 **/.musts/.lock.owner
 **/.musts/.lock.tmp*

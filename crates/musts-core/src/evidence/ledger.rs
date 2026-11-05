@@ -92,6 +92,22 @@ pub fn fetch_task(db: &Db, task_id: &str) -> Result<Option<StoredTask>> {
     Ok(row)
 }
 
+/// The id of the stored task whose `satisfies` lists `check_id`, if any.
+pub fn find_task_for_check(db: &Db, check_id: &str) -> Result<Option<String>> {
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT task_id, satisfies_json FROM tasks ORDER BY task_id")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (task_id, satisfies_json) = row?;
+        let satisfies: Vec<String> = serde_json::from_str(&satisfies_json).unwrap_or_default();
+        if satisfies.iter().any(|c| c == check_id) {
+            return Ok(Some(task_id));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

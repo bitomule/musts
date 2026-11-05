@@ -18,6 +18,7 @@ The single hard rule of musts:
 2. Treat the returned task list as the validation todo list. `validate` emits **every** dirty task (no batching) and is idempotent — re-running it never invalidates the ids it just issued.
 3. Close each task by kind:
    - **Deterministic** (`do:` is a plain command — `cargo/*`, `bazel/{build,test}`): run `musts run <task-id>`. musts executes the command, checks the real exit code, and records evidence for you — no re-running to satisfy the loop. A non-zero exit prints the output and records nothing; fix and re-run.
+     If you already ran a `bazel/test` task's tests on the current tree and the repo writes the stamped build event file ([`record.md`](record.md)), record that run with `musts record <task-id>` instead of `musts run`; if it answers "Not recorded", the reason says what is missing.
    - **Judgment** (`agent`, `mav`): perform the validation yourself and record evidence (step 7).
 4. If multiple judgment tasks are independent, use subagents in parallel — but **not** when the underlying tool is single-resource (simulators, local servers, build locks, shared databases). When in doubt, run sequentially.
 5. If one task `satisfies` multiple checks, execute it **once**. Do not split.

@@ -131,6 +131,9 @@ pub fn resolve(request: &ResolveRequest) -> Result<ResolveResponse, Error> {
                     "Capture stdout/stderr as a log asset.".into(),
                     "Record the result with `musts evidence <task-id> --text \"…\" --asset <log>`."
                         .into(),
+                    "If you already ran these tests with the musts stamp, record them with \
+                     `musts record <task-id>` instead of re-running (docs/record.md)."
+                        .into(),
                 ],
                 evidence_contract: EvidenceContract {
                     text: TextContract {
