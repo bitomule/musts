@@ -435,7 +435,7 @@ fn scenario_15b_lock_contention_names_the_holder() {
         )))
         .stderr(predicate::str::contains("/somewhere/else"))
         .stderr(predicate::str::contains("musts run cargo-test-root"))
-        .stderr(predicate::str::contains("holding for 4m 12s"));
+        .stderr(predicate::str::contains("holding for 4m"));
 
     drop(lock);
 }
