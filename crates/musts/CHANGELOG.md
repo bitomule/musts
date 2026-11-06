@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.9.1] - 2026-11-06
+
+### Fixed
+
+- Serialize the tests that set MUSTS_JEV_API_KEY ([#119](https://github.com/bitomule/musts/pull/119))
+- Ignore .gitignore files above the workspace root ([#118](https://github.com/bitomule/musts/pull/118))
+- A bazel test pattern with no test target counts as proven ([#116](https://github.com/bitomule/musts/pull/116))
+
+### Internal
+
+- Assert the stable 'holding for 4m' prefix in the lock-contention e2e ([#120](https://github.com/bitomule/musts/pull/120))
+
 ## [0.9.0] - 2026-11-05
 
 ### Added
