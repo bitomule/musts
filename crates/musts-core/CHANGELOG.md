@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.8.1] - 2026-11-10
+
+### Fixed
+
+- Ignore .gitignore files above the workspace root ([#118](https://github.com/bitomule/musts/pull/118))
+- A bazel test pattern with no test target counts as proven ([#116](https://github.com/bitomule/musts/pull/116))
+
 ## [0.8.0] - 2026-11-05
 
 ### Added
