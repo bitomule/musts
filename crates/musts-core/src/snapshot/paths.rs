@@ -3,7 +3,7 @@
 //!
 //! The scope hash treats two rel-paths as equal iff their NFC-normalised,
 //! ASCII-lowercased forms match. This makes the lock file in
-//! `.musts/ledger.lock.yaml` portable: a hash computed on macOS APFS
+//! `.musts/ledger/` portable: a hash computed on macOS APFS
 //! (case-insensitive by default) matches the one computed on Linux ext4
 //! (case-sensitive) for the same repo contents.
 //!

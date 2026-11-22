@@ -114,8 +114,8 @@ fn records_a_stamped_run_and_the_check_turns_green() {
         .code(1)
         .stdout(predicate::str::contains("bazel-test-root").not())
         .stdout(predicate::str::contains("agent-"));
-    let lock = fs::read_to_string(root.join(".musts/ledger.lock.yaml")).unwrap();
-    assert!(lock.contains("root/tests"), "{lock}");
+    let entry = fs::read_to_string(root.join(".musts/ledger/root%2Ftests")).unwrap();
+    assert_eq!(entry.trim().len(), 64, "{entry}");
 }
 
 #[test]

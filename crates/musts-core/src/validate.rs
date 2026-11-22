@@ -157,10 +157,12 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     let workspace_root = &opts.workspace_root;
     let now_unix = unix_seconds_now();
 
-    // 0b. Load the portable, repo-committed ledger lock. Empty when the
-    //    file doesn't exist (fresh workspace) — the local
-    //    `evidence_records` table still answers in that case.
-    let ledger_lock = crate::state::lock::load(&session.musts_dir)?;
+    // 0b. Load the portable, repo-committed ledger. Empty when nothing is
+    //    recorded yet (fresh workspace) — the local `evidence_records`
+    //    table still answers in that case.
+    let mut ledger_lock = crate::state::lock::load(&session.musts_dir)?;
+    let mut migration_candidates: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
 
     // 1. Discover manifests and parse each one.
     let manifest_entries = discover_manifests(workspace_root)?;
@@ -257,18 +259,32 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
             // hash too, for one release. Nothing is recorded under it, so
             // a check stays legacy-green only until its tree changes, at
             // which point both hashes move and it reopens honestly.
-            let already_green = check_has_green_evidence(&session.db, &cid, &scope_hash)?
-                || ledger_lock.contains(&cid, &scope_hash)
-                || {
-                    let legacy = compute_scope_hash(&ScopeInput {
-                        files: legacy_files,
-                        manifest_hash: legacy_manifest_hash(m)?,
-                        ext_descriptor_hash: legacy_aggregate_descriptor_hash(&descriptors),
-                        descendant_manifest_paths: legacy_descendants,
-                    });
-                    check_has_green_evidence(&session.db, &cid, &legacy)?
-                        || ledger_lock.contains(&cid, &legacy)
+            let current_green = check_has_green_evidence(&session.db, &cid, &scope_hash)?
+                || ledger_lock.contains(&cid, &scope_hash);
+            let has_legacy_lock = !ledger_lock.legacy.satisfied.is_empty();
+            let legacy_hash = if current_green && !has_legacy_lock {
+                None
+            } else {
+                Some(compute_scope_hash(&ScopeInput {
+                    files: legacy_files,
+                    manifest_hash: legacy_manifest_hash(m)?,
+                    ext_descriptor_hash: legacy_aggregate_descriptor_hash(&descriptors),
+                    descendant_manifest_paths: legacy_descendants,
+                }))
+            };
+            let already_green = current_green
+                || match &legacy_hash {
+                    Some(legacy) => {
+                        check_has_green_evidence(&session.db, &cid, legacy)?
+                            || ledger_lock.contains(&cid, legacy)
+                    }
+                    None => false,
                 };
+            if has_legacy_lock {
+                let hashes = migration_candidates.entry(cid.clone()).or_default();
+                hashes.push(scope_hash.clone());
+                hashes.extend(legacy_hash);
+            }
             per_check.push(PreparedCheck {
                 check_id: cid,
                 local_id: local_id.clone(),
@@ -367,6 +383,10 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
 
     if let Some(err) = first_error {
         return Err(err);
+    }
+
+    if crate::state::lock::migrate_legacy(&session.musts_dir, &migration_candidates)?.is_some() {
+        ledger_lock = crate::state::lock::load(&session.musts_dir)?;
     }
 
     let mut warnings = crate::diagnose::workspace_warnings(

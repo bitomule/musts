@@ -3,7 +3,7 @@
 //! `.mustsignore` is `.gitignore` for musts: matched files are excluded
 //! from the walker that builds a check's scope hash, so edits to local
 //! logs, scratch artefacts, or canonical fixtures don't re-invalidate
-//! the validated state stored in the ledger lock.
+//! the validated state stored in the ledger.
 
 mod common;
 

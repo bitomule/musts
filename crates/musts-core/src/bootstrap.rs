@@ -203,7 +203,7 @@ impl StateSession {
     ///
     /// For work that takes minutes and touches no state — the point of
     /// the lock is to serialise writes to `state.sqlite` and
-    /// `ledger.lock.yaml`, not to serialise the test suite whose result
+    /// `.musts/ledger/`, not to serialise the test suite whose result
     /// is about to be written. `musts run` held it for 60,23 s of a
     /// 60,28 s run before this existed, which made a check into a
     /// workspace-wide stop sign for its whole duration.
