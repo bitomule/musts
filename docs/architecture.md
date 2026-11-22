@@ -54,7 +54,7 @@ insert atomic ledger rows (one per accepted-now check, keyed by declaring-manife
 exit 0.
 ```
 
-Atomic: every accept is one SQLite transaction. Evidence is **not** archived — assets are validated where they live and the committed `.musts/ledger.lock.yaml` (plus the per-machine `evidence_records` table) is the durable record. `musts run <task-id>` wraps this: it executes a deterministic built-in's command, captures the log outside the workspace, and drives the same pipeline from the real exit code.
+Atomic: every accept is one SQLite transaction. Evidence is **not** archived — assets are validated where they live and the committed `.musts/ledger/` (plus the per-machine `evidence_records` table) is the durable record. `musts run <task-id>` wraps this: it executes a deterministic built-in's command, captures the log outside the workspace, and drives the same pipeline from the real exit code.
 
 ## Snapshots
 
@@ -64,22 +64,26 @@ Atomic: every accept is one SQLite transaction. Evidence is **not** archived —
 - Scope hash = `blake3(sorted_files ++ manifest_hash ++ ext_descriptor_hash ++ sorted_descendant_manifest_paths)`. Including descendant paths means adding or removing a child manifest invalidates the parent.
 - Paths are NFC-normalised before hashing; on case-insensitive filesystems we lowercase them too. The check's `state.sqlite` row is therefore stable across NFC ↔ NFD checkouts and case variations.
 
-## Portable validated state — `ledger.lock.yaml`
+## Portable validated state — `.musts/ledger/`
 
-`.musts/state.sqlite` is machine-local: a fresh `git clone` starts with no `evidence_records` rows, so without help every check would be re-emitted as dirty. The lock file at `.musts/ledger.lock.yaml` is the portable companion: a deterministic, sorted YAML list of `(check_id, scope_hash)` tuples that have been accepted somewhere. `validate`'s "is this green?" lookup unions the local SQLite query with the lock's `contains` check; `evidence`'s accept path appends the new tuple and rewrites the file.
+`.musts/state.sqlite` is machine-local: a fresh `git clone` starts with no `evidence_records` rows, so without help every check would be re-emitted as dirty. `.musts/ledger/` is the portable companion: **one file per check**, named after the check id (`/` and any byte outside `[A-Za-z0-9._-]` percent-encoded, so `root/clippy` is `root%2Fclippy`), holding one line — the `scope_hash` the check was last accepted for. Only the current state is stored, never history. `validate`'s "is this green?" lookup combines the local SQLite query with the ledger's `contains` check; `evidence`'s accept path atomically replaces the check's file.
 
-What this buys: the team commits the lock alongside the manifests; a clone runs `musts validate` and only sees tasks for scopes its own changes have invalidated (the blake3 scope hashes match the lock for everything else). `state.sqlite` and `evidence/` stay gitignored — they are a perf cache and an asset payload, not the source of truth.
+What this buys: the team commits the ledger alongside the manifests; a clone runs `musts validate` and only sees tasks for scopes its own changes have invalidated. `state.sqlite` and `evidence/` stay gitignored — they are a perf cache and an asset payload, not the source of truth.
 
-### Merging the lock
+### Merging the ledger
 
-`satisfied` is append-only: two branches that each record evidence can add entries, never contradict them, so **the union of both sides is always the correct merge**. Two things make git do that on its own:
+Ledger merges need no merge driver, which matters because GitHub ignores them (it marked PRs CONFLICTING that local git merged cleanly):
 
-- **One line per entry**, written as a YAML flow mapping (`- {check: "root/build-ios", scope_hash: "833bc590…"}`). The default block style splits an entry over two lines, and every entry for the same check then shares an identical `- check: …` first line; a line-based merge aligns on those and splices two entries into one record with a duplicate `scope_hash` key — an unparseable ledger. This is a formatting change only: a flow mapping is an ordinary mapping, the file stays `version: 1`, and older musts releases keep reading it (`flow_style_output_is_still_read_by_a_plain_serde_derive` pins that down).
-- **`.musts/.gitattributes`**, written next to the lock, setting `ledger.lock.yaml merge=union`. `union` is a built-in git driver, so no per-clone `git config` is needed — but the file has to be **committed** to take effect. An existing `.gitattributes` that already mentions the lock is left untouched.
+- Two branches that validate **different** checks edit different files, so git (and GitHub) merge them without conflict.
+- Two branches that revalidate the **same** check edit the same file, and the conflict is kept on purpose: the combined tree was validated by neither. Take either side, run `musts validate`, and revalidate the check.
 
-Before this, both branches appending entries produced a conflict on every merge, and resolving it by taking one side silently discarded proven-green entries. That loss shows up later as "the merge invalidated the ledger". A lock that still contains conflict markers is now rejected with a message saying to keep both sides, rather than being half-parsed.
+A file that still holds conflict markers is rejected with a message naming the file and the check. `crates/musts/tests/git_merge_ledger_e2e.rs` drives `git merge-tree` for both halves, and fails against a single shared ledger file.
 
-What this does *not* buy — and cannot — is inheriting green state across a merge whose result nobody validated. If `main` moved while a branch was open, the tree that lands is a combination neither side ever checked, so the checks covering it reopen. That is the correct answer, not a bug: two individually-green trees do not make their merge green. The levers are to keep branches up to date before merging (so the branch validates the tree that actually lands) and to scope checks narrowly with `paths:`/nested manifests, so unrelated churn does not invalidate an expensive check. `crates/musts/tests/git_merge_ledger_e2e.rs` pins down both halves.
+What this does *not* buy — and cannot — is inheriting green state across a merge whose result nobody validated. If `main` moved while a branch was open, the tree that lands is a combination neither side ever checked, so the checks covering it reopen. The levers are to keep branches up to date before merging and to scope checks narrowly with `paths:`/nested manifests.
+
+### Migrating `ledger.lock.yaml`
+
+Releases before 0.10.0 kept one `.musts/ledger.lock.yaml` with every `(check_id, scope_hash)` ever accepted, plus a `merge=union` rule in `.musts/.gitattributes`. The next `musts validate` in such a repo migrates it automatically: for each declared check, the hash matching the current tree (or the previous hash scheme) becomes that check's file; the history, entries of checks that no longer exist, the old file and the `merge=union` lines musts wrote are removed. Commit the result. Until migrated, the old file is still read, so nothing reopens. Older musts releases ignore `.musts/ledger/`.
 
 ## Cross-process locking
 

@@ -3,7 +3,7 @@
 //! musts no longer archives evidence assets into
 //! `.musts/evidence/<task>/submission-NNN/`. Accepted evidence is recorded
 //! in the portable ledger (`evidence_records` + the committed
-//! `.musts/ledger.lock.yaml`) keyed by `(check_id, scope_hash)` — that is
+//! `.musts/ledger/`) keyed by `(check_id, scope_hash)` — that is
 //! the durable, reviewable record. The asset itself is validated **in
 //! place** and never copied, so the loop stops accumulating dozens of
 //! identical build-log snapshots (a build re-validated 52 times used to

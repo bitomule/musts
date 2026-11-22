@@ -1,5 +1,6 @@
-//! End-to-end coverage for `.musts/ledger.lock.yaml`, the portable
-//! validated-state ledger.
+//! End-to-end coverage for `.musts/ledger/`, the portable validated-state
+//! ledger (one file per check), and for migrating the older
+//! `.musts/ledger.lock.yaml`.
 //!
 //! The lock file lets a clone inherit "already validated" state from
 //! the repo: their fresh workspace has no `state.sqlite`, but the
@@ -23,6 +24,7 @@ fn write_manifest(path: &Path, body: &str) {
 }
 
 const LOCK_REL: &str = ".musts/ledger.lock.yaml";
+const ENTRY_REL: &str = ".musts/ledger/root%2Fcontract";
 
 #[test]
 #[serial]
@@ -63,32 +65,21 @@ checks:
         .assert()
         .success();
 
+    let entry_path = dir.path().join(ENTRY_REL);
     assert!(
-        lock_path.exists(),
-        "lock file must be written after accepted submission"
+        entry_path.exists(),
+        "a per-check ledger file must be written after an accepted submission"
     );
-    let body = fs::read_to_string(&lock_path).unwrap();
-    assert!(body.contains("version: 1"));
-    // One flow mapping per line. Keeping a record on a single line is
-    // what makes `merge=union` a correct resolution for the lock.
-    let entry = body
-        .lines()
-        .find(|l| l.contains("root/contract"))
-        .expect("entry line");
-    let hex = entry
-        .rsplit("scope_hash: \"")
-        .next()
-        .unwrap()
-        .trim_end_matches("\"}");
+    // One file, one line: the hash the check is currently green for.
+    let body = fs::read_to_string(&entry_path).unwrap();
+    let hex = body.trim_end_matches('\n');
     assert_eq!(hex.len(), 64, "blake3 hex should be 64 chars (was {hex:?})");
-    assert_eq!(
-        entry,
-        format!("- {{check: \"root/contract\", scope_hash: \"{hex}\"}}")
-    );
+    assert_eq!(body.lines().count(), 1, "{body:?}");
 
-    // The union-merge attribute ships alongside the lock.
-    let attrs = fs::read_to_string(dir.path().join(".musts/.gitattributes")).unwrap();
-    assert!(attrs.contains("ledger.lock.yaml merge=union"), "{attrs}");
+    // Nothing merge-related ships with the ledger, and the old
+    // single-file lock is never written.
+    assert!(!dir.path().join(".musts/.gitattributes").exists());
+    assert!(!lock_path.exists());
 }
 
 #[test]
@@ -266,4 +257,87 @@ checks:
         .failure()
         .code(2)
         .stderr(predicate::str::contains("ledger lock"));
+}
+
+/// A repo still carrying a pre-0.10.0 `ledger.lock.yaml` (history for
+/// several trees, plus the `merge=union` rule musts wrote) is migrated by
+/// the next `validate`: the hash that matches the tree today becomes the
+/// check's file, the history and the old file are dropped, and the check
+/// stays green with no evidence re-run.
+#[test]
+#[serial]
+fn validate_migrates_an_old_lock_keeping_the_current_state() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        &dir.path().join("MUSTS.yml"),
+        r#"version: 1
+checks:
+  contract:
+    uses: agent
+    with:
+      facts:
+        - "X is true."
+"#,
+    );
+    bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .assert()
+        .failure();
+    bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("evidence")
+        .arg("agent-root")
+        .arg("--text")
+        .arg("Verified X.")
+        .assert()
+        .success();
+    let current = fs::read_to_string(dir.path().join(ENTRY_REL))
+        .unwrap()
+        .trim()
+        .to_string();
+
+    let musts = dir.path().join(".musts");
+    fs::remove_dir_all(musts.join("ledger")).unwrap();
+    for name in ["state.sqlite", "state.sqlite-shm", "state.sqlite-wal"] {
+        let _ = fs::remove_file(musts.join(name));
+    }
+    fs::write(
+        dir.path().join(LOCK_REL),
+        format!(
+            "version: 1\nsatisfied:\n\
+             - {{check: \"root/contract\", scope_hash: \"{old}\"}}\n\
+             - {{check: \"root/contract\", scope_hash: \"{current}\"}}\n\
+             - {{check: \"gone/check\", scope_hash: \"{old}\"}}\n",
+            old = "0".repeat(64)
+        ),
+    )
+    .unwrap();
+    fs::write(
+        musts.join(".gitattributes"),
+        "# Managed by musts. The validated-state ledger is an append-only set, so\n\
+         # taking both sides is always the right merge — a hand resolution would\n\
+         # drop entries that were legitimately proven green on one branch.\n\
+         ledger.lock.yaml merge=union\n",
+    )
+    .unwrap();
+
+    bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Musts validation clean."));
+
+    assert!(!dir.path().join(LOCK_REL).exists(), "old lock is retired");
+    assert!(!musts.join(".gitattributes").exists());
+    assert_eq!(
+        fs::read_to_string(dir.path().join(ENTRY_REL)).unwrap(),
+        format!("{current}\n")
+    );
+    let files: Vec<_> = fs::read_dir(musts.join("ledger")).unwrap().collect();
+    assert_eq!(files.len(), 1, "history and undeclared checks are dropped");
 }

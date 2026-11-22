@@ -1,16 +1,25 @@
 //! Portable, repo-committed "validated state" ledger.
 //!
-//! Lives at `<workspace_root>/.musts/ledger.lock.yaml`. Contains the
-//! minimum set of tuples `(check_id, scope_hash)` core needs to answer
-//! the satisfaction question without consulting `state.sqlite`. Format
-//! is sorted, deterministic YAML so diffs and merges are reviewable.
+//! Lives in `<workspace_root>/.musts/ledger/`, one file per check. Each
+//! file holds a single line: the scope hash the check was last proven
+//! green for. Only the current state is stored, never history.
+//!
+//! One file per check is what makes git (and GitHub, which ignores merge
+//! drivers) merge the ledger without help: two branches that validate
+//! different checks touch different files and never conflict, while two
+//! branches that revalidate the same check edit the same file and do
+//! conflict — correctly, because the combined tree was validated by
+//! neither.
 //!
 //! Loaded once per `validate`/`evidence` and consulted alongside the
-//! local `evidence_records` table; appended to after every accepted
-//! submission. `state.sqlite` and `evidence/` stay machine-local; the
-//! lock file is the only piece that travels with the repo.
+//! local `evidence_records` table; a file is replaced after every
+//! accepted submission. `state.sqlite` and `evidence/` stay machine-local.
+//!
+//! Releases before 0.10.0 kept one `.musts/ledger.lock.yaml` holding every
+//! `(check, scope_hash)` pair ever proven. It is still read, and
+//! [`migrate_legacy`] folds it into the per-check files.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -19,34 +28,52 @@ use crate::error::{Error, Result};
 
 const SUPPORTED_VERSION: u32 = 1;
 pub const LOCK_FILENAME: &str = "ledger.lock.yaml";
+pub const LEDGER_DIRNAME: &str = "ledger";
 
-/// `.gitattributes` inside `.musts/`, owned by musts.
+/// `.gitattributes` inside `.musts/`. Releases before 0.10.0 wrote a
+/// `merge=union` rule for the old lock there; [`migrate_legacy`] removes
+/// exactly those lines.
 const GITATTRIBUTES_FILENAME: &str = ".gitattributes";
-
-/// Why we write it: `satisfied` is an append-only set. Two branches that
-/// each record evidence both insert entries into the same sorted list, so
-/// git reports a content conflict on the lock even though the two edits
-/// can never actually disagree. Whoever resolves it by hand picks a side
-/// and silently throws away proven-green entries — which is how "the
-/// ledger did not survive the merge" gets diagnosed as a squash-merge bug.
-///
-/// `merge=union` is a built-in git driver (no `git config` needed) and it
-/// is the *correct* resolution here, not a shortcut: the union of two
-/// append-only sets is the set. Ordering can come out interleaved; that
-/// is cosmetic, since `LedgerLock` deserialises into a `BTreeSet` and the
-/// next `save` rewrites the file sorted.
-///
-/// Union merging is only sound because an entry occupies exactly one
-/// line — see [`save`] for why that had to change and how it stayed
-/// backward compatible.
-const GITATTRIBUTES_BODY: &str = "\
+const LEGACY_GITATTRIBUTES_BODY: &str = "\
 # Managed by musts. The validated-state ledger is an append-only set, so
 # taking both sides is always the right merge — a hand resolution would
 # drop entries that were legitimately proven green on one branch.
 ledger.lock.yaml merge=union
 ";
 
-/// The committed validated-state ledger.
+/// The validated state of a workspace.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ledger {
+    /// The hash each check is currently proven green for.
+    pub current: BTreeMap<String, String>,
+    /// Entries of a not-yet-migrated `ledger.lock.yaml`.
+    pub legacy: LedgerLock,
+}
+
+impl Ledger {
+    /// Is this `(check_id, scope_hash)` already proven satisfied?
+    pub fn contains(&self, check: &str, scope_hash: &str) -> bool {
+        self.current.get(check).is_some_and(|h| h == scope_hash)
+            || self.legacy.contains(check, scope_hash)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.current.is_empty() && self.legacy.satisfied.is_empty()
+    }
+
+    /// Every `(check, scope_hash)` pair known, current and legacy.
+    pub fn entries(&self) -> BTreeSet<SatisfiedEntry> {
+        let current = self.current.iter().map(|(c, h)| SatisfiedEntry {
+            check: c.clone(),
+            scope_hash: h.clone(),
+        });
+        current
+            .chain(self.legacy.satisfied.iter().cloned())
+            .collect()
+    }
+}
+
+/// The pre-0.10.0 single-file ledger: every pair ever proven.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LedgerLock {
     pub version: u32,
@@ -64,17 +91,12 @@ impl Default for LedgerLock {
 }
 
 impl LedgerLock {
-    /// Is this `(check_id, scope_hash)` already proven satisfied?
     pub fn contains(&self, check: &str, scope_hash: &str) -> bool {
-        // `BTreeSet::contains` needs an owned key (we don't have a Borrow
-        // impl for `(str, str)`), so do a linear short-circuit. The set
-        // is small in practice — one entry per (check, accepted snapshot).
         self.satisfied
             .iter()
             .any(|e| e.check == check && e.scope_hash == scope_hash)
     }
 
-    /// Idempotent insert. Returns `true` when the entry was new.
     pub fn record(&mut self, check: impl Into<String>, scope_hash: impl Into<String>) -> bool {
         self.satisfied.insert(SatisfiedEntry {
             check: check.into(),
@@ -90,58 +112,133 @@ pub struct SatisfiedEntry {
     pub scope_hash: String,
 }
 
-/// Path to the lock file inside `<workspace_root>/.musts/`.
+/// Directory holding the per-check files.
+pub fn ledger_dir(musts_dir: &Path) -> PathBuf {
+    musts_dir.join(LEDGER_DIRNAME)
+}
+
+/// Path to the pre-0.10.0 lock file.
 pub fn path(musts_dir: &Path) -> PathBuf {
     musts_dir.join(LOCK_FILENAME)
 }
 
-/// Install the `merge=union` attribute for the lock file, so a merge
-/// that touches it on both sides resolves to the union instead of a
-/// conflict. See [`GITATTRIBUTES_BODY`].
-///
-/// Idempotent and non-destructive: an existing `.gitattributes` that
-/// already says something about `ledger.lock.yaml` is left alone (the
-/// project has made its own choice), anything else is appended to.
-///
-/// Best-effort by design — this is a convenience, never a reason for
-/// `validate` to fail, so IO errors are logged and swallowed.
-pub fn ensure_union_merge_attribute(musts_dir: &Path) {
-    let p = musts_dir.join(GITATTRIBUTES_FILENAME);
-    let existing = match std::fs::read_to_string(&p) {
-        Ok(body) => Some(body),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => {
-            tracing::debug!(path = ?p, %err, "could not read .musts/.gitattributes");
-            return;
+/// File name of a check: its id with every byte outside
+/// `[A-Za-z0-9._-]` percent-encoded (so `root/clippy` is
+/// `root%2Fclippy`). Flat, so `a` and `a/b` never collide as a file and a
+/// directory; deterministic and reversible. A leading `.` is encoded too,
+/// because dot-files are not ledger entries.
+pub fn entry_file_name(check: &str) -> String {
+    let mut name = String::with_capacity(check.len());
+    for (i, byte) in check.bytes().enumerate() {
+        let plain =
+            byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || (byte == b'.' && i > 0);
+        if plain {
+            name.push(byte as char);
+        } else {
+            name.push_str(&format!("%{byte:02X}"));
         }
-    };
-    let body = match existing {
-        Some(body) if mentions_lock_file(&body) => return,
-        Some(body) => {
-            let sep = if body.is_empty() || body.ends_with('\n') {
-                ""
-            } else {
-                "\n"
-            };
-            format!("{body}{sep}{GITATTRIBUTES_BODY}")
-        }
-        None => GITATTRIBUTES_BODY.to_string(),
-    };
-    if let Err(err) = std::fs::write(&p, body) {
-        tracing::debug!(path = ?p, %err, "could not write .musts/.gitattributes");
     }
+    name
 }
 
-fn mentions_lock_file(body: &str) -> bool {
-    body.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .any(|l| l.contains(LOCK_FILENAME))
+fn decode_file_name(name: &str) -> Option<String> {
+    let bytes = name.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
-/// Read the lock file. Returns `Ok(LedgerLock::default())` when the
-/// file is absent (fresh workspace, nothing previously validated).
-pub fn load(musts_dir: &Path) -> Result<LedgerLock> {
+/// Read the ledger. A workspace with neither the directory nor the old
+/// lock yields an empty ledger (nothing previously validated).
+pub fn load(musts_dir: &Path) -> Result<Ledger> {
+    Ok(Ledger {
+        current: load_current(musts_dir)?,
+        legacy: load_legacy(musts_dir)?,
+    })
+}
+
+fn load_current(musts_dir: &Path) -> Result<BTreeMap<String, String>> {
+    let dir = ledger_dir(musts_dir);
+    let read = match std::fs::read_dir(&dir) {
+        Ok(read) => read,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(source) => return Err(Error::Io { path: dir, source }),
+    };
+    let mut current = BTreeMap::new();
+    for item in read {
+        let item = item.map_err(|source| Error::Io {
+            path: dir.clone(),
+            source,
+        })?;
+        let file_name = item.file_name().to_string_lossy().into_owned();
+        if file_name.starts_with('.') {
+            continue;
+        }
+        let Some(check) = decode_file_name(&file_name) else {
+            continue;
+        };
+        let p = item.path();
+        let body = std::fs::read(&p).map_err(|source| Error::Io {
+            path: p.clone(),
+            source,
+        })?;
+        if has_conflict_markers(&body) {
+            return Err(Error::LedgerLock {
+                path: p,
+                message: format!(
+                    "unresolved merge conflict: two branches revalidated `{check}`, and the \
+                     merged tree was validated by neither. Delete the file's conflict \
+                     markers, then run `musts validate` and revalidate `{check}`"
+                ),
+            });
+        }
+        let hash = String::from_utf8_lossy(&body).trim().to_string();
+        if hash.is_empty() {
+            return Err(Error::LedgerLock {
+                path: p,
+                message: format!("empty ledger entry for `{check}`"),
+            });
+        }
+        current.insert(check, hash);
+    }
+    Ok(current)
+}
+
+/// Record that `check` is green for `scope_hash`, replacing whatever the
+/// check held. The write is atomic: a crash leaves the old entry or the
+/// new one, never a torn file.
+pub fn record(musts_dir: &Path, check: &str, scope_hash: &str) -> Result<()> {
+    let dir = ledger_dir(musts_dir);
+    std::fs::create_dir_all(&dir).map_err(|source| Error::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    let name = entry_file_name(check);
+    let target = dir.join(&name);
+    if std::fs::read_to_string(&target).is_ok_and(|b| b.trim() == scope_hash) {
+        return Ok(());
+    }
+    let tmp = dir.join(format!(".{name}.tmp"));
+    std::fs::write(&tmp, format!("{scope_hash}\n"))
+        .and_then(|()| std::fs::rename(&tmp, &target))
+        .map_err(|source| Error::Io {
+            path: target,
+            source,
+        })
+}
+
+/// Read the pre-0.10.0 lock file; empty when absent.
+fn load_legacy(musts_dir: &Path) -> Result<LedgerLock> {
     let p = path(musts_dir);
     let bytes = match std::fs::read(&p) {
         Ok(b) => b,
@@ -151,11 +248,9 @@ pub fn load(musts_dir: &Path) -> Result<LedgerLock> {
     if has_conflict_markers(&bytes) {
         return Err(Error::LedgerLock {
             path: p,
-            message: "unresolved merge conflict. The ledger is an append-only set, so keeping \
-                      both sides is the correct resolution: delete the `<<<<<<<`, `=======` and \
-                      `>>>>>>>` lines and keep every entry. `.musts/.gitattributes` sets \
-                      `merge=union` to do this automatically — commit it so future merges \
-                      resolve themselves"
+            message: "unresolved merge conflict. Keep every entry by deleting the `<<<<<<<`, \
+                      `=======` and `>>>>>>>` lines; musts then migrates the file into \
+                      `.musts/ledger/`"
                 .to_string(),
         });
     }
@@ -175,64 +270,67 @@ pub fn load(musts_dir: &Path) -> Result<LedgerLock> {
     Ok(lock)
 }
 
-/// Write the lock file. Output is deterministic: `satisfied` is a
-/// `BTreeSet` so iteration is sorted alphabetically by `(check,
-/// scope_hash)`. Callers should pass a `&LedgerLock` already containing
-/// every entry they want persisted — this function does no merging.
+/// Fold a pre-0.10.0 `ledger.lock.yaml` into per-check files and retire
+/// it, along with the `merge=union` lines musts put in
+/// `.musts/.gitattributes`.
 ///
-/// Written by hand rather than via `serde_yaml::to_string` for one
-/// reason: each entry has to occupy **exactly one line**, as a flow
-/// mapping:
+/// `candidates` maps every declared check to the hashes that count as its
+/// current state (the current scope hash, then the legacy one). A check
+/// gets the first candidate the old lock proves; hashes of older trees
+/// are history and are dropped, as are checks that are no longer
+/// declared. A check that already has a file keeps it: it is newer than
+/// anything in the old lock.
 ///
-/// ```yaml
-/// - {check: "root/build-ios", scope_hash: "833bc590…"}
-/// ```
-///
-/// The default block style splits an entry across two lines, and every
-/// entry for the same check then shares an identical `- check: …` first
-/// line. git's line-based merge aligns on those, so a union merge of two
-/// branches that both recorded evidence for that check splices their
-/// `scope_hash:` lines into a single mapping with a duplicate key — an
-/// unparseable ledger. One line per entry makes the record atomic, which
-/// is what lets `merge=union` (see [`GITATTRIBUTES_BODY`]) be correct.
-///
-/// A flow mapping is still an ordinary YAML mapping, so this is a pure
-/// formatting change: the file stays `version: 1`, older musts releases
-/// keep reading it, and block-style locks written by them keep loading
-/// here. No migration step, and none of the mixed-version breakage a
-/// new entry shape would have caused.
-pub fn save(musts_dir: &Path, lock: &LedgerLock) -> Result<()> {
-    let p = path(musts_dir);
-    let mut body = format!("version: {}\nsatisfied:\n", lock.version);
-    if lock.satisfied.is_empty() {
-        body = format!("version: {}\nsatisfied: []\n", lock.version);
+/// Returns the number of files written, or `None` when there was nothing
+/// to migrate. Idempotent.
+pub fn migrate_legacy(
+    musts_dir: &Path,
+    candidates: &BTreeMap<String, Vec<String>>,
+) -> Result<Option<usize>> {
+    let legacy_path = path(musts_dir);
+    if !legacy_path.exists() {
+        return Ok(None);
     }
-    for entry in &lock.satisfied {
-        body.push_str(&format!(
-            "- {{check: {}, scope_hash: {}}}\n",
-            yaml_quote(&entry.check),
-            yaml_quote(&entry.scope_hash)
-        ));
+    let legacy = load_legacy(musts_dir)?;
+    let existing = load_current(musts_dir)?;
+    let mut written = 0;
+    for (check, hashes) in candidates {
+        if existing.contains_key(check) {
+            continue;
+        }
+        if let Some(hash) = hashes.iter().find(|h| legacy.contains(check, h)) {
+            record(musts_dir, check, hash)?;
+            written += 1;
+        }
     }
-    std::fs::write(&p, body).map_err(|source| Error::Io { path: p, source })?;
-    ensure_union_merge_attribute(musts_dir);
-    Ok(())
+    std::fs::remove_file(&legacy_path).map_err(|source| Error::Io {
+        path: legacy_path,
+        source,
+    })?;
+    remove_legacy_merge_rule(musts_dir);
+    Ok(Some(written))
 }
 
-/// Double-quote a scalar for the flow mapping. Always quoting sidesteps
-/// the flow-context characters (`,`, `{`, `}`, `:`) that a check id
-/// derived from a manifest key could contain.
-fn yaml_quote(value: &str) -> String {
-    let escaped = value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t");
-    format!("\"{escaped}\"")
+/// Drop the lines musts wrote for the old lock, keeping anything the
+/// project added. Best-effort: a failure here must not fail `validate`.
+fn remove_legacy_merge_rule(musts_dir: &Path) {
+    let p = musts_dir.join(GITATTRIBUTES_FILENAME);
+    let Ok(body) = std::fs::read_to_string(&p) else {
+        return;
+    };
+    let ours: BTreeSet<&str> = LEGACY_GITATTRIBUTES_BODY.lines().collect();
+    let kept: Vec<&str> = body.lines().filter(|l| !ours.contains(l.trim())).collect();
+    let result = if kept.iter().all(|l| l.trim().is_empty()) {
+        std::fs::remove_file(&p)
+    } else {
+        std::fs::write(&p, format!("{}\n", kept.join("\n")))
+    };
+    if let Err(err) = result {
+        tracing::debug!(path = ?p, %err, "could not clean .musts/.gitattributes");
+    }
 }
 
-/// Conflict markers must be caught before YAML parsing: `<<<<<<< HEAD`
+/// Conflict markers must be caught before parsing: `<<<<<<< HEAD`
 /// happens to be *valid* YAML in some positions, so without this a
 /// half-resolved ledger can load with entries missing instead of failing.
 fn has_conflict_markers(bytes: &[u8]) -> bool {
@@ -252,201 +350,284 @@ mod tests {
         TempDir::new().expect("tempdir")
     }
 
+    fn candidates(pairs: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+        pairs
+            .iter()
+            .map(|(c, hs)| {
+                (
+                    (*c).to_string(),
+                    hs.iter().map(|h| (*h).to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn write_legacy(dir: &Path, body: &str) {
+        std::fs::write(path(dir), body).unwrap();
+    }
+
     #[test]
-    fn load_missing_file_yields_empty_lock() {
+    fn load_missing_state_yields_empty_ledger() {
         let dir = tmp();
-        let lock = load(dir.path()).unwrap();
-        assert_eq!(lock.version, SUPPORTED_VERSION);
-        assert!(lock.satisfied.is_empty());
+        assert!(load(dir.path()).unwrap().is_empty());
     }
 
     #[test]
-    fn save_then_load_roundtrips() {
+    fn record_then_load_roundtrips() {
         let dir = tmp();
-        let mut lock = LedgerLock::default();
-        assert!(lock.record("root/fmt", "abc123"));
-        assert!(lock.record("root/clippy", "def456"));
-        save(dir.path(), &lock).unwrap();
-        let loaded = load(dir.path()).unwrap();
-        assert_eq!(loaded, lock);
+        record(dir.path(), "root/fmt", "abc123").unwrap();
+        record(dir.path(), "root/clippy", "def456").unwrap();
+        let ledger = load(dir.path()).unwrap();
+        assert!(ledger.contains("root/fmt", "abc123"));
+        assert!(ledger.contains("root/clippy", "def456"));
+        assert!(!ledger.contains("root/fmt", "def456"));
     }
 
     #[test]
-    fn record_is_idempotent() {
-        let mut lock = LedgerLock::default();
-        assert!(lock.record("c", "h"));
-        assert!(!lock.record("c", "h"));
-        assert_eq!(lock.satisfied.len(), 1);
-    }
-
-    #[test]
-    fn contains_matches_only_exact_pair() {
-        let mut lock = LedgerLock::default();
-        lock.record("c", "h1");
-        assert!(lock.contains("c", "h1"));
-        assert!(!lock.contains("c", "h2"));
-        assert!(!lock.contains("other", "h1"));
-    }
-
-    #[test]
-    fn unsupported_version_is_rejected() {
+    fn recording_again_replaces_the_hash_and_keeps_one_file() {
         let dir = tmp();
-        std::fs::write(path(dir.path()), "version: 2\nsatisfied: []\n").unwrap();
-        let err = load(dir.path()).unwrap_err();
-        assert!(matches!(err, Error::LedgerLock { .. }));
+        record(dir.path(), "root/fmt", "old").unwrap();
+        record(dir.path(), "root/fmt", "new").unwrap();
+        let ledger = load(dir.path()).unwrap();
+        assert!(ledger.contains("root/fmt", "new"));
+        assert!(!ledger.contains("root/fmt", "old"));
+        let files = std::fs::read_dir(ledger_dir(dir.path())).unwrap().count();
+        assert_eq!(files, 1);
     }
 
-    /// The property `merge=union` depends on: one entry, one line.
     #[test]
-    fn each_entry_occupies_exactly_one_line() {
+    fn an_entry_is_one_file_holding_one_line() {
         let dir = tmp();
-        let mut lock = LedgerLock::default();
-        lock.record("root/build-ios", "aa");
-        lock.record("root/build-ios", "bb");
-        save(dir.path(), &lock).unwrap();
-        let body = std::fs::read_to_string(path(dir.path())).unwrap();
-        assert_eq!(
-            body,
-            "version: 1\nsatisfied:\n\
-             - {check: \"root/build-ios\", scope_hash: \"aa\"}\n\
-             - {check: \"root/build-ios\", scope_hash: \"bb\"}\n",
-            "{body}"
-        );
+        record(dir.path(), "root/build-ios", "aa").unwrap();
+        let body =
+            std::fs::read_to_string(ledger_dir(dir.path()).join("root%2Fbuild-ios")).unwrap();
+        assert_eq!(body, "aa\n");
     }
 
-    /// Block-style locks written by earlier releases must keep loading —
-    /// the flow style is a formatting change, not a format change.
     #[test]
-    fn block_style_entries_written_by_older_releases_still_load() {
+    fn file_names_are_deterministic_and_reversible() {
+        for check in [
+            "root/clippy",
+            "a",
+            "a/b",
+            ".hidden/x",
+            "root/build, ios: \"x\"",
+            "ünï/çödé",
+            "100%/real",
+        ] {
+            let name = entry_file_name(check);
+            assert!(!name.contains('/'), "{name}");
+            assert!(!name.starts_with('.'), "{name}");
+            assert_eq!(decode_file_name(&name).as_deref(), Some(check), "{name}");
+        }
+        assert_eq!(entry_file_name("root/clippy"), "root%2Fclippy");
+        assert_ne!(entry_file_name("a"), entry_file_name("a/b"));
+    }
+
+    #[test]
+    fn check_ids_with_awkward_characters_round_trip() {
         let dir = tmp();
+        record(dir.path(), "root/build, ios: \"x\"", "aa").unwrap();
+        assert!(load(dir.path())
+            .unwrap()
+            .contains("root/build, ios: \"x\"", "aa"));
+    }
+
+    #[test]
+    fn leftover_temp_files_are_not_entries() {
+        let dir = tmp();
+        record(dir.path(), "a", "h").unwrap();
+        std::fs::write(ledger_dir(dir.path()).join(".b.tmp"), "junk\n").unwrap();
+        assert_eq!(load(dir.path()).unwrap().current.len(), 1);
+    }
+
+    #[test]
+    fn unresolved_conflict_markers_name_the_file_and_the_check() {
+        let dir = tmp();
+        std::fs::create_dir_all(ledger_dir(dir.path())).unwrap();
         std::fs::write(
-            path(dir.path()),
+            ledger_dir(dir.path()).join("root%2Ffmt"),
+            "<<<<<<< HEAD\nh1\n=======\nh2\n>>>>>>> feature\n",
+        )
+        .unwrap();
+        let message = load(dir.path()).unwrap_err().to_string();
+        assert!(message.contains("root%2Ffmt"), "{message}");
+        assert!(message.contains("root/fmt"), "{message}");
+        assert!(message.contains("merge conflict"), "{message}");
+    }
+
+    #[test]
+    fn unsupported_legacy_version_is_rejected() {
+        let dir = tmp();
+        write_legacy(dir.path(), "version: 2\nsatisfied: []\n");
+        assert!(matches!(
+            load(dir.path()).unwrap_err(),
+            Error::LedgerLock { .. }
+        ));
+    }
+
+    #[test]
+    fn malformed_legacy_yaml_surfaces_as_ledger_lock_error() {
+        let dir = tmp();
+        write_legacy(dir.path(), "::: not yaml");
+        assert!(matches!(
+            load(dir.path()).unwrap_err(),
+            Error::LedgerLock { .. }
+        ));
+    }
+
+    #[test]
+    fn legacy_entries_still_answer_until_migrated() {
+        let dir = tmp();
+        write_legacy(
+            dir.path(),
+            "version: 1\nsatisfied:\n- {check: \"root/fmt\", scope_hash: \"aa\"}\n",
+        );
+        let ledger = load(dir.path()).unwrap();
+        assert!(ledger.contains("root/fmt", "aa"));
+        assert!(!ledger.is_empty());
+    }
+
+    #[test]
+    fn migration_keeps_only_the_hash_matching_the_current_tree() {
+        let dir = tmp();
+        write_legacy(
+            dir.path(),
+            "version: 1\nsatisfied:\n\
+             - {check: \"root/fmt\", scope_hash: \"old1\"}\n\
+             - {check: \"root/fmt\", scope_hash: \"now\"}\n\
+             - {check: \"root/fmt\", scope_hash: \"old2\"}\n",
+        );
+        let n = migrate_legacy(dir.path(), &candidates(&[("root/fmt", &["now"])])).unwrap();
+        assert_eq!(n, Some(1));
+        let ledger = load(dir.path()).unwrap();
+        assert_eq!(
+            ledger.current.get("root/fmt").map(String::as_str),
+            Some("now")
+        );
+        assert!(ledger.legacy.satisfied.is_empty());
+        assert!(!path(dir.path()).exists(), "the old file is retired");
+    }
+
+    #[test]
+    fn migration_falls_back_to_the_legacy_scope_hash() {
+        let dir = tmp();
+        write_legacy(
+            dir.path(),
+            "version: 1\nsatisfied:\n- {check: \"root/fmt\", scope_hash: \"legacy\"}\n",
+        );
+        migrate_legacy(dir.path(), &candidates(&[("root/fmt", &["new", "legacy"])])).unwrap();
+        assert!(load(dir.path()).unwrap().contains("root/fmt", "legacy"));
+    }
+
+    #[test]
+    fn migration_drops_undeclared_checks_and_checks_without_a_match() {
+        let dir = tmp();
+        write_legacy(
+            dir.path(),
+            "version: 1\nsatisfied:\n\
+             - {check: \"gone/check\", scope_hash: \"h\"}\n\
+             - {check: \"root/stale\", scope_hash: \"old\"}\n\
+             - {check: \"root/ok\", scope_hash: \"h\"}\n",
+        );
+        let n = migrate_legacy(
+            dir.path(),
+            &candidates(&[("root/stale", &["new"]), ("root/ok", &["h"])]),
+        )
+        .unwrap();
+        assert_eq!(n, Some(1));
+        let ledger = load(dir.path()).unwrap();
+        assert_eq!(ledger.current.keys().collect::<Vec<_>>(), ["root/ok"]);
+    }
+
+    #[test]
+    fn migration_reads_block_style_locks_from_older_releases() {
+        let dir = tmp();
+        write_legacy(
+            dir.path(),
             "version: 1\nsatisfied:\n- check: root/build-ios\n  scope_hash: aa\n\
              - check: root/build-ios\n  scope_hash: bb\n",
-        )
-        .unwrap();
-
-        let lock = load(dir.path()).unwrap();
-        assert!(lock.contains("root/build-ios", "aa"));
-        assert!(lock.contains("root/build-ios", "bb"));
-        assert_eq!(lock.version, SUPPORTED_VERSION);
-    }
-
-    #[test]
-    fn flow_style_output_is_still_read_by_a_plain_serde_derive() {
-        // Stand-in for an older musts release, which deserialises the
-        // lock with exactly this derive and no flow-style awareness.
-        #[derive(Deserialize)]
-        struct OldLock {
-            version: u32,
-            satisfied: Vec<SatisfiedEntry>,
-        }
-        let dir = tmp();
-        let mut lock = LedgerLock::default();
-        lock.record("root/build-ios", "aa");
-        save(dir.path(), &lock).unwrap();
-
-        let bytes = std::fs::read(path(dir.path())).unwrap();
-        let old: OldLock = serde_yaml::from_slice(&bytes).expect("older musts must still parse");
-        assert_eq!(old.version, 1);
-        assert_eq!(old.satisfied.len(), 1);
-        assert_eq!(old.satisfied[0].check, "root/build-ios");
-        assert_eq!(old.satisfied[0].scope_hash, "aa");
-    }
-
-    #[test]
-    fn check_ids_with_flow_context_characters_round_trip() {
-        let dir = tmp();
-        let mut lock = LedgerLock::default();
-        lock.record("root/build, ios: \"x\"", "aa");
-        save(dir.path(), &lock).unwrap();
-        let loaded = load(dir.path()).unwrap();
-        assert!(loaded.contains("root/build, ios: \"x\"", "aa"));
-    }
-
-    #[test]
-    fn an_empty_lock_round_trips() {
-        let dir = tmp();
-        save(dir.path(), &LedgerLock::default()).unwrap();
-        assert!(load(dir.path()).unwrap().satisfied.is_empty());
-    }
-
-    #[test]
-    fn saving_installs_the_union_merge_attribute() {
-        let dir = tmp();
-        save(dir.path(), &LedgerLock::default()).unwrap();
-        let body = std::fs::read_to_string(dir.path().join(GITATTRIBUTES_FILENAME)).unwrap();
-        assert!(body.contains("ledger.lock.yaml merge=union"), "{body}");
-    }
-
-    #[test]
-    fn existing_rule_for_the_lock_file_is_left_alone() {
-        let dir = tmp();
-        let attrs = dir.path().join(GITATTRIBUTES_FILENAME);
-        std::fs::write(&attrs, "ledger.lock.yaml merge=ours\n").unwrap();
-        ensure_union_merge_attribute(dir.path());
-        assert_eq!(
-            std::fs::read_to_string(&attrs).unwrap(),
-            "ledger.lock.yaml merge=ours\n",
-            "a project that made its own choice must keep it"
         );
+        migrate_legacy(dir.path(), &candidates(&[("root/build-ios", &["bb"])])).unwrap();
+        assert!(load(dir.path()).unwrap().contains("root/build-ios", "bb"));
     }
 
     #[test]
-    fn unrelated_attributes_are_appended_to_not_replaced() {
+    fn migration_never_overwrites_a_newer_per_check_file() {
         let dir = tmp();
-        let attrs = dir.path().join(GITATTRIBUTES_FILENAME);
-        std::fs::write(&attrs, "*.bin binary").unwrap();
-        ensure_union_merge_attribute(dir.path());
-        let body = std::fs::read_to_string(&attrs).unwrap();
-        assert!(body.starts_with("*.bin binary\n"), "{body}");
-        assert!(body.contains("ledger.lock.yaml merge=union"), "{body}");
+        record(dir.path(), "root/fmt", "newer").unwrap();
+        write_legacy(
+            dir.path(),
+            "version: 1\nsatisfied:\n- {check: \"root/fmt\", scope_hash: \"older\"}\n",
+        );
+        migrate_legacy(dir.path(), &candidates(&[("root/fmt", &["older"])])).unwrap();
+        assert!(load(dir.path()).unwrap().contains("root/fmt", "newer"));
     }
 
     #[test]
-    fn installing_the_attribute_twice_does_not_duplicate_it() {
+    fn migration_is_idempotent() {
         let dir = tmp();
-        ensure_union_merge_attribute(dir.path());
-        ensure_union_merge_attribute(dir.path());
-        let body = std::fs::read_to_string(dir.path().join(GITATTRIBUTES_FILENAME)).unwrap();
-        assert_eq!(body.matches("merge=union").count(), 1, "{body}");
+        write_legacy(
+            dir.path(),
+            "version: 1\nsatisfied:\n- {check: \"root/fmt\", scope_hash: \"h\"}\n",
+        );
+        let c = candidates(&[("root/fmt", &["h"])]);
+        assert_eq!(migrate_legacy(dir.path(), &c).unwrap(), Some(1));
+        assert_eq!(migrate_legacy(dir.path(), &c).unwrap(), None);
+        assert!(load(dir.path()).unwrap().contains("root/fmt", "h"));
     }
 
     #[test]
-    fn unresolved_conflict_markers_are_reported_as_such() {
+    fn migration_without_a_legacy_lock_does_nothing() {
         let dir = tmp();
+        assert_eq!(migrate_legacy(dir.path(), &BTreeMap::new()).unwrap(), None);
+        assert!(!ledger_dir(dir.path()).exists());
+    }
+
+    #[test]
+    fn migration_with_conflict_markers_fails_and_keeps_the_old_file() {
+        let dir = tmp();
+        write_legacy(
+            dir.path(),
+            "version: 1\nsatisfied:\n<<<<<<< HEAD\n=======\n>>>>>>> x\n",
+        );
+        assert!(migrate_legacy(dir.path(), &BTreeMap::new()).is_err());
+        assert!(path(dir.path()).exists());
+    }
+
+    #[test]
+    fn migration_removes_the_merge_union_file_musts_wrote() {
+        let dir = tmp();
+        write_legacy(dir.path(), "version: 1\nsatisfied: []\n");
         std::fs::write(
-            path(dir.path()),
-            "version: 1\nsatisfied:\n<<<<<<< HEAD\n- check: a\n  scope_hash: h1\n=======\n\
-             - check: b\n  scope_hash: h2\n>>>>>>> feature\n",
+            dir.path().join(GITATTRIBUTES_FILENAME),
+            LEGACY_GITATTRIBUTES_BODY,
         )
         .unwrap();
-        let err = load(dir.path()).unwrap_err();
-        let message = err.to_string();
-        assert!(
-            message.contains("merge conflict"),
-            "expected a conflict-specific message, got: {message}"
+        migrate_legacy(dir.path(), &BTreeMap::new()).unwrap();
+        assert!(!dir.path().join(GITATTRIBUTES_FILENAME).exists());
+    }
+
+    #[test]
+    fn migration_keeps_attributes_the_project_added() {
+        let dir = tmp();
+        write_legacy(dir.path(), "version: 1\nsatisfied: []\n");
+        std::fs::write(
+            dir.path().join(GITATTRIBUTES_FILENAME),
+            format!("*.bin binary\n{LEGACY_GITATTRIBUTES_BODY}"),
+        )
+        .unwrap();
+        migrate_legacy(dir.path(), &BTreeMap::new()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(GITATTRIBUTES_FILENAME)).unwrap(),
+            "*.bin binary\n"
         );
     }
 
     #[test]
-    fn malformed_yaml_surfaces_as_ledger_lock_error() {
+    fn recording_never_writes_a_merge_rule() {
         let dir = tmp();
-        std::fs::write(path(dir.path()), "::: not yaml").unwrap();
-        let err = load(dir.path()).unwrap_err();
-        assert!(matches!(err, Error::LedgerLock { .. }));
-    }
-
-    #[test]
-    fn saved_format_is_deterministic_and_sorted() {
-        let dir = tmp();
-        let mut lock = LedgerLock::default();
-        lock.record("z/check", "h");
-        lock.record("a/check", "h");
-        save(dir.path(), &lock).unwrap();
-        let body = std::fs::read_to_string(path(dir.path())).unwrap();
-        let a = body.find("a/check").unwrap();
-        let z = body.find("z/check").unwrap();
-        assert!(a < z, "satisfied entries should serialise sorted");
+        record(dir.path(), "root/fmt", "h").unwrap();
+        assert!(!dir.path().join(GITATTRIBUTES_FILENAME).exists());
     }
 }

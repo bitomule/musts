@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use musts_core::extension::{
@@ -17,24 +18,48 @@ use musts_protocol::{
 };
 use serial_test::serial;
 
-/// Locate the compiled stub binary. `cargo test` produces it under the
-/// workspace's `target/<profile>/` directory; we walk back from the test
-/// binary's path.
+/// Locate the compiled stub binary, building it on demand. The path comes
+/// from cargo's own build report: newer cargo layouts put test binaries
+/// under `target/<profile>/build/`, so a path derived from the running
+/// test executable no longer points at the profile directory.
 fn stub_binary() -> PathBuf {
-    // The test binary is `<workspace>/target/<profile>/deps/<name>-<hash>`.
-    let test_bin = std::env::current_exe().expect("test binary path");
-    // …/deps/<test>
-    let deps_dir = test_bin.parent().expect("deps dir");
-    let profile_dir = deps_dir.parent().expect("profile dir");
-    let candidate = profile_dir.join("stub-extension");
-    if !candidate.exists() {
-        panic!(
-            "stub-extension binary not found at {} — run `cargo build -p stub-extension` first \
-             (cargo test --workspace usually triggers this)",
-            candidate.display()
-        );
+    static STUB: OnceLock<PathBuf> = OnceLock::new();
+    STUB.get_or_init(build_stub).clone()
+}
+
+fn build_stub() -> PathBuf {
+    let mut cmd = std::process::Command::new(env!("CARGO"));
+    cmd.args([
+        "build",
+        "-p",
+        "stub-extension",
+        "--bin",
+        "stub-extension",
+        "--message-format=json-render-diagnostics",
+    ]);
+    let release = std::env::current_exe()
+        .expect("test binary path")
+        .components()
+        .any(|c| c.as_os_str() == "release");
+    if release {
+        cmd.arg("--release");
     }
-    candidate
+    let output = cmd
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .expect("could not invoke `cargo build`");
+    assert!(
+        output.status.success(),
+        "`cargo build -p stub-extension` failed"
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|msg| {
+            msg["reason"] == "compiler-artifact" && msg["target"]["name"] == "stub-extension"
+        })
+        .find_map(|msg| msg["executable"].as_str().map(PathBuf::from))
+        .expect("cargo did not report the stub-extension executable")
 }
 
 fn descriptor_for_stub(workspace_root: PathBuf) -> ExtensionDescriptor {

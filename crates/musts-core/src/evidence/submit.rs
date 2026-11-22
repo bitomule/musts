@@ -232,10 +232,8 @@ pub(crate) struct AcceptedEvidence<'a> {
 }
 
 /// Write the green ledger rows atomically, then append the newly-green
-/// `(check_id, scope_hash)` pairs to the portable ledger lock so a fresh
-/// clone inherits them. Reading and writing the full lock each time is
-/// self-healing: a missed write recovers on the next accepted submission
-/// of any check.
+/// `(check_id, scope_hash)` pairs to the portable ledger (one file per
+/// check) so a fresh clone inherits them.
 pub(crate) fn persist_accepted(
     session: &mut StateSession,
     evidence: &AcceptedEvidence<'_>,
@@ -258,15 +256,8 @@ pub(crate) fn persist_accepted(
         .collect();
     insert_atomic(&mut session.db, &rows)?;
 
-    let mut lock = crate::state::lock::load(&session.musts_dir)?;
-    let mut changed = false;
     for (cid, scope_hash) in evidence.checks {
-        if lock.record(cid, scope_hash) {
-            changed = true;
-        }
-    }
-    if changed {
-        crate::state::lock::save(&session.musts_dir, &lock)?;
+        crate::state::lock::record(&session.musts_dir, cid, scope_hash)?;
     }
     Ok(())
 }

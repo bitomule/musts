@@ -99,6 +99,16 @@ fn validate_and_record(dir: &Path, message: &str) {
     git(dir, &["commit", "-q", "-m", message]);
 }
 
+fn git_succeeds(repo: &Path, args: &[&str]) -> bool {
+    StdCommand::new("git")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+        .status
+        .success()
+}
+
 fn assert_clean(dir: &Path) {
     bin()
         .arg("--workspace")
@@ -147,14 +157,16 @@ fn squash_merge_of_an_up_to_date_branch_keeps_the_ledger_green() {
 }
 
 /// The real reproduction. `main` moved on while the branch was open, so
-/// the squashed tree carries *both* sets of edits — a combination that
-/// was never validated on either side. musts asks for the check again.
+/// the squashed tree would carry *both* sets of edits — a combination
+/// that was never validated on either side. Both sides revalidated the
+/// same check, so they edit the same ledger file and git reports the
+/// conflict instead of silently landing an unvalidated tree.
 ///
 /// That is the correct answer, not a ledger bug: two individually-green
 /// trees do not make their merge green.
 #[test]
 #[serial]
-fn squash_merge_of_a_stale_branch_legitimately_reopens_the_check() {
+fn squash_merge_of_a_stale_branch_conflicts_on_the_revalidated_check() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
     init_repo(dir);
@@ -174,22 +186,19 @@ fn squash_merge_of_a_stale_branch_legitimately_reopens_the_check() {
     validate_and_record(dir, "feature work");
 
     git(dir, &["checkout", "-q", "main"]);
-    git(dir, &["merge", "-q", "--squash", "feature"]);
-    git(dir, &["commit", "-q", "-m", "feat: squashed stale feature"]);
-
-    // Both a2 and b1 are present. Neither branch ever saw this tree.
-    assert_eq!(fs::read_to_string(dir.join("src/a.txt")).unwrap(), "a2\n");
-    assert_eq!(fs::read_to_string(dir.join("src/b.txt")).unwrap(), "b1\n");
-
-    wipe_local_state(dir);
-    bin()
-        .arg("--workspace")
-        .arg(dir)
-        .arg("validate")
-        .assert()
-        .failure()
-        .code(1)
-        .stdout(predicate::str::contains("agent-root"));
+    assert!(
+        !git_succeeds(dir, &["merge", "-q", "--squash", "feature"]),
+        "both sides revalidated the same check: the merge must conflict"
+    );
+    let unmerged = StdCommand::new("git")
+        .current_dir(dir)
+        .args(["diff", "--name-only", "--diff-filter=U"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&unmerged.stdout).trim(),
+        ".musts/ledger/root%2Fbuild"
+    );
 }
 
 /// Two branches record evidence for two *different* scopes and both get
@@ -308,8 +317,16 @@ fn updating_the_branch_before_merging_restores_ledger_carry_over() {
     fs::write(dir.join("src/a.txt"), "a2\n").unwrap();
     validate_and_record(dir, "feature work");
 
-    // Bring `main` in and re-close the loop on the integration tree.
-    git(dir, &["merge", "-q", "--no-edit", "main"]);
+    // Bring `main` in: the ledger entry conflicts because both sides
+    // revalidated the check. Take either side, then re-close the loop on
+    // the integration tree.
+    assert!(!git_succeeds(dir, &["merge", "-q", "--no-edit", "main"]));
+    git(
+        dir,
+        &["checkout", "--ours", "--", ".musts/ledger/root%2Fbuild"],
+    );
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "--no-edit"]);
     validate_and_record(dir, "revalidate after update");
 
     git(dir, &["checkout", "-q", "main"]);
@@ -321,4 +338,141 @@ fn updating_the_branch_before_merging_restores_ledger_carry_over() {
 
     wipe_local_state(dir);
     assert_clean(dir);
+}
+
+const SCOPES: usize = 16;
+
+fn scope(i: usize) -> String {
+    format!("s{i:02}")
+}
+
+fn record_evidence(dir: &Path, task: &str) {
+    bin()
+        .arg("--workspace")
+        .arg(dir)
+        .arg("validate")
+        .assert()
+        .failure()
+        .code(1);
+    bin()
+        .arg("--workspace")
+        .arg(dir)
+        .arg("evidence")
+        .arg(task)
+        .arg("--text")
+        .arg("Built it.")
+        .assert()
+        .success();
+}
+
+/// Seed commit with [`SCOPES`] independent scopes (same capability as the
+/// root check, so each is carved out of the others), all validated.
+///
+/// Sixteen, not two: with a single-file ledger two branches only collide
+/// when their new lines land next to each other in the sorted list, so a
+/// handful of checks can slip through by luck. With sixteen, interleaved
+/// edits collide almost surely, which keeps this suite honest against a
+/// shared-file format.
+fn init_scoped_repo(dir: &Path) {
+    init_repo(dir);
+    fs::write(dir.join("src/a.txt"), "a1\n").unwrap();
+    for i in 0..SCOPES {
+        let name = scope(i);
+        fs::create_dir_all(dir.join(&name)).unwrap();
+        fs::write(
+            dir.join(&name).join("MUSTS.yml"),
+            "version: 1\nchecks:\n  build:\n    uses: agent\n    with:\n      facts:\n        - \"The subproject builds.\"\n",
+        )
+        .unwrap();
+        fs::write(dir.join(&name).join("f.txt"), "v1\n").unwrap();
+    }
+    record_evidence(dir, "agent-root");
+    for i in 0..SCOPES {
+        record_evidence(dir, &format!("agent-{}", scope(i)));
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "seed"]);
+}
+
+fn revalidate_scope(dir: &Path, i: usize, content: &str) {
+    fs::write(dir.join(scope(i)).join("f.txt"), content).unwrap();
+    record_evidence(dir, &format!("agent-{}", scope(i)));
+}
+
+fn assert_no_merge_rule(dir: &Path) {
+    assert!(
+        !dir.join(".musts/.gitattributes").exists(),
+        "musts must not write a merge rule"
+    );
+    assert!(!dir.join(".gitattributes").exists());
+}
+
+/// What GitHub does: it ignores merge drivers, so only the content of
+/// the files decides. Two branches that validate *different* checks
+/// (interleaved, so a shared file would collide) touch different ledger
+/// files and merge without a conflict, with no merge rule in the repo.
+#[test]
+#[serial]
+fn branches_validating_different_checks_merge_without_a_rule_or_conflict() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    init_scoped_repo(dir);
+    assert_no_merge_rule(dir);
+
+    git(dir, &["checkout", "-q", "-b", "feature-a"]);
+    for i in (0..SCOPES).step_by(2) {
+        revalidate_scope(dir, i, "a-side\n");
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "even scopes"]);
+    git(dir, &["checkout", "-q", "main"]);
+    git(dir, &["checkout", "-q", "-b", "feature-b"]);
+    for i in (1..SCOPES).step_by(2) {
+        revalidate_scope(dir, i, "b-side\n");
+    }
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "odd scopes"]);
+
+    assert!(
+        git_succeeds(
+            dir,
+            &["merge-tree", "--write-tree", "feature-a", "feature-b"]
+        ),
+        "different checks must merge cleanly"
+    );
+
+    git(dir, &["checkout", "-q", "feature-a"]);
+    git(dir, &["merge", "-q", "--no-edit", "feature-b"]);
+    wipe_local_state(dir);
+    assert_clean(dir);
+}
+
+/// The other half of the contract: two branches that revalidate the
+/// *same* check edit the same file, and the conflict is kept — the merged
+/// tree was validated by neither.
+#[test]
+#[serial]
+fn branches_revalidating_the_same_check_conflict() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    init_scoped_repo(dir);
+    assert_no_merge_rule(dir);
+
+    git(dir, &["checkout", "-q", "-b", "feature-a"]);
+    revalidate_scope(dir, 0, "a-side\n");
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "first"]);
+    git(dir, &["checkout", "-q", "main"]);
+    git(dir, &["checkout", "-q", "-b", "feature-b"]);
+    revalidate_scope(dir, 0, "b-side\n");
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", "second"]);
+
+    assert!(
+        !git_succeeds(
+            dir,
+            &["merge-tree", "--write-tree", "feature-a", "feature-b"]
+        ),
+        "the same check revalidated on both sides must conflict"
+    );
 }

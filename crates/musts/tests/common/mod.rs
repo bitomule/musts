@@ -5,62 +5,64 @@
 //! without exercising the whole API.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::process::Stdio;
+use std::sync::{Mutex, OnceLock};
 
 /// Locate the on-disk path to a workspace binary, building it on
 /// demand. Required because `cargo test --workspace` does not
 /// guarantee that sibling-crate binaries are built before integration
 /// tests run.
+///
+/// The path comes from cargo's own build report rather than from where
+/// the test executable sits: newer cargo layouts put test binaries under
+/// `target/<profile>/build/`, so a path derived from the executable no
+/// longer points at the profile directory.
 pub fn workspace_binary(package: &str, bin_name: &str) -> PathBuf {
-    let path = profile_dir().join(bin_name);
-    ensure_built(package, bin_name);
-    if !path.is_file() {
-        panic!(
-            "expected `{bin_name}` at {} after `cargo build -p {package}`",
-            path.display()
-        );
+    static BUILT: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    let built = BUILT.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = format!("{package}/{bin_name}");
+    let mut guard = built.lock().unwrap();
+    if let Some(path) = guard.get(&key) {
+        return path.clone();
     }
+    let path = build(package, bin_name);
+    guard.insert(key, path.clone());
     path
 }
 
-fn profile_dir() -> PathBuf {
-    let test_bin = std::env::current_exe().unwrap();
-    test_bin
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .expect("test binary path")
+fn is_release_profile() -> bool {
+    std::env::current_exe()
+        .unwrap()
+        .components()
+        .any(|c| c.as_os_str() == "release")
 }
 
-fn ensure_built(package: &str, bin_name: &str) {
-    static SEEN: OnceLock<std::sync::Mutex<Vec<String>>> = OnceLock::new();
-    let seen = SEEN.get_or_init(|| std::sync::Mutex::new(Vec::new()));
-    let key = format!("{package}/{bin_name}");
-    {
-        let mut guard = seen.lock().unwrap();
-        if guard.contains(&key) {
-            return;
-        }
-        guard.push(key);
-    }
-    let path = profile_dir().join(bin_name);
-    if path.is_file() {
-        return;
-    }
+fn build(package: &str, bin_name: &str) -> PathBuf {
     let mut cmd = std::process::Command::new(env!("CARGO"));
-    cmd.args(["build", "-p", package, "--bin", bin_name]);
-    if profile_dir()
-        .file_name()
-        .map(|n| n == "release")
-        .unwrap_or(false)
-    {
+    cmd.args([
+        "build",
+        "-p",
+        package,
+        "--bin",
+        bin_name,
+        "--message-format=json-render-diagnostics",
+    ]);
+    if is_release_profile() {
         cmd.arg("--release");
     }
-    let status = cmd
-        .status()
+    let output = cmd
+        .stderr(Stdio::inherit())
+        .output()
         .unwrap_or_else(|e| panic!("could not invoke `cargo build`: {e}"));
-    if !status.success() {
+    if !output.status.success() {
         panic!("`cargo build -p {package} --bin {bin_name}` failed");
     }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|msg| msg["reason"] == "compiler-artifact" && msg["target"]["name"] == bin_name)
+        .find_map(|msg| msg["executable"].as_str().map(PathBuf::from))
+        .unwrap_or_else(|| panic!("cargo did not report an executable for `{bin_name}`"))
 }

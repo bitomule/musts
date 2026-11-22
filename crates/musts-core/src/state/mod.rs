@@ -13,4 +13,4 @@ pub mod lock;
 pub mod schema;
 
 pub use db::{open, Db};
-pub use lock::{LedgerLock, SatisfiedEntry};
+pub use lock::{Ledger, LedgerLock, SatisfiedEntry};

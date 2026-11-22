@@ -5,13 +5,13 @@
 //! fail. A check that reopens on every commit and has never once gone red
 //! is pure cost — an agent re-reasons and re-writes prose evidence for a
 //! fact that was never in question. Before this command the only way to
-//! see that was to grep `.musts/ledger.lock.yaml` by hand.
+//! see that was to inspect the ledger by hand.
 //!
 //! Two data sources, deliberately different in durability:
 //!
-//! - `.musts/ledger.lock.yaml` — committed, travels with the repo, and is
-//!   the authority for *how many distinct states a check has been proven
-//!   green for*. One entry per `(check_id, scope_hash)`, appended forever.
+//! - `.musts/ledger/` — committed, travels with the repo, and holds the
+//!   current state of each check: one hash. A repo not yet migrated from
+//!   `.musts/ledger.lock.yaml` still reports every state in that file.
 //! - `.musts/state.sqlite` — machine-local, wiped by a fresh clone. Adds
 //!   submission counts, rejections, and evidence length.
 //!
@@ -133,7 +133,8 @@ pub fn collect(
     let ledger = lock::load(musts_dir)?;
 
     let mut satisfied_per_check: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
-    for entry in &ledger.satisfied {
+    let entries = ledger.entries();
+    for entry in &entries {
         satisfied_per_check
             .entry(entry.check.clone())
             .or_default()
@@ -163,8 +164,11 @@ pub fn collect(
     let mut checks: Vec<CheckStats> = ids
         .into_iter()
         .map(|id| {
-            let satisfied_scopes = satisfied_per_check.get(id).map_or(0, BTreeSet::len);
             let history = local.get(id);
+            let satisfied_scopes = satisfied_per_check
+                .get(id)
+                .map_or(0, BTreeSet::len)
+                .max(history.map_or(0, |h| h.accepted_scopes.len()));
             CheckStats {
                 check_id: id.clone(),
                 satisfied_scopes,
@@ -187,7 +191,7 @@ pub fn collect(
     Ok(StatsReport {
         workspace_root: workspace_root.display().to_string(),
         checks,
-        total_satisfied_entries: ledger.satisfied.len(),
+        total_satisfied_entries: entries.len(),
         local_history_available,
     })
 }
@@ -202,6 +206,9 @@ struct LocalHistory {
     /// mean. A submission with no text would otherwise drag the average
     /// toward zero and make prose-heavy checks look cheap.
     evidence_text_count: usize,
+    /// Distinct scope hashes ever accepted on this machine: how often the
+    /// check reopened, now that the committed ledger keeps only one.
+    accepted_scopes: BTreeSet<String>,
 }
 
 impl LocalHistory {
@@ -213,21 +220,24 @@ impl LocalHistory {
 fn read_local_history(db: &Db) -> Result<BTreeMap<String, LocalHistory>> {
     let mut stmt = db
         .conn()
-        .prepare("SELECT check_id, accepted, submission_json FROM evidence_records")?;
+        .prepare("SELECT check_id, accepted, submission_json, scope_hash FROM evidence_records")?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, i64>(1)? != 0,
             r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
         ))
     })?;
 
     let mut out: BTreeMap<String, LocalHistory> = BTreeMap::new();
     for row in rows {
-        let (check_id, accepted, submission_json) = row?;
+        let (check_id, accepted, submission_json, scope_hash) = row?;
         let entry = out.entry(check_id).or_default();
         entry.submissions += 1;
-        if !accepted {
+        if accepted {
+            entry.accepted_scopes.insert(scope_hash);
+        } else {
             entry.red += 1;
         }
         if let Some(len) = evidence_text_len(&submission_json) {
@@ -364,11 +374,13 @@ mod tests {
     }
 
     fn write_ledger(musts_dir: &Path, entries: &[(&str, &str)]) {
-        let mut l = lock::LedgerLock::default();
+        let mut body = String::from("version: 1\nsatisfied:\n");
         for (check, hash) in entries {
-            l.record(*check, *hash);
+            body.push_str(&format!(
+                "- {{check: \"{check}\", scope_hash: \"{hash}\"}}\n"
+            ));
         }
-        lock::save(musts_dir, &l).unwrap();
+        std::fs::write(lock::path(musts_dir), body).unwrap();
     }
 
     fn fresh() -> (TempDir, std::path::PathBuf) {

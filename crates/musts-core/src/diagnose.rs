@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::report::ManifestIssue;
-use crate::state::LedgerLock;
+use crate::state::Ledger;
 
 /// Pseudo-path used as the `manifest` field for workspace-level findings,
 /// which belong to no single manifest.
@@ -32,22 +32,25 @@ const WORKSPACE: &str = ".musts";
 pub fn workspace_warnings(
     workspace_root: &Path,
     musts_dir: &Path,
-    ledger: &LedgerLock,
+    ledger: &Ledger,
     has_pending: bool,
 ) -> Vec<ManifestIssue> {
     let mut out = Vec::new();
-    let lock_path = crate::state::lock::path(musts_dir);
+    let legacy_path = crate::state::lock::path(musts_dir);
+    let ledger_dir = crate::state::lock::ledger_dir(musts_dir);
 
-    if is_gitignored(workspace_root, &lock_path) {
+    if is_gitignored(workspace_root, &legacy_path)
+        || is_gitignored(workspace_root, &ledger_dir.join("probe"))
+    {
         out.push(ManifestIssue {
             manifest: WORKSPACE.to_string(),
-            message: "ledger.lock.yaml is gitignored. Validation state will not be inherited \
+            message: "The ledger (.musts/ledger/, or the older ledger.lock.yaml) is gitignored. Validation state will not be inherited \
                       by worktrees, teammates, or CI, so every check is dirty in a fresh \
                       checkout even when main is green. Remove it from .gitignore and commit \
                       it — it is the record of what has been validated, not a build artefact."
                 .to_string(),
         });
-    } else if has_pending && ledger.satisfied.is_empty() {
+    } else if has_pending && ledger.is_empty() {
         // Distinguishing this from "the tree changed" is the whole point:
         // the fix is to obtain the ledger, not to re-run the suite.
         out.push(ManifestIssue {
@@ -57,9 +60,9 @@ pub fn workspace_warnings(
                  below are pending because nothing has been recorded here yet, not because \
                  the tree changed. If main is green, the ledger did not travel to this \
                  checkout.",
-                lock_path
+                ledger_dir
                     .strip_prefix(workspace_root)
-                    .unwrap_or(&lock_path)
+                    .unwrap_or(&ledger_dir)
                     .display()
             ),
         });
@@ -112,10 +115,10 @@ mod tests {
         dir
     }
 
-    fn ledger_with(entries: &[(&str, &str)]) -> LedgerLock {
-        let mut l = LedgerLock::default();
+    fn ledger_with(entries: &[(&str, &str)]) -> Ledger {
+        let mut l = Ledger::default();
         for (c, h) in entries {
-            l.record(*c, *h);
+            l.current.insert((*c).to_string(), (*h).to_string());
         }
         l
     }
@@ -170,7 +173,7 @@ mod tests {
         let w = workspace_warnings(
             dir.path(),
             &dir.path().join(".musts"),
-            &LedgerLock::default(),
+            &Ledger::default(),
             true,
         );
         assert_eq!(w.len(), 1);
@@ -190,7 +193,7 @@ mod tests {
         let w = workspace_warnings(
             dir.path(),
             &dir.path().join(".musts"),
-            &LedgerLock::default(),
+            &Ledger::default(),
             false,
         );
         assert!(w.is_empty(), "{w:?}");
@@ -204,7 +207,7 @@ mod tests {
         let w = workspace_warnings(
             dir.path(),
             &dir.path().join(".musts"),
-            &LedgerLock::default(),
+            &Ledger::default(),
             true,
         );
         assert_eq!(w.len(), 1);
