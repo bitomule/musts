@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.10.1] - 2026-11-22
+
+### Internal
+
+- Release the aarch64-apple-darwin binary from `macos-latest`: GitHub retired the `macos-14` runner, so the 0.10.0 release run never built it and 0.10.0 shipped without release binaries. 0.10.1 has no code change and replaces 0.10.0 for binary installs ([#124](https://github.com/bitomule/musts/pull/124))
+
 ## [0.10.0] - 2026-11-22
 
 ### Added
