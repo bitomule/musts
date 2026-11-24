@@ -21,7 +21,7 @@ The protocol crate is the only dependency boundary between core and external ext
 Implements `PLAN.md` §4.1.
 
 ```text
-workspace::resolve → bootstrap (lock + state.sqlite) →
+workspace::resolve → bootstrap (lock) →
 gc_orphan_submissions →
 discover manifests + parse + with_validation →
 discover extensions + ext_descriptor_hash →
@@ -54,7 +54,7 @@ insert atomic ledger rows (one per accepted-now check, keyed by declaring-manife
 exit 0.
 ```
 
-Atomic: every accept is one SQLite transaction. Evidence is **not** archived — assets are validated where they live and the committed `.musts/ledger/` (plus the per-machine `evidence_records` table) is the durable record. `musts run <task-id>` wraps this: it executes a deterministic built-in's command, captures the log outside the workspace, and drives the same pipeline from the real exit code.
+Evidence is **not** archived — assets are validated where they live and the committed `.musts/ledger/` is the durable record. Each submission, accepted or rejected, is also noted in `.musts/cache/history.jsonl`, which only `musts admin stats` reads. `musts run <task-id>` wraps this: it executes a deterministic built-in's command, captures the log outside the workspace, and drives the same pipeline from the real exit code.
 
 ## Snapshots
 
@@ -62,13 +62,13 @@ Atomic: every accept is one SQLite transaction. Evidence is **not** archived —
 
 - A check's effective scope is the files under its declaring manifest's folder **minus** files under any deeper manifest that declares a check of the **same capability**. The carve-out keeps a check stable when sibling capabilities churn.
 - Scope hash = `blake3(sorted_files ++ manifest_hash ++ ext_descriptor_hash ++ sorted_descendant_manifest_paths)`. Including descendant paths means adding or removing a child manifest invalidates the parent.
-- Paths are NFC-normalised before hashing; on case-insensitive filesystems we lowercase them too. The check's `state.sqlite` row is therefore stable across NFC ↔ NFD checkouts and case variations.
+- Paths are NFC-normalised before hashing; on case-insensitive filesystems we lowercase them too. The check's scope hash is therefore stable across NFC ↔ NFD checkouts and case variations.
 
 ## Portable validated state — `.musts/ledger/`
 
-`.musts/state.sqlite` is machine-local: a fresh `git clone` starts with no `evidence_records` rows, so without help every check would be re-emitted as dirty. `.musts/ledger/` is the portable companion: **one file per check**, named after the check id (`/` and any byte outside `[A-Za-z0-9._-]` percent-encoded, so `root/clippy` is `root%2Fclippy`), holding one line — the `scope_hash` the check was last accepted for. Only the current state is stored, never history. `validate`'s "is this green?" lookup combines the local SQLite query with the ledger's `contains` check; `evidence`'s accept path atomically replaces the check's file.
+`.musts/ledger/` is the only record of what is validated: **one file per check**, named after the check id (`/` and any byte outside `[A-Za-z0-9._-]` percent-encoded, so `root/clippy` is `root%2Fclippy`), holding one line — the `scope_hash` the check was last accepted for. Only the current state is stored, never history. `validate`'s "is this green?" lookup reads nothing else, so local `validate` and CI reach the same verdict for the same committed tree; `evidence`'s accept path atomically replaces the check's file. A ledger file written but not yet committed is green locally and pending in CI, so `validate` names it in a warning ("recorded locally, not committed") until it is committed.
 
-What this buys: the team commits the ledger alongside the manifests; a clone runs `musts validate` and only sees tasks for scopes its own changes have invalidated. `state.sqlite` and `evidence/` stay gitignored — they are a perf cache and an asset payload, not the source of truth.
+What this buys: the team commits the ledger alongside the manifests; a clone runs `musts validate` and only sees tasks for scopes its own changes have invalidated. `.musts/cache/` is machine-local and ignores itself (it carries its own `.gitignore`): file-hash fingerprints, the tasks the last `validate` emitted, and the submission history. Losing it costs a slower `validate` and an empty `admin stats` history, never a verdict. Releases before this one kept that state in `.musts/state.sqlite`; the first command that takes the workspace lock deletes it.
 
 ### Merging the ledger
 
@@ -87,7 +87,7 @@ Releases before 0.10.0 kept one `.musts/ledger.lock.yaml` with every `(check_id,
 
 ## Cross-process locking
 
-Every state-writing command acquires an advisory file lock on `.musts/.lock` (`fs2::FileExt::try_lock_exclusive`). The lock is held through the SQLite transaction that mutates `tasks` (validate) or `evidence_records` (evidence). Read-only paths (`--help`, `--version`, `lint`, `stats`) skip it entirely.
+Every state-writing command acquires an advisory file lock on `.musts/.lock` (`fs2::FileExt::try_lock_exclusive`). The lock is held while `validate` replaces `.musts/cache/tasks.json` and while `evidence` writes the ledger and the history. Read-only paths (`--help`, `--version`, `lint`, `stats`) skip it entirely.
 
 **Scope.** The lock is per workspace root, and a `git worktree` checkout is its own workspace root, so two worktrees of the same repository each have their own `.musts/.lock` and never contend. Contention is always another process in the *same* directory.
 

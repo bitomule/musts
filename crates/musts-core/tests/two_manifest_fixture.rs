@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use musts_core::manifest::{check_id, discover, parse, scope_path_for, ROOT_SCOPE};
 use musts_core::snapshot::{compute_scope_hash, hash_bytes, hash_file, ScopeInput};
-use musts_core::state::open;
 use tempfile::TempDir;
 
 fn write(path: &PathBuf, body: &str) {
@@ -115,31 +114,4 @@ fn discovers_parses_and_hashes_two_manifest_fixture() {
     assert_ne!(nested_hash, nested_hash_after);
     let root_hash_after = compute_scope_hash(&root_input_with_carveout);
     assert_eq!(root_hash_original, root_hash_after);
-}
-
-#[test]
-fn state_db_round_trips_with_two_manifest_inputs() {
-    let dir = TempDir::new().unwrap();
-    let db_path = dir.path().join("state.sqlite");
-    let mut db = open(&db_path).unwrap();
-
-    db.upsert_manifest_index("MUSTS.yml", "root", 100, 32, &"hash-root".into(), 1)
-        .unwrap();
-    db.upsert_manifest_index(
-        "App/Login/MUSTS.yml",
-        "App/Login",
-        200,
-        48,
-        &"hash-login".into(),
-        1,
-    )
-    .unwrap();
-
-    db.upsert_fingerprint("App/Login/LoginView.swift", 5, 21, &"file-hash".into(), 1)
-        .unwrap();
-    let found = db
-        .fingerprint_for("App/Login/LoginView.swift")
-        .unwrap()
-        .unwrap();
-    assert_eq!(found, (5, 21, "file-hash".into()));
 }

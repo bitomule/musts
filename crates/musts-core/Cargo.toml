@@ -15,7 +15,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 blake3 = { workspace = true }
-rusqlite = { workspace = true }
 ignore = { workspace = true }
 globset = { workspace = true }
 walkdir = { workspace = true }

@@ -5,7 +5,7 @@
 //! 2. Open-or-create `<workspace>/.musts/.lock` (never `create_new`).
 //! 3. `try_lock_exclusive` on the lock handle. On contention → exit 2,
 //!    naming the holder (see [`LockOwner`]).
-//! 4. Open `<workspace>/.musts/state.sqlite` and migrate.
+//! 4. Remove the SQLite database older releases kept there.
 //! 5. Do the work. Drop the handle on exit; the OS releases the lock.
 //!
 //! The lock is per workspace root, and a `git worktree` checkout is its
@@ -20,7 +20,6 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::state::{open as open_db, Db};
 
 /// Sidecar naming the process that currently holds the lock.
 const OWNER_FILENAME: &str = ".lock.owner";
@@ -156,12 +155,11 @@ impl Drop for WorkspaceLock {
     }
 }
 
-/// Live state-writing session: holds the lock and an open SQLite handle.
-/// Dropping releases the lock; SQLite WAL files persist as usual.
+/// Live state-writing session: holds the workspace lock. Dropping it
+/// releases the lock.
 pub struct StateSession {
     pub workspace_root: PathBuf,
     pub musts_dir: PathBuf,
-    pub db: Db,
     // Held for the life of the session — drops release the file lock.
     // `None` only for the duration of [`StateSession::unlocked`].
     lock: Option<WorkspaceLock>,
@@ -177,7 +175,7 @@ impl std::fmt::Debug for StateSession {
 }
 
 impl StateSession {
-    /// Acquire the lock and open the state DB. Returns
+    /// Acquire the lock. Returns
     /// [`Error::StateDirReadOnly`], [`Error::LockBusy`], or [`Error::Io`]
     /// as documented in PLAN.md §4.5.1.
     pub fn acquire(workspace_root: &Path) -> Result<Self> {
@@ -190,11 +188,10 @@ impl StateSession {
         let musts_dir = workspace_root.join(".musts");
         ensure_state_dir(&musts_dir)?;
         let lock = acquire_lock(&musts_dir, wait)?;
-        let db = open_db(&musts_dir.join("state.sqlite"))?;
+        crate::state::cache::remove_legacy_database(&musts_dir);
         Ok(Self {
             workspace_root: workspace_root.to_path_buf(),
             musts_dir,
-            db,
             lock: Some(lock),
         })
     }
@@ -202,7 +199,7 @@ impl StateSession {
     /// Run `f` with the workspace lock released, then take it back.
     ///
     /// For work that takes minutes and touches no state — the point of
-    /// the lock is to serialise writes to `state.sqlite` and
+    /// the lock is to serialise writes to `.musts/cache/` and
     /// `.musts/ledger/`, not to serialise the test suite whose result
     /// is about to be written. `musts run` held it for 60,23 s of a
     /// 60,28 s run before this existed, which made a check into a
@@ -372,11 +369,13 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn acquire_creates_musts_dir_and_opens_db() {
+    fn acquire_creates_musts_dir_and_removes_the_old_database() {
         let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".musts")).unwrap();
+        std::fs::write(dir.path().join(".musts/state.sqlite"), "old").unwrap();
         let session = StateSession::acquire(dir.path()).unwrap();
         assert!(dir.path().join(".musts").is_dir());
-        assert!(dir.path().join(".musts/state.sqlite").is_file());
+        assert!(!dir.path().join(".musts/state.sqlite").exists());
         assert!(dir.path().join(".musts/.lock").is_file());
         drop(session);
     }

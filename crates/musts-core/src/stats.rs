@@ -12,10 +12,10 @@
 //! - `.musts/ledger/` — committed, travels with the repo, and holds the
 //!   current state of each check: one hash. A repo not yet migrated from
 //!   `.musts/ledger.lock.yaml` still reports every state in that file.
-//! - `.musts/state.sqlite` — machine-local, wiped by a fresh clone. Adds
-//!   submission counts, rejections, and evidence length.
+//! - `.musts/cache/history.jsonl` — machine-local, absent on a fresh
+//!   clone. Adds submission counts, rejections, and evidence length.
 //!
-//! Anything sourced only from SQLite is reported as such, because a
+//! Anything sourced only from the local history is reported as such, because a
 //! colleague running this on a fresh clone will legitimately see zeros
 //! there while the ledger column is fully populated.
 
@@ -25,7 +25,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::error::Result;
-use crate::state::{lock, Db};
+use crate::state::{cache, lock};
 
 /// Map every check the current tree declares to its `uses:`. Parse
 /// failures are skipped rather than fatal: `stats` is a read-only
@@ -66,15 +66,15 @@ pub struct CheckStats {
     /// not a reopen. Ledger-sourced.
     pub reopened: usize,
     /// Evidence submissions recorded locally, accepted or not.
-    /// SQLite-sourced.
+    /// History-sourced.
     pub submissions: usize,
     /// Submissions the capability rejected — the check was red, or the
-    /// evidence did not prove it green. SQLite-sourced, and only counted
+    /// evidence did not prove it green. History-sourced, and only counted
     /// for submissions made by a musts new enough to persist rejections.
     pub red: usize,
     /// Mean characters of agent-written evidence text across recorded
     /// submissions. `None` when nothing was recorded locally.
-    /// SQLite-sourced.
+    /// History-sourced.
     pub mean_evidence_chars: Option<usize>,
     /// Whether a `MUSTS.yml` in the current tree still declares this
     /// check. A `false` here is ledger residue from a deleted check.
@@ -115,8 +115,8 @@ pub struct StatsReport {
     /// Total ledger entries, including any belonging to checks that no
     /// longer exist.
     pub total_satisfied_entries: usize,
-    /// False when `.musts/state.sqlite` was absent, which means every
-    /// SQLite-sourced column is a zero by default rather than by fact.
+    /// False when `.musts/cache/history.jsonl` was absent, which means every
+    /// history-sourced column is a zero by default rather than by fact.
     pub local_history_available: bool,
 }
 
@@ -141,16 +141,8 @@ pub fn collect(
             .insert(entry.scope_hash.as_str());
     }
 
-    let db_path = musts_dir.join("state.sqlite");
-    let local_history_available = db_path.is_file();
-    let local = if local_history_available {
-        // Opening runs migrations, which is a write. That is fine — the
-        // file already exists, and the alternative (a read-only handle
-        // that trips over an older schema) fails in a much worse way.
-        read_local_history(&crate::state::open(&db_path)?)?
-    } else {
-        BTreeMap::new()
-    };
+    let local_history_available = cache::history_exists(musts_dir);
+    let local = read_local_history(musts_dir);
 
     // Union of both sources plus the current tree: a check that is
     // declared but never validated should still appear, at zero, because
@@ -217,47 +209,22 @@ impl LocalHistory {
     }
 }
 
-fn read_local_history(db: &Db) -> Result<BTreeMap<String, LocalHistory>> {
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT check_id, accepted, submission_json, scope_hash FROM evidence_records")?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, i64>(1)? != 0,
-            r.get::<_, String>(2)?,
-            r.get::<_, String>(3)?,
-        ))
-    })?;
-
+fn read_local_history(musts_dir: &Path) -> BTreeMap<String, LocalHistory> {
     let mut out: BTreeMap<String, LocalHistory> = BTreeMap::new();
-    for row in rows {
-        let (check_id, accepted, submission_json, scope_hash) = row?;
-        let entry = out.entry(check_id).or_default();
+    for submission in cache::load_history(musts_dir) {
+        let entry = out.entry(submission.check_id).or_default();
         entry.submissions += 1;
-        if accepted {
-            entry.accepted_scopes.insert(scope_hash);
+        if submission.accepted {
+            entry.accepted_scopes.insert(submission.scope_hash);
         } else {
             entry.red += 1;
         }
-        if let Some(len) = evidence_text_len(&submission_json) {
+        if let Some(len) = submission.text_chars {
             entry.evidence_chars_total += len;
             entry.evidence_text_count += 1;
         }
     }
-    Ok(out)
-}
-
-/// Length of the agent-written `text` inside a persisted submission.
-/// Returns `None` for submissions with no text (or unparseable JSON —
-/// a stats command must never fail on a malformed historical row).
-fn evidence_text_len(submission_json: &str) -> Option<usize> {
-    serde_json::from_str::<serde_json::Value>(submission_json)
-        .ok()?
-        .get("text")?
-        .as_str()
-        .map(str::chars)
-        .map(Iterator::count)
+    out
 }
 
 /// Render the human-facing table.
@@ -332,7 +299,7 @@ pub fn render_text(report: &StatsReport) -> String {
 
     if !report.local_history_available {
         out.push_str(
-            "\nNo local `.musts/state.sqlite` — SUBMISSIONS, RED and EVIDENCE are \
+            "\nNo local `.musts/cache/history.jsonl` — SUBMISSIONS, RED and EVIDENCE are \
              machine-local\nand read as 0 on a fresh clone. SATISFIED and REOPENED \
              come from the committed ledger.\n",
         );
@@ -485,20 +452,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_local_db_is_reported_not_silently_zero() {
+    fn missing_local_history_is_reported_not_silently_zero() {
         let (dir, musts) = fresh();
         write_ledger(&musts, &[("a", "h1")]);
         let report = collect(dir.path(), &musts, &declared(&[])).unwrap();
         assert!(!report.local_history_available);
         assert!(render_text(&report).contains("machine-local"));
-    }
-
-    #[test]
-    fn evidence_text_len_counts_chars_not_bytes() {
-        assert_eq!(evidence_text_len(r#"{"text":"héllo"}"#), Some(5));
-        assert_eq!(evidence_text_len(r#"{"text":null}"#), None);
-        assert_eq!(evidence_text_len("{}"), None);
-        assert_eq!(evidence_text_len("not json"), None);
     }
 
     #[test]

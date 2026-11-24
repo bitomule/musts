@@ -25,9 +25,6 @@ Icon?
 # Musts runtime artifacts (anywhere a `.musts/` workspace lives —
 # the repo root, the fixture, future sub-workspaces).
 **/.musts/cache/
-**/.musts/state.sqlite
-**/.musts/state.sqlite-shm
-**/.musts/state.sqlite-wal
 **/.musts/evidence/
 **/.musts/bep.json
 **/.musts/.lock

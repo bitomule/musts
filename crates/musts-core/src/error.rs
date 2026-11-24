@@ -86,7 +86,7 @@ pub enum Error {
         available: String,
     },
 
-    #[error(".musts/ is not writable; musts needs to create state.sqlite")]
+    #[error(".musts/ is not writable; musts needs to write its state there")]
     StateDirReadOnly,
 
     // -----------------------------------------------------------------------
@@ -126,12 +126,6 @@ pub enum Error {
         path: PathBuf,
         #[source]
         source: std::io::Error,
-    },
-
-    #[error("database error: {source}")]
-    Db {
-        #[source]
-        source: rusqlite::Error,
     },
 
     /// Contention on `<workspace>/.musts/.lock`.
@@ -179,13 +173,7 @@ impl Error {
             | Error::LedgerLock { .. }
             | Error::CasePathCollision { .. } => 2,
             Error::EvidenceRejected { .. } => 1,
-            Error::Io { .. } | Error::Db { .. } => 70,
+            Error::Io { .. } => 70,
         }
-    }
-}
-
-impl From<rusqlite::Error> for Error {
-    fn from(source: rusqlite::Error) -> Self {
-        Error::Db { source }
     }
 }
