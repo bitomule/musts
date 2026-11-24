@@ -105,7 +105,7 @@ pub const SUSPECT_REOPEN_THRESHOLD: usize = 3;
 /// is a prompt to act, and a 15-line prompt is one nobody reads.
 const MAX_LISTED_SUSPECTS: usize = 5;
 
-/// Everything `musts stats` renders.
+/// Everything `musts admin stats` renders.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StatsReport {
     pub workspace_root: String,

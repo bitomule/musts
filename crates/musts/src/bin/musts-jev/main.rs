@@ -46,7 +46,7 @@ struct Args {
     root: String,
     /// The inline question object, verbatim from the manifest.
     inline: Option<String>,
-    /// Emit one JSON object instead of the human line. `musts calibrate`
+    /// Emit one JSON object instead of the human line. `musts admin calibrate`
     /// reads this: parsing `p=Some(0.99)` out of a Debug-formatted
     /// `Option` is the kind of coupling that breaks on a refactor nobody
     /// connects to the breakage.
@@ -55,7 +55,7 @@ struct Args {
     state: String,
     /// The revision `--state diff` diffs against.
     changed_since: Option<String>,
-    /// A ready-made diff to judge instead of computing one. `musts calibrate` uses it to hand
+    /// A ready-made diff to judge instead of computing one. `musts admin calibrate` uses it to hand
     /// over a control's diff, so a control is measured through the very same state shape
     /// production uses — a control judged as a whole file would hold for a mode nobody runs.
     diff_from: Option<String>,
@@ -513,7 +513,7 @@ fn file_diff(root: &str, file: &str, since: &str, context: usize) -> Result<Stri
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// One object per call, for `musts calibrate` and anything else that has to
+/// One object per call, for `musts admin calibrate` and anything else that has to
 /// read a verdict rather than show it.
 fn emit_json(file: &str, verdict: &str, p: Option<f64>, model: Option<&str>, note: Option<&str>) {
     println!(

@@ -38,7 +38,7 @@ pub fn schema() -> &'static Value {
                 "state": { "type": "string", "enum": ["file", "diff"] },
                 "changed_since": { "type": "string" },
                 "context_lines": { "type": "integer", "minimum": 0 },
-                // The two planted files `musts calibrate` judges the question
+                // The two planted files `musts admin calibrate` judges the question
                 // against: one that really breaks the rule, one near-miss that
                 // does not. They live in the manifest rather than in the
                 // question set so a reviewer sees what a check was calibrated

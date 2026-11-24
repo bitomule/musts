@@ -1,4 +1,4 @@
-//! End-to-end tests for `musts calibrate`.
+//! End-to-end tests for `musts admin calibrate`.
 //!
 //! What these cover is the half that does not need a model: the command
 //! surface, and the refusal to pretend. A real calibration needs jev and
@@ -29,6 +29,7 @@ fn a_workspace_with_no_judgment_checks_says_so_instead_of_reporting_nothing() {
     bin()
         .arg("--workspace")
         .arg(dir.path())
+        .arg("admin")
         .arg("calibrate")
         .assert()
         .success()
@@ -71,6 +72,7 @@ checks:
     bin()
         .arg("--workspace")
         .arg(dir.path())
+        .arg("admin")
         .arg("calibrate")
         .env("JEVI_DISABLE", "1")
         .assert()
@@ -90,6 +92,7 @@ fn no_record_writes_no_file() {
     bin()
         .arg("--workspace")
         .arg(dir.path())
+        .arg("admin")
         .arg("calibrate")
         .arg("--no-record")
         .assert()
