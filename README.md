@@ -279,27 +279,35 @@ sequence, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 musts validate                                 # report pending validation tasks
 musts validate --json                          # machine-readable report
 musts run <task-id>                            # execute a deterministic task and record it
-musts record <task-id>                         # record a bazel test you already ran (docs/record.md)
-musts stamp                                    # scope hashes for bazel's --workspace_status_command
 musts evidence <task-id> --text "..." \        # record evidence for a judgment task
     --asset path/to/log --asset path/to/screen.png
-musts lint                                     # authoring checks on every MUSTS.yml
-musts stats                                    # what each check has cost, and caught
-musts calibrate                                # does each `uses: jev` question decide anything?
-musts calibrate --no-record                    # same, without updating .musts/calibration.json
 ```
+
+Three commands are what an agent needs. Everything for people who write
+manifests or maintain the install lives under `musts admin`:
+
+```bash
+musts admin lint                               # authoring checks on every MUSTS.yml
+musts admin stats                              # what each check has cost, and caught
+musts admin calibrate                          # does each `uses: jev` question decide anything?
+musts admin calibrate --no-record              # same, without updating .musts/calibration.json
+musts admin skill install                      # install the agent skill globally
+```
+
+`musts run` on a `bazel/test` task just runs `bazel test`; Bazel serves the
+tests whose inputs did not change from its own test cache, and the evidence
+says how many (`12 tests passed, 10 from Bazel's test cache`). Nothing in
+`.bazelrc` is needed.
 
 Exit codes:
 
 - `validate`: 0 clean, 1 pending tasks, 2 configuration / stale / lock error, 70 internal error.
-- `record`: 0 every check recorded, 1 a check rejected (the reason is printed), 2 unknown / stale / non-`bazel/test` task.
-- `stamp`: always 0 — it must never fail a build.
 - `evidence`: 0 accepted, 1 rejected by extension, 2 unknown task / stale snapshot / over-claim, 70 internal error.
-- `lint`: 0 clean or advice only, 1 an error-level finding (the manifest does not do what it says).
-- `stats`: always 0 — it reports, it does not judge.
-- `calibrate`: 0 when it ran, 70 when it could not judge a control (it then writes nothing).
+- `admin lint`: 0 clean or advice only, 1 an error-level finding (the manifest does not do what it says).
+- `admin stats`: always 0 — it reports, it does not judge.
+- `admin calibrate`: 0 when it ran, 70 when it could not judge a control (it then writes nothing).
 
-`lint`, `stats` and `calibrate` are read-only with respect to validation
+`admin lint`, `admin stats` and `admin calibrate` are read-only with respect to validation
 state and take no workspace lock, so none of them blocks on (or blocks) a
 running `validate`.
 
@@ -309,7 +317,7 @@ A `uses: jev` question is prose, and prose can be wrong in a way nothing
 notices: a question that can never fire looks exactly like a question on
 a clean repo. Both answer "no" to everything.
 
-`musts calibrate` separates them. It runs each question against real file
+`musts admin calibrate` separates them. It runs each question against real file
 states from the repo's own history **and** against two files the check
 declares: one that really breaks the rule, and a near-miss that does not.
 
@@ -435,7 +443,6 @@ Start at [`docs/README.md`](docs/README.md) for the documentation index.
 
 - [`docs/claude-code-plugin.md`](docs/claude-code-plugin.md) - Claude Code plugin and pre-commit validation hook.
 - [`docs/skill.md`](docs/skill.md) - copyable agent instructions for the validation loop.
-- [`docs/record.md`](docs/record.md) - record a `bazel test` the agent already ran instead of running it again.
 - [`docs/extensions.md`](docs/extensions.md) - how to write a third-party extension.
 - [`docs/architecture.md`](docs/architecture.md) - bird's-eye view of the crates.
 - [`docs/musts-design.md`](docs/musts-design.md) - design spec and protocol decisions.

@@ -266,7 +266,7 @@ pub(crate) fn persist_accepted(
 ///
 /// Rejections used to be dropped on the floor, which made "has this check
 /// ever actually failed?" unanswerable — and that question is the whole
-/// point of `musts stats`. A check that reopens on every commit and has
+/// point of `musts admin stats`. A check that reopens on every commit and has
 /// never once rejected evidence is cost without safety value, and there
 /// was no record to prove it either way.
 ///

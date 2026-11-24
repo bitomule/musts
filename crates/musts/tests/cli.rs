@@ -110,3 +110,74 @@ fn broken_workspace_path_canonicalisation() {
             "could not canonicalise workspace path",
         ));
 }
+
+fn listed_commands(help: &str) -> Vec<String> {
+    help.lines()
+        .skip_while(|l| !l.starts_with("Commands:"))
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
+        .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+        .filter(|name| name != "help")
+        .collect()
+}
+
+fn help_of(args: &[&str]) -> String {
+    let out = bin().args(args).arg("--help").assert().success();
+    String::from_utf8(out.get_output().stdout.clone()).unwrap()
+}
+
+#[test]
+fn main_help_shows_only_validate_run_evidence_and_admin() {
+    assert_eq!(
+        listed_commands(&help_of(&[])),
+        ["validate", "run", "evidence", "admin"]
+    );
+}
+
+#[test]
+fn admin_help_lists_the_maintenance_commands() {
+    assert_eq!(
+        listed_commands(&help_of(&["admin"])),
+        ["lint", "stats", "calibrate", "skill"]
+    );
+}
+
+#[test]
+fn commands_moved_under_admin_are_gone_from_the_root() {
+    for old in ["record", "lint", "stats", "calibrate", "skill"] {
+        bin().arg(old).assert().failure().code(2);
+    }
+}
+
+#[test]
+fn hidden_stamp_keeps_old_bazelrc_files_building() {
+    bin()
+        .arg("stamp")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn admin_skill_install_delegates_to_npx() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let stub_dir = TempDir::new().unwrap();
+    let stub = stub_dir.path().join("npx");
+    std::fs::write(&stub, "#!/bin/sh\necho \"npx $@\"\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        stub_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    bin()
+        .env("PATH", path)
+        .args(["admin", "skill", "install", "--agent", "claude-code"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "npx --yes skills add bitomule/musts --skill musts --global --yes --agent claude-code",
+        ));
+}

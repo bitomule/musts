@@ -21,6 +21,7 @@ use std::process::Command;
 use musts_protocol::Task;
 
 use crate::bootstrap::StateSession;
+use crate::builtin::bazel_targets::{no_tests_is_vacuous, passed_tests, PassedTests};
 use crate::error::{Error, Result};
 use crate::evidence::ledger::fetch_task;
 use crate::evidence::submit::{submit, SubmissionInputs};
@@ -46,6 +47,9 @@ pub enum RunOutcome {
     Recorded {
         command: String,
         result: EvidenceSubmissionResult,
+        /// Set for `bazel/test`: how many tests passed and how many of
+        /// them Bazel served from its test cache.
+        tests: Option<PassedTests>,
     },
 }
 
@@ -153,8 +157,8 @@ pub fn execute(
         source,
     })?;
 
-    let vacuous = stored.capability == "bazel/test"
-        && crate::builtin::bazel_bep::no_tests_is_vacuous(&argv, code);
+    let is_bazel_test = stored.capability == "bazel/test";
+    let vacuous = is_bazel_test && no_tests_is_vacuous(&argv, code);
     let succeeded = spawn_error.is_none() && (code == Some(0) || vacuous);
     if !succeeded {
         return Ok(RunOutcome::Failed {
@@ -168,7 +172,14 @@ pub fn execute(
     // Success: record evidence through the normal pipeline. The capability
     // validator re-checks the log content, so a "green" exit with a log
     // that still records a failure is caught here too.
-    let auto_text = format!("`{command_display}` exited 0 (executed by `musts run`).");
+    let tests = is_bazel_test.then(|| passed_tests(&combined));
+    let auto_text = match &tests {
+        Some(tests) if tests.total > 0 => format!(
+            "`{command_display}` exited 0 (executed by `musts run`): {}.",
+            describe_tests(tests)
+        ),
+        _ => format!("`{command_display}` exited 0 (executed by `musts run`)."),
+    };
     let asset_paths: [&Path; 1] = [log_path.as_path()];
     let inputs = SubmissionInputs {
         task_id,
@@ -179,7 +190,18 @@ pub fn execute(
     Ok(RunOutcome::Recorded {
         command: command_display,
         result,
+        tests,
     })
+}
+
+/// `12 tests passed, 10 from Bazel's test cache`.
+pub fn describe_tests(tests: &PassedTests) -> String {
+    let plural = if tests.total == 1 { "" } else { "s" };
+    let mut text = format!("{} test{plural} passed", tests.total);
+    if tests.cached > 0 {
+        text.push_str(&format!(", {} from Bazel's test cache", tests.cached));
+    }
+    text
 }
 
 /// A per-run log path in the OS temp dir (outside the workspace, so

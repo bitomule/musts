@@ -78,7 +78,7 @@ Third-party (out-of-tree) extensions speak the JSON-over-stdio protocol document
 3. Implement the extension binary using [`musts-extension-util`](crates/musts-extension-util/) (4-line `main()`); ship it on `PATH` or via `.musts/extensions/<name>/extension.yml`.
 4. Add tests against the contract.
 
-If you're using Claude Code or a similar agent, install the bundled skill with `musts skill install` (source: [`skills/musts/SKILL.md`](skills/musts/SKILL.md)). It gives the agent the right mental model for the validation loop.
+If you're using Claude Code or a similar agent, install the bundled skill with `musts admin skill install` (source: [`skills/musts/SKILL.md`](skills/musts/SKILL.md)). It gives the agent the right mental model for the validation loop.
 
 ## Submitting a PR
 

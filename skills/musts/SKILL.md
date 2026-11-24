@@ -66,21 +66,11 @@ musts run cargo-test-root
 - Refuses judgment tasks (`agent`, `mav`) and any check provided by an
   installed extension — use `musts evidence` for those.
 
-## `musts record` — a `bazel test` you already ran
+## Bazel tests
 
-```bash
-musts record bazel-test-root
-```
-
-- If you just ran `bazel test` over every target of a `bazel/test` check and
-  have not edited since, record that run instead of `musts run`, which would
-  run the same tests again. Needs the repo's `.bazelrc` to write the stamped
-  build event file (`.musts/bep.json`); see `docs/record.md` in the musts repo.
-- Records the check only if every target passed (not flaky, not filtered)
-  and nothing in its scope changed since the run started.
-- "Not recorded" (exit 1) names the reason: test again on the final tree,
-  run the missing targets, or `musts run <task-id>`. Never pass
-  `--test_filter` or test tag/size filters to a run you mean to record.
+`musts run` on a `bazel/test` task runs `bazel test`. Bazel serves the tests
+whose inputs did not change from its own cache, so running it again after a
+passing run is cheap; the output says how many tests came from the cache.
 
 ## Dispatching to subagents
 
@@ -153,7 +143,7 @@ musts evidence <task-id> \
 
 ## Writing or editing a `MUSTS.yml`
 
-Run `musts lint` afterwards — it enforces everything below and reports each
+Run `musts admin lint` afterwards — it enforces everything below and reports each
 glob against the files actually in the tree.
 
 If a finding is deliberate, silence that one rule for the file with a
@@ -193,7 +183,7 @@ folder. Fine for a runnable capability; expensive under `uses: agent`.
   `UI/*View.swift` covers `UI/HomeView.swift` and not
   `UI/Deep/FooView.swift` — write `UI/**/*View.swift` for the subtree.
   Before 0.4 `*` crossed `/` too, so older patterns cover less than their
-  author meant; `musts lint` names every file they lost.
+  author meant; `musts admin lint` names every file they lost.
 - **Leading `!` is rejected** at parse time. Use `exclude_paths:`.
 
 If `paths:` match nothing, `validate` says so under **Ignored checks** —
@@ -202,7 +192,7 @@ manifest, not as "nothing to do".
 
 ### Auditing an existing manifest
 
-`musts stats` lists each check's reopens and how often it was ever red. A
+`musts admin stats` lists each check's reopens and how often it was ever red. A
 check with many reopens and zero reds costs validation work and has never
 objected to anything — rewrite it or delete it.
 
@@ -248,7 +238,7 @@ you cannot re-include children with `!fixtures/keep`. Use a file-pattern
 ## Installing the skill
 
 ```bash
-musts skill install
+musts admin skill install
 ```
 
 Installs this skill globally for every detected agent runner. Requires

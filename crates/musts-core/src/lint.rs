@@ -46,7 +46,7 @@ pub struct Finding {
     pub message: String,
 }
 
-/// Everything `musts lint` found.
+/// Everything `musts admin lint` found.
 #[derive(Debug, Clone, Serialize)]
 pub struct LintReport {
     pub findings: Vec<Finding>,

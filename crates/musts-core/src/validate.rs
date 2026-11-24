@@ -71,9 +71,7 @@ pub struct CurrentScope {
     pub files: Vec<ScopeFile>,
 }
 
-/// [`compute_current_scope_hashes`] plus each check's effective files, so
-/// `musts record` can tell whether any of them changed after a moment in
-/// time.
+/// [`compute_current_scope_hashes`] plus each check's effective files.
 pub fn compute_current_scopes(
     session: &mut StateSession,
     workspace_root: &Path,

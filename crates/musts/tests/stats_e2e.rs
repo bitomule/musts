@@ -1,4 +1,4 @@
-//! E2E for `musts stats`.
+//! E2E for `musts admin stats`.
 //!
 //! The command exists because a check that reopens forever and never goes
 //! red is the single most expensive thing a manifest can contain, and
@@ -23,6 +23,7 @@ fn write(path: &Path, body: &str) {
 
 fn stats(root: &Path, extra: &[&str]) -> (String, String, i32) {
     let out = Command::new(musts_bin())
+        .arg("admin")
         .arg("stats")
         .args(extra)
         .arg("--workspace")

@@ -252,3 +252,74 @@ fn run_still_fails_a_bazel_test_naming_a_label_that_holds_no_test() {
         .assert()
         .failure();
 }
+
+/// A stub `bazel` that behaves like Bazel's test cache: the first call
+/// runs the test, every later call reports the result as cached.
+#[cfg(unix)]
+fn caching_bazel_workspace() -> (TempDir, TempDir) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    write(
+        &dir.path().join("MUSTS.yml"),
+        "version: 1\nchecks:\n  unit:\n    uses: bazel/test\n    with:\n      targets: [\"//pkg:unit_test\"]\n",
+    );
+    write(&dir.path().join("pkg/lib.txt"), "one\n");
+    let stub_dir = TempDir::new().unwrap();
+    let stub = stub_dir.path().join("bazel");
+    let marker = stub_dir.path().join("ran-once");
+    write(
+        &stub,
+        &format!(
+            "#!/bin/sh\necho 'INFO: Build completed successfully, 2 total actions'\n\
+             if [ -e '{marker}' ]; then\n\
+             echo '//pkg:unit_test                                                  (cached) PASSED in 0.3s'\n\
+             else\n\
+             touch '{marker}'\n\
+             echo '//pkg:unit_test                                                           PASSED in 1.2s'\n\
+             fi\n\
+             echo 'Executed 0 out of 1 test: 1 test passes.'\n",
+            marker = marker.display()
+        ),
+    );
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, stub_dir)
+}
+
+#[test]
+#[serial]
+#[cfg(unix)]
+fn run_reports_the_bazel_tests_served_from_bazels_cache() {
+    let (dir, stub_dir) = caching_bazel_workspace();
+    let root = dir.path();
+    let validate = || {
+        bin()
+            .arg("--workspace")
+            .arg(root)
+            .arg("validate")
+            .assert()
+            .code(1);
+    };
+    let run = || {
+        bin()
+            .env("PATH", path_with(stub_dir.path()))
+            .arg("--workspace")
+            .arg(root)
+            .arg("run")
+            .arg("bazel-test-root")
+            .assert()
+            .success()
+    };
+
+    validate();
+    run().stdout(
+        predicate::str::contains("1 test passed")
+            .and(predicate::str::contains("Bazel's test cache").not()),
+    );
+
+    write(&root.join("pkg/lib.txt"), "two\n");
+    validate();
+    run().stdout(predicate::str::contains(
+        "1 test passed, 1 from Bazel's test cache",
+    ));
+}

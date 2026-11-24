@@ -18,7 +18,7 @@ The single hard rule of musts:
 2. Treat the returned task list as the validation todo list. `validate` emits **every** dirty task (no batching) and is idempotent — re-running it never invalidates the ids it just issued.
 3. Close each task by kind:
    - **Deterministic** (`do:` is a plain command — `cargo/*`, `bazel/{build,test}`): run `musts run <task-id>`. musts executes the command, checks the real exit code, and records evidence for you — no re-running to satisfy the loop. A non-zero exit prints the output and records nothing; fix and re-run.
-     If you already ran a `bazel/test` task's tests on the current tree and the repo writes the stamped build event file ([`record.md`](record.md)), record that run with `musts record <task-id>` instead of `musts run`; if it answers "Not recorded", the reason says what is missing.
+     For a `bazel/test` task, Bazel's own test cache means a second `musts run` after a passing run does not execute the tests again; the output says how many came from the cache.
    - **Judgment** (`agent`, `mav`): perform the validation yourself and record evidence (step 7).
 4. If multiple judgment tasks are independent, use subagents in parallel — but **not** when the underlying tool is single-resource (simulators, local servers, build locks, shared databases). When in doubt, run sequentially.
 5. If one task `satisfies` multiple checks, execute it **once**. Do not split.
@@ -58,7 +58,7 @@ What this means for your workflow:
 
 ## Authoring a `MUSTS.yml`
 
-Run `musts lint` after writing one. Everything below is a rule it enforces,
+Run `musts admin lint` after writing one. Everything below is a rule it enforces,
 and every rule exists because a real manifest got it wrong and quietly cost
 an agent's reasoning on every change for months.
 
@@ -106,7 +106,7 @@ judgment, or does it need a command run?** Only judgment belongs under
   correct, as two `paths:` lists that cannot both match than as one broad
   list with `exclude_paths:` carved out of it.
 
-Use `musts stats` on an existing repo to find the checks worth rewriting: a
+Use `musts admin stats` on an existing repo to find the checks worth rewriting: a
 check with many reopens and zero reds is paying for validation work that has
 never objected to anything.
 
@@ -130,7 +130,7 @@ A check whose `paths:` match nothing cannot fire, and `validate` lists it
 under **Ignored checks** with the reason. It is never dropped in silence —
 that is how one repo's check went 89 days without running once.
 
-`musts lint` reports each of these against the files actually in your tree,
+`musts admin lint` reports each of these against the files actually in your tree,
 naming the ones that match only because of the surprise — so you never have
 to reason about it from the pattern alone.
 

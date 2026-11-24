@@ -67,6 +67,13 @@ It tells the agent what must be done.
 
 The agent executes the tasks.
 
+The agent-facing surface is three commands: `musts validate`, `musts run`
+(executes a deterministic built-in check and records its evidence; for
+`bazel/test` it relies on Bazel's own test cache to avoid repeating passed
+tests) and `musts evidence`. Tools for manifest authors and the install
+(`lint`, `stats`, `calibrate`, `skill install`) live under `musts admin` and
+stay out of the main `--help`.
+
 ### 2.3 Evidence Command
 
 The agent records task results with:

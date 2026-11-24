@@ -1,4 +1,4 @@
-//! E2E for `musts lint`.
+//! E2E for `musts admin lint`.
 //!
 //! Fixtures are the real manifests the audit was drawn from, trimmed to
 //! the offending shape.
@@ -27,6 +27,7 @@ fn lint(root: &Path, extra: &[&str]) -> (String, i32) {
     let out = Command::new(musts_bin())
         .arg("--workspace")
         .arg(root)
+        .arg("admin")
         .arg("lint")
         .args(extra)
         .output()
