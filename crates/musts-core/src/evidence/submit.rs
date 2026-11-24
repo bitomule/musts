@@ -11,10 +11,10 @@ use musts_protocol::{
 
 use crate::bootstrap::StateSession;
 use crate::error::{Error, Result};
-use crate::evidence::ledger::{fetch_task, insert_atomic, EvidenceRow};
 use crate::evidence::store::{describe_asset, new_submission_id};
 use crate::extension::descriptor::{discover_descriptors, Capability, ExtensionDescriptor};
 use crate::extension::runtime::{ExtensionRunner, RuntimeOptions};
+use crate::state::cache;
 use crate::validate::compute_current_scope_hashes;
 
 /// Outcome of a successful evidence submission.
@@ -44,21 +44,14 @@ pub fn submit(
     inputs: &SubmissionInputs<'_>,
 ) -> Result<EvidenceSubmissionResult> {
     // 1. Look up the persisted task.
-    let stored = fetch_task(&session.db, inputs.task_id)?.ok_or_else(|| Error::TaskNotFound {
-        task_id: inputs.task_id.to_string(),
+    let stored = cache::fetch_task(&session.musts_dir, inputs.task_id).ok_or_else(|| {
+        Error::TaskNotFound {
+            task_id: inputs.task_id.to_string(),
+        }
     })?;
-    let stored_satisfies: Vec<String> =
-        serde_json::from_str(&stored.satisfies_json).unwrap_or_default();
-    let stored_scope_hashes: BTreeMap<String, String> =
-        serde_json::from_str(&stored.scope_hashes_json).unwrap_or_default();
-    let stored_task: Task =
-        serde_json::from_str(&stored.payload_json).map_err(|err| Error::Db {
-            source: rusqlite::Error::FromSqlConversionFailure(
-                stored.payload_json.len(),
-                rusqlite::types::Type::Text,
-                Box::new(err),
-            ),
-        })?;
+    let stored_satisfies = stored.satisfies;
+    let stored_scope_hashes = stored.scope_hashes;
+    let stored_task: Task = stored.task;
     let capability = stored.capability;
     let stored_task_snapshot_hash = stored.task_snapshot_hash;
 
@@ -75,8 +68,7 @@ pub fn submit(
     }
 
     // 3. Describe each asset in place — evidence is no longer archived into
-    //    `.musts/evidence/`; the ledger (`evidence_records` + the committed
-    //    lock) is the durable record, and the asset is validated where it
+    //    `.musts/evidence/`; the committed ledger is the durable record, and the asset is validated where it
     //    lives. `describe_asset` returns an absolute path so the capability
     //    validator resolves it via `workspace_root.join(path)`.
     let submission_id = new_submission_id();
@@ -157,11 +149,9 @@ pub fn submit(
         record_rejection(
             session,
             inputs.task_id,
-            &submission_id,
             &stored_satisfies,
             &stored_scope_hashes,
             &submission,
-            &response,
         );
         return Err(Error::EvidenceRejected {
             task_id: inputs.task_id.to_string(),
@@ -189,10 +179,8 @@ pub fn submit(
         });
     }
 
-    // 8. Persist ledger rows atomically: one per accepted-now check,
-    //    keyed by that check's declaring-manifest scope_hash.
-    let submission_json = serde_json::to_string(&submission).unwrap_or_else(|_| "{}".into());
-    let result_json = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
+    // 8. Record one ledger entry per accepted-now check, keyed by that
+    //    check's declaring-manifest scope_hash.
     let accepted: Vec<(String, String)> = accepted_now
         .iter()
         .map(|cid| {
@@ -204,11 +192,8 @@ pub fn submit(
         session,
         &AcceptedEvidence {
             task_id: inputs.task_id,
-            submission_id: &submission_id,
             checks: &accepted,
-            summary: response.summary.as_deref(),
-            submission_json: &submission_json,
-            result_json: &result_json,
+            text: submission.text.as_deref(),
         },
     )?;
 
@@ -223,91 +208,79 @@ pub fn submit(
 /// Accepted evidence for one or more checks of a task, ready to persist.
 pub(crate) struct AcceptedEvidence<'a> {
     pub task_id: &'a str,
-    pub submission_id: &'a str,
     /// `(check_id, scope_hash)` of every check the evidence proves.
     pub checks: &'a [(String, String)],
-    pub summary: Option<&'a str>,
-    pub submission_json: &'a str,
-    pub result_json: &'a str,
+    pub text: Option<&'a str>,
 }
 
-/// Write the green ledger rows atomically, then append the newly-green
-/// `(check_id, scope_hash)` pairs to the portable ledger (one file per
-/// check) so a fresh clone inherits them.
+/// Write each newly-green `(check_id, scope_hash)` pair to the committed
+/// ledger (one file per check), then note the submission in the local
+/// history `musts admin stats` reads.
 pub(crate) fn persist_accepted(
     session: &mut StateSession,
     evidence: &AcceptedEvidence<'_>,
 ) -> Result<()> {
-    let now_unix = unix_seconds_now();
-    let rows: Vec<EvidenceRow<'_>> = evidence
-        .checks
-        .iter()
-        .map(|(cid, scope_hash)| EvidenceRow {
-            task_id: evidence.task_id,
-            submission_id: evidence.submission_id,
-            check_id: cid,
-            scope_hash,
-            accepted: true,
-            summary: evidence.summary,
-            submission_json: evidence.submission_json,
-            result_json: evidence.result_json,
-            submitted_at_unix: now_unix,
-        })
-        .collect();
-    insert_atomic(&mut session.db, &rows)?;
-
     for (cid, scope_hash) in evidence.checks {
         crate::state::lock::record(&session.musts_dir, cid, scope_hash)?;
     }
+    record_history(
+        session,
+        evidence.task_id,
+        evidence
+            .checks
+            .iter()
+            .map(|(c, h)| (c.as_str(), h.as_str())),
+        true,
+        evidence.text,
+    );
     Ok(())
 }
 
-/// Persist a rejected submission as `accepted = 0`.
+/// Note a rejected submission in the local history.
 ///
 /// Rejections used to be dropped on the floor, which made "has this check
 /// ever actually failed?" unanswerable — and that question is the whole
 /// point of `musts admin stats`. A check that reopens on every commit and has
 /// never once rejected evidence is cost without safety value, and there
 /// was no record to prove it either way.
-///
-/// `is_green` filters on `accepted = 1`, so these rows can never make a
-/// check look satisfied. They are also strictly best-effort: failing to
-/// write history must never change the outcome the agent sees, which is
-/// already an error. Worst case a red goes uncounted.
-#[allow(clippy::too_many_arguments)]
 fn record_rejection(
     session: &mut StateSession,
     task_id: &str,
-    submission_id: &str,
     stored_satisfies: &[String],
     stored_scope_hashes: &BTreeMap<String, String>,
     submission: &EvidenceSubmission,
-    response: &musts_protocol::EvidenceValidationResponse,
 ) {
-    let now_unix = unix_seconds_now();
-    let submission_json = serde_json::to_string(submission).unwrap_or_else(|_| "{}".into());
-    let result_json = serde_json::to_string(response).unwrap_or_else(|_| "{}".into());
-    let hashes: Vec<String> = stored_satisfies
-        .iter()
-        .map(|cid| stored_scope_hashes.get(cid).cloned().unwrap_or_default())
-        .collect();
-    let rows: Vec<EvidenceRow<'_>> = stored_satisfies
-        .iter()
-        .zip(hashes.iter())
-        .map(|(cid, scope_hash)| EvidenceRow {
-            task_id,
-            submission_id,
-            check_id: cid,
-            scope_hash,
-            accepted: false,
-            summary: response.message.as_deref(),
-            submission_json: &submission_json,
-            result_json: &result_json,
-            submitted_at_unix: now_unix,
+    let checks = stored_satisfies.iter().map(|cid| {
+        (
+            cid.as_str(),
+            stored_scope_hashes.get(cid).map_or("", String::as_str),
+        )
+    });
+    record_history(session, task_id, checks, false, submission.text.as_deref());
+}
+
+/// History is strictly best-effort: failing to write it must never change
+/// the outcome the agent sees. Worst case a submission goes uncounted.
+fn record_history<'a>(
+    session: &StateSession,
+    task_id: &str,
+    checks: impl Iterator<Item = (&'a str, &'a str)>,
+    accepted: bool,
+    text: Option<&str>,
+) {
+    let submitted_at = unix_seconds_now();
+    let text_chars = text.map(|t| t.chars().count());
+    let rows: Vec<cache::Submission> = checks
+        .map(|(check_id, scope_hash)| cache::Submission {
+            check_id: check_id.to_string(),
+            scope_hash: scope_hash.to_string(),
+            accepted,
+            text_chars,
+            submitted_at,
         })
         .collect();
-    if let Err(err) = insert_atomic(&mut session.db, &rows) {
-        tracing::debug!(%task_id, %err, "could not persist rejected submission");
+    if let Err(err) = cache::append_history(&session.musts_dir, &rows) {
+        tracing::debug!(%task_id, %err, "could not record the submission in the local history");
     }
 }
 

@@ -65,5 +65,5 @@ The same flow is checked-in as `phase6_e2e::full_section_15_worked_example` and 
 ## Resetting between runs
 
 ```bash
-rm -rf .musts/state.sqlite* .musts/evidence .musts/.lock
+rm -rf .musts/cache .musts/evidence .musts/.lock
 ```

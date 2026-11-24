@@ -3,8 +3,8 @@
 //! `.musts/ledger.lock.yaml`.
 //!
 //! The lock file lets a clone inherit "already validated" state from
-//! the repo: their fresh workspace has no `state.sqlite`, but the
-//! committed lock answers the satisfaction question alongside it.
+//! the repo: their fresh workspace has no `.musts/cache/`, and the
+//! committed ledger alone answers the satisfaction question.
 
 use std::fs;
 use std::path::Path;
@@ -86,7 +86,7 @@ checks:
 #[serial]
 fn fresh_clone_inherits_validated_state_via_lock() {
     // First, build up a workspace and submit evidence so the lock is
-    // populated. Then simulate a "clone" by wiping `state.sqlite` and
+    // populated. Then simulate a "clone" by wiping `.musts/cache/` and
     // re-running validate: the lock alone must be enough to mark the
     // check as already satisfied.
     let dir = TempDir::new().unwrap();
@@ -119,17 +119,9 @@ checks:
         .assert()
         .success();
 
-    // The local SQLite ledger has the green row. Wipe it — this is what
-    // a fresh `git clone` looks like.
-    let state_db = dir.path().join(".musts/state.sqlite");
-    assert!(state_db.exists(), "state.sqlite must exist at this point");
-    fs::remove_file(&state_db).unwrap();
-    for ext in ["state.sqlite-shm", "state.sqlite-wal"] {
-        let p = dir.path().join(".musts").join(ext);
-        if p.exists() {
-            fs::remove_file(p).unwrap();
-        }
-    }
+    // Wipe the machine-local cache — this is what a fresh `git clone`
+    // looks like.
+    fs::remove_dir_all(dir.path().join(".musts/cache")).unwrap();
     // Evidence files would also be missing on a clone (.gitignore). But
     // they aren't consulted at validate time, only at submit time, so
     // their absence doesn't matter here.
@@ -206,8 +198,8 @@ checks:
         .assert()
         .success();
 
-    // Simulate clone (state.sqlite gone) and edit only sub/source.txt.
-    fs::remove_file(dir.path().join(".musts/state.sqlite")).unwrap();
+    // Simulate clone (cache gone) and edit only sub/source.txt.
+    fs::remove_dir_all(dir.path().join(".musts/cache")).unwrap();
     fs::write(dir.path().join("sub/source.txt"), "v2\n").unwrap();
 
     let output = bin()
@@ -301,9 +293,7 @@ checks:
 
     let musts = dir.path().join(".musts");
     fs::remove_dir_all(musts.join("ledger")).unwrap();
-    for name in ["state.sqlite", "state.sqlite-shm", "state.sqlite-wal"] {
-        let _ = fs::remove_file(musts.join(name));
-    }
+    let _ = fs::remove_dir_all(musts.join("cache"));
     fs::write(
         dir.path().join(LOCK_REL),
         format!(
@@ -340,4 +330,52 @@ checks:
     );
     let files: Vec<_> = fs::read_dir(musts.join("ledger")).unwrap().collect();
     assert_eq!(files.len(), 1, "history and undeclared checks are dropped");
+}
+
+/// A check is validated only by its committed ledger file. Measured on a
+/// real PR: the ledger lacked a new check's entry while the machine-local
+/// state still held the accepted submission, so `validate` said clean
+/// locally and CI, which reads only the ledger, failed on the same commit.
+#[test]
+#[serial]
+fn check_missing_from_ledger_is_pending_even_after_local_evidence() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        &dir.path().join("MUSTS.yml"),
+        r#"version: 1
+checks:
+  contract:
+    uses: agent
+    with:
+      facts:
+        - "Z holds."
+"#,
+    );
+    bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .code(1);
+    bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("evidence")
+        .arg("agent-root")
+        .arg("--text")
+        .arg("Verified Z.")
+        .assert()
+        .success();
+
+    fs::remove_file(dir.path().join(ENTRY_REL)).unwrap();
+
+    bin()
+        .arg("--workspace")
+        .arg(dir.path())
+        .arg("validate")
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("agent-root"));
 }

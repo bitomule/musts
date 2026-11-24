@@ -300,7 +300,7 @@ fn calibrate_command(
 
 /// Read-only, so it deliberately does **not** take the workspace lock: a
 /// long `validate` in another terminal should never stop you from reading
-/// the ledger. SQLite handles the concurrent reader.
+/// the ledger. Cache files are replaced by rename, so a reader never sees half of one.
 fn stats_command(
     explicit_workspace: Option<&std::path::Path>,
     json: bool,

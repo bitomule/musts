@@ -450,7 +450,7 @@ fn scenario_16_unicode_path_stability() {
     // Two side-by-side workspaces. One contains a file at `é/x.txt`
     // (NFC), the other at the same logical path written with U+0065 +
     // combining U+0301 (NFD). After a successful `validate`, the
-    // per-check scope_hash row in `state.sqlite` must be byte-equal
+    // per-check scope_hash must be byte-equal
     // across both — that is the load-bearing property of
     // `snapshot::paths::normalise_rel_path`.
     fn build(ws: &Path, name: &str) {
@@ -480,14 +480,11 @@ fn scenario_16_unicode_path_stability() {
     }
 
     fn read_scope_hash(workspace: &Path) -> String {
-        use rusqlite::Connection;
-        let conn = Connection::open(workspace.join(".musts/state.sqlite")).unwrap();
-        conn.query_row(
-            "SELECT scope_hash FROM scope_snapshots WHERE scope_path = ?1",
-            ["root/c"],
-            |r| r.get::<_, String>(0),
-        )
-        .unwrap()
+        let mut session = musts_core::bootstrap::StateSession::acquire(workspace).unwrap();
+        musts_core::validate::compute_current_scope_hashes(&mut session, workspace)
+            .unwrap()
+            .remove("root/c")
+            .unwrap()
     }
     assert_eq!(
         read_scope_hash(a.path()),

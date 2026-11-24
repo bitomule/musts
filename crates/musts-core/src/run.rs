@@ -23,11 +23,11 @@ use musts_protocol::Task;
 use crate::bootstrap::StateSession;
 use crate::builtin::bazel_targets::{no_tests_is_vacuous, passed_tests, PassedTests};
 use crate::error::{Error, Result};
-use crate::evidence::ledger::fetch_task;
 use crate::evidence::submit::{submit, SubmissionInputs};
 use crate::evidence::EvidenceSubmissionResult;
 use crate::extension::descriptor::discover_descriptors;
 use crate::extension::runtime::RuntimeOptions;
+use crate::state::cache;
 
 /// Result of a `musts run`.
 #[derive(Debug)]
@@ -61,16 +61,11 @@ pub fn execute(
     runtime_options: &RuntimeOptions,
     task_id: &str,
 ) -> Result<RunOutcome> {
-    let stored = fetch_task(&session.db, task_id)?.ok_or_else(|| Error::TaskNotFound {
-        task_id: task_id.to_string(),
-    })?;
-    let task: Task = serde_json::from_str(&stored.payload_json).map_err(|err| Error::Db {
-        source: rusqlite::Error::FromSqlConversionFailure(
-            stored.payload_json.len(),
-            rusqlite::types::Type::Text,
-            Box::new(err),
-        ),
-    })?;
+    let stored =
+        cache::fetch_task(&session.musts_dir, task_id).ok_or_else(|| Error::TaskNotFound {
+            task_id: task_id.to_string(),
+        })?;
+    let task: Task = stored.task;
 
     let Some(argv) = task.command.filter(|c| !c.is_empty()) else {
         return Ok(RunOutcome::NotRunnable {

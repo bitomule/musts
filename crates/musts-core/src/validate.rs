@@ -5,18 +5,17 @@
 //! extensions → schema-validate `with` payloads → compute per-check
 //! scope hashes (effective scope: files under the manifest folder minus
 //! files under any deeper same-capability manifest) → determine dirty
-//! checks → fan out to extensions → persist tasks + notes → build the
+//! checks → fan out to extensions → store tasks → build the
 //! [`ValidateReport`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use musts_protocol::{
     ResolveCheck, ResolveRequest, ResolveResponse, SnapshotHandle, PROTOCOL_VERSION,
 };
-use rusqlite::params;
 
 use crate::bootstrap::StateSession;
 use crate::builtin;
@@ -31,6 +30,7 @@ use crate::report::{CapabilityNote, ManifestIssue, ValidateReport};
 use crate::snapshot::{
     compute_scope_hash, hash_bytes, hash_file, normalise_rel_path, FileFingerprint, ScopeInput,
 };
+use crate::state::cache;
 
 /// Configuration for one validate run. Built by the CLI layer; tests
 /// pass an explicit value.
@@ -76,14 +76,11 @@ pub fn compute_current_scopes(
     session: &mut StateSession,
     workspace_root: &Path,
 ) -> Result<BTreeMap<String, CurrentScope>> {
-    let now_unix = unix_seconds_now();
-
     let manifest_entries = discover_manifests(workspace_root)?;
     let manifests = load_manifests(workspace_root, &manifest_entries)?;
     let descriptors = discover_descriptors(workspace_root)?;
     let cap_index = build_capability_index(&descriptors);
-    let (scope_files, file_meta) =
-        compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
+    let (scope_files, file_meta) = compute_scope_file_inputs(workspace_root, &manifests, session)?;
     let mut out = BTreeMap::new();
     for m in &manifests {
         let scope = scope_path_for(&m.entry.rel_path);
@@ -149,15 +146,13 @@ pub fn declared_checks(
     Ok(out)
 }
 
-/// Run the orchestrator and return the rendered report. Persists tasks
-/// + notes into the state DB held by `session`.
+/// Run the orchestrator and return the rendered report. Stores the
+/// emitted tasks in `.musts/cache/` for `run` and `evidence`.
 pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<ValidateReport> {
     let workspace_root = &opts.workspace_root;
-    let now_unix = unix_seconds_now();
 
-    // 0b. Load the portable, repo-committed ledger. Empty when nothing is
-    //    recorded yet (fresh workspace) — the local `evidence_records`
-    //    table still answers in that case.
+    // 0b. Load the committed ledger: the only thing that makes a check
+    //    validated, and exactly what CI reads.
     let mut ledger_lock = crate::state::lock::load(&session.musts_dir)?;
     let mut migration_candidates: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
@@ -200,8 +195,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     // 4. Compute the per-check effective scope and scope hash, plus the
     //    list of dirty checks (Phase 3: a check is dirty iff no green
     //    ledger row for the current scope_hash; Phase 4 adds the writes).
-    let (scope_files, _) =
-        compute_scope_file_inputs(workspace_root, &manifests, session, now_unix)?;
+    let (scope_files, _) = compute_scope_file_inputs(workspace_root, &manifests, session)?;
     let mut per_check = Vec::new();
     // Checks whose `paths:` currently match nothing. Reported, never
     // silently dropped — see the push site below.
@@ -249,7 +243,6 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
                 ext_descriptor_hash: capability_descriptor_hash(&check.uses, &cap_index),
                 descendant_manifest_paths: descendant_paths,
             });
-            persist_scope_snapshot(&mut session.db, &cid, &scope_hash, now_unix)?;
             // Narrowing the hash inputs changed every hash, so every
             // ledger entry written by an older musts would miss and every
             // check in every repo would reopen at once — the exact cost
@@ -257,8 +250,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
             // hash too, for one release. Nothing is recorded under it, so
             // a check stays legacy-green only until its tree changes, at
             // which point both hashes move and it reopens honestly.
-            let current_green = check_has_green_evidence(&session.db, &cid, &scope_hash)?
-                || ledger_lock.contains(&cid, &scope_hash);
+            let current_green = ledger_lock.contains(&cid, &scope_hash);
             let has_legacy_lock = !ledger_lock.legacy.satisfied.is_empty();
             let legacy_hash = if current_green && !has_legacy_lock {
                 None
@@ -272,10 +264,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
             };
             let already_green = current_green
                 || match &legacy_hash {
-                    Some(legacy) => {
-                        check_has_green_evidence(&session.db, &cid, legacy)?
-                            || ledger_lock.contains(&cid, legacy)
-                    }
+                    Some(legacy) => ledger_lock.contains(&cid, legacy),
                     None => false,
                 };
             if has_legacy_lock {
@@ -312,7 +301,7 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
     let mut tasks = Vec::new();
     let mut ignored_checks = Vec::new();
     let mut notes = Vec::new();
-    let mut tasks_to_persist = Vec::new();
+    let mut tasks_to_persist = cache::Tasks::new();
     // Per PLAN.md §7.3 scenario 9: a failing capability does not abort
     // the rest. We collect failures, surface the first one after every
     // capability has been attempted, and keep the partial report
@@ -368,16 +357,20 @@ pub fn run(session: &mut StateSession, opts: &ValidateOptions) -> Result<Validat
 
     // Which tasks are byte-identical requests to the previous validate run
     // (same id + same task_snapshot_hash)? Load the prior snapshot hashes
-    // BEFORE persist_tasks overwrites the table so the renderer can print
-    // unchanged tasks compactly instead of re-injecting the full body.
-    let prior = load_prior_task_snapshot_hashes(&session.db)?;
+    // BEFORE they are replaced so the renderer can print unchanged tasks
+    // compactly instead of re-injecting the full body.
+    let prior = cache::load_tasks(&session.musts_dir);
     let repeated_task_ids: Vec<String> = tasks_to_persist
         .iter()
-        .filter(|t| prior.get(&t.id).is_some_and(|h| h == &t.task_snapshot_hash))
-        .map(|t| t.id.clone())
+        .filter(|(id, t)| {
+            prior
+                .get(*id)
+                .is_some_and(|p| p.task_snapshot_hash == t.task_snapshot_hash)
+        })
+        .map(|(id, _)| id.clone())
         .collect();
 
-    persist_tasks(&mut session.db, &tasks_to_persist, &notes, now_unix)?;
+    cache::store_tasks(&session.musts_dir, &tasks_to_persist)?;
 
     if let Some(err) = first_error {
         return Err(err);
@@ -431,24 +424,6 @@ fn manifest_warnings(manifests: &[LoadedManifest]) -> Vec<ManifestIssue> {
             })
         })
         .collect()
-}
-
-/// Load `task_id → task_snapshot_hash` for the tasks persisted by the
-/// previous `musts validate`. Used to flag unchanged tasks for compact
-/// rendering. Returns an empty map on a fresh workspace.
-fn load_prior_task_snapshot_hashes(db: &crate::state::Db) -> Result<BTreeMap<String, String>> {
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT task_id, task_snapshot_hash FROM tasks")?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    let mut out = BTreeMap::new();
-    for r in rows {
-        let (id, hash) = r?;
-        out.insert(id, hash);
-    }
-    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -684,7 +659,7 @@ fn capability_schema<'a>(
 
 /// Map of `workspace-relative rel_path → content_hash` for every file in
 /// **any** manifest's scope. Phase 1's [`hash_file`] is used; results
-/// are cached in the `file_fingerprints` table.
+/// are cached in `.musts/cache/fingerprints.json`.
 /// Normalised rel-path → (rel-path with its real case, mtime in ns).
 type FileMeta = BTreeMap<String, (String, i128)>;
 
@@ -692,7 +667,6 @@ fn compute_scope_file_inputs(
     workspace_root: &Path,
     manifests: &[LoadedManifest],
     session: &mut StateSession,
-    now_unix: i64,
 ) -> Result<(BTreeMap<String, String>, FileMeta)> {
     // Walk every manifest's folder once, deduplicate by absolute path.
     let mut files: BTreeMap<PathBuf, ()> = BTreeMap::new();
@@ -748,6 +722,8 @@ fn compute_scope_file_inputs(
     // than silently fold them into a single hash key.
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     let mut meta = FileMeta::new();
+    let cached = cache::load_fingerprints(&session.musts_dir);
+    let mut fingerprints = cache::Fingerprints::new();
     let mut origin_of_normalised: BTreeMap<String, String> = BTreeMap::new();
     for abs_path in files.keys() {
         let rel = abs_path
@@ -776,12 +752,12 @@ fn compute_scope_file_inputs(
         })?;
         let size_bytes = metadata.len();
         let mtime_ns = mtime_nanos(&metadata);
-        let hash = match session.db.fingerprint_for(&raw_rel)? {
-            Some((cached_mtime, cached_size, cached_hash)) => {
+        let hash = match cached.get(&raw_rel) {
+            Some(prior) => {
                 let fp = FileFingerprint {
-                    size_bytes: cached_size,
-                    mtime_ns: cached_mtime,
-                    content_hash: cached_hash.clone(),
+                    size_bytes: prior.size_bytes,
+                    mtime_ns: prior.mtime_ns,
+                    content_hash: prior.content_hash.clone(),
                 };
                 FileFingerprint::cached_hash(&fp, size_bytes, mtime_ns).unwrap_or_else(|| {
                     // Refresh on miss.
@@ -792,11 +768,19 @@ fn compute_scope_file_inputs(
             }
             None => hash_file(abs_path)?.content_hash,
         };
-        session
-            .db
-            .upsert_fingerprint(&raw_rel, mtime_ns, size_bytes, &hash, now_unix)?;
+        fingerprints.insert(
+            raw_rel.clone(),
+            cache::Fingerprint {
+                mtime_ns,
+                size_bytes,
+                content_hash: hash.clone(),
+            },
+        );
         meta.insert(normalised.clone(), (raw_rel, mtime_ns));
         out.insert(normalised, hash);
+    }
+    if fingerprints != cached {
+        cache::store_fingerprints(&session.musts_dir, &fingerprints)?;
     }
     Ok((out, meta))
 }
@@ -1140,33 +1124,6 @@ fn rel_starts_with_dir(rel: &str, prefix: &str) -> bool {
     rel == prefix || rel.starts_with(&format!("{prefix}/"))
 }
 
-fn persist_scope_snapshot(
-    db: &mut crate::state::Db,
-    _check_id: &str,
-    scope_hash: &str,
-    now_unix: i64,
-) -> Result<()> {
-    db.conn().execute(
-        r#"
-        INSERT INTO scope_snapshots (scope_path, scope_hash, computed_at)
-        VALUES (?1, ?2, ?3)
-        ON CONFLICT(scope_path) DO UPDATE SET
-            scope_hash  = excluded.scope_hash,
-            computed_at = excluded.computed_at
-        "#,
-        params![_check_id, scope_hash, now_unix],
-    )?;
-    Ok(())
-}
-
-fn check_has_green_evidence(db: &crate::state::Db, cid: &str, scope_hash: &str) -> Result<bool> {
-    let mut stmt = db.conn().prepare(
-        "SELECT 1 FROM evidence_records WHERE check_id = ?1 AND scope_hash = ?2 AND accepted = 1 LIMIT 1",
-    )?;
-    let exists = stmt.exists(params![cid, scope_hash])?;
-    Ok(exists)
-}
-
 fn build_resolve_request(
     workspace_root: &Path,
     capability: &str,
@@ -1227,7 +1184,7 @@ fn ingest_resolve_response(
     tasks: &mut Vec<musts_protocol::Task>,
     ignored_checks: &mut Vec<musts_protocol::IgnoredCheck>,
     notes: &mut Vec<CapabilityNote>,
-    tasks_to_persist: &mut Vec<PersistedTask>,
+    tasks_to_persist: &mut cache::Tasks,
 ) {
     let by_id: BTreeMap<&str, &PreparedCheck> =
         dirty.iter().map(|c| (c.check_id.as_str(), *c)).collect();
@@ -1248,15 +1205,16 @@ fn ingest_resolve_response(
             }
         }
         let task_snapshot_hash = compute_task_snapshot_hash(&scope_hashes);
-        tasks_to_persist.push(PersistedTask {
-            id: task.id.clone(),
-            capability: capability.to_string(),
-            title: task.title.clone(),
-            satisfies_json: serde_json::to_string(&task.satisfies).unwrap_or_else(|_| "[]".into()),
-            scope_hashes_json: serde_json::to_string(&scope_hashes).unwrap_or_else(|_| "{}".into()),
-            task_snapshot_hash,
-            payload_json: serde_json::to_string(&task).unwrap_or_else(|_| "{}".into()),
-        });
+        tasks_to_persist.insert(
+            task.id.clone(),
+            cache::StoredTask {
+                capability: capability.to_string(),
+                satisfies: task.satisfies.clone(),
+                scope_hashes,
+                task_snapshot_hash,
+                task: task.clone(),
+            },
+        );
         tasks.push(task);
     }
     ignored_checks.extend(response.ignored_checks);
@@ -1277,62 +1235,6 @@ fn compute_task_snapshot_hash(scope_hashes: &BTreeMap<String, String>) -> String
         hasher.update(b"\0");
     }
     hasher.finalize().to_hex().to_string()
-}
-
-struct PersistedTask {
-    id: String,
-    capability: String,
-    title: String,
-    satisfies_json: String,
-    scope_hashes_json: String,
-    task_snapshot_hash: String,
-    payload_json: String,
-}
-
-fn persist_tasks(
-    db: &mut crate::state::Db,
-    tasks: &[PersistedTask],
-    notes: &[CapabilityNote],
-    now_unix: i64,
-) -> Result<()> {
-    let tx = db.conn_mut().transaction()?;
-    tx.execute("DELETE FROM tasks", [])?;
-    tx.execute("DELETE FROM resolve_notes", [])?;
-    for t in tasks {
-        tx.execute(
-            r#"
-            INSERT INTO tasks
-                (task_id, capability, title, satisfies_json, scope_hashes,
-                 task_snapshot_hash, payload_json, created_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            "#,
-            params![
-                t.id,
-                t.capability,
-                t.title,
-                t.satisfies_json,
-                t.scope_hashes_json,
-                t.task_snapshot_hash,
-                t.payload_json,
-                now_unix,
-            ],
-        )?;
-    }
-    for n in notes {
-        tx.execute(
-            "INSERT INTO resolve_notes (capability, note, created_at) VALUES (?1, ?2, ?3)",
-            params![n.capability, n.note, now_unix],
-        )?;
-    }
-    tx.commit()?;
-    Ok(())
-}
-
-fn unix_seconds_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1412,7 +1314,7 @@ mod tests {
         let mut tasks = Vec::new();
         let mut ignored = Vec::new();
         let mut notes = Vec::new();
-        let mut persist = Vec::new();
+        let mut persist = cache::Tasks::new();
         ingest_resolve_response(
             resp,
             "cargo/test",
@@ -1425,7 +1327,7 @@ mod tests {
         );
         assert_eq!(tasks[0].command, None, "untrusted command must be stripped");
         assert!(
-            !persist[0].payload_json.contains("command"),
+            persist["evil"].task.command.is_none(),
             "stripped command must not persist in the payload"
         );
     }
@@ -1443,7 +1345,7 @@ mod tests {
         let mut tasks = Vec::new();
         let mut ignored = Vec::new();
         let mut notes = Vec::new();
-        let mut persist = Vec::new();
+        let mut persist = cache::Tasks::new();
         ingest_resolve_response(
             resp,
             "cargo/test",

@@ -1,16 +1,9 @@
-//! Persistent state stored at `.musts/state.sqlite`.
+//! Workspace state under `.musts/`.
 //!
-//! Schema lives in `schema.rs` and matches `docs/PLAN.md` §4.7. Migrations
-//! are versioned and idempotent.
-//!
-//! Phase 1 ships the open-and-migrate primitive plus the `manifest_index`
-//! and `file_fingerprints` CRUD helpers. The remaining tables are created
-//! by the same migration up front so later phases can use them without a
-//! schema bump.
+//! [`lock`] is the committed ledger: the only record of what is
+//! validated. [`cache`] is machine-local scratch that never says so.
 
-pub mod db;
+pub mod cache;
 pub mod lock;
-pub mod schema;
 
-pub use db::{open, Db};
 pub use lock::{Ledger, LedgerLock, SatisfiedEntry};

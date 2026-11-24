@@ -11,9 +11,10 @@
 //! conflict — correctly, because the combined tree was validated by
 //! neither.
 //!
-//! Loaded once per `validate`/`evidence` and consulted alongside the
-//! local `evidence_records` table; a file is replaced after every
-//! accepted submission. `state.sqlite` and `evidence/` stay machine-local.
+//! The only record of what is validated: `validate` reads nothing else,
+//! so a check is green locally exactly when it is green in CI for the
+//! same committed tree. A file is replaced after every accepted
+//! submission.
 //!
 //! Releases before 0.10.0 kept one `.musts/ledger.lock.yaml` holding every
 //! `(check, scope_hash)` pair ever proven. It is still read, and
@@ -141,7 +142,7 @@ pub fn entry_file_name(check: &str) -> String {
     name
 }
 
-fn decode_file_name(name: &str) -> Option<String> {
+pub(crate) fn decode_file_name(name: &str) -> Option<String> {
     let bytes = name.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

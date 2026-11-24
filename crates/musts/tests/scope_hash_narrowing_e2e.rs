@@ -264,12 +264,11 @@ fn changing_the_extension_a_check_uses_still_reopens_it() {
     );
 }
 
-/// Read the persisted scope snapshots straight out of the state DB.
+/// Every check's current scope hash, as `validate` computes it.
 fn scope_hashes(root: &Path) -> Vec<String> {
-    let conn = rusqlite::Connection::open(root.join(".musts/state.sqlite")).unwrap();
-    let mut stmt = conn
-        .prepare("SELECT scope_hash FROM scope_snapshots ORDER BY scope_path")
-        .unwrap();
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
-    rows.map(Result::unwrap).collect()
+    let mut session = musts_core::bootstrap::StateSession::acquire(root).unwrap();
+    musts_core::validate::compute_current_scope_hashes(&mut session, root)
+        .unwrap()
+        .into_values()
+        .collect()
 }

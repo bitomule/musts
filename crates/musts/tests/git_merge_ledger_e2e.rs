@@ -39,7 +39,7 @@ fn git(repo: &Path, args: &[&str]) {
     );
 }
 
-/// A git repo whose root is a musts workspace. `state.sqlite` and the
+/// A git repo whose root is a musts workspace. `.musts/cache/` and the
 /// evidence dir are gitignored exactly like a real project, so only
 /// `ledger.lock.yaml` travels between branches.
 fn init_repo(dir: &Path) {
@@ -48,7 +48,7 @@ fn init_repo(dir: &Path) {
     git(dir, &["config", "user.name", "Test"]);
     fs::write(
         dir.join(".gitignore"),
-        ".musts/state.sqlite*\n.musts/evidence/\n.musts/.lock\n",
+        ".musts/cache/\n.musts/evidence/\n.musts/.lock\n",
     )
     .unwrap();
     fs::write(
@@ -123,11 +123,9 @@ fn assert_clean(dir: &Path) {
 /// the satisfaction question — the state a CI runner or a teammate's
 /// clone is in.
 fn wipe_local_state(dir: &Path) {
-    for name in ["state.sqlite", "state.sqlite-shm", "state.sqlite-wal"] {
-        let p = dir.join(".musts").join(name);
-        if p.exists() {
-            fs::remove_file(p).unwrap();
-        }
+    let cache = dir.join(".musts/cache");
+    if cache.exists() {
+        fs::remove_dir_all(cache).unwrap();
     }
 }
 

@@ -68,7 +68,69 @@ pub fn workspace_warnings(
         });
     }
 
+    let uncommitted = uncommitted_ledger_entries(workspace_root, &ledger_dir);
+    if !uncommitted.is_empty() {
+        out.push(ManifestIssue {
+            manifest: WORKSPACE.to_string(),
+            message: format!(
+                "recorded locally, not committed: {}. CI will not see these until the \
+                 files under {} are committed.",
+                name_some(&uncommitted),
+                ledger_dir
+                    .strip_prefix(workspace_root)
+                    .unwrap_or(&ledger_dir)
+                    .display()
+            ),
+        });
+    }
+
     out
+}
+
+/// How many uncommitted checks the warning names before summarising.
+const MAX_NAMED_UNCOMMITTED: usize = 5;
+
+fn name_some(checks: &[String]) -> String {
+    let named = checks[..checks.len().min(MAX_NAMED_UNCOMMITTED)].join(", ");
+    match checks.len().saturating_sub(MAX_NAMED_UNCOMMITTED) {
+        0 => named,
+        rest => format!("{named} and {rest} more"),
+    }
+}
+
+/// Check ids whose ledger file is new or changed and not yet committed.
+///
+/// The ledger is the record CI reads, so an entry that exists only in
+/// the working tree is green here and pending there. Deleted entries are
+/// left out: they already make the check pending here too. Any git
+/// failure reads as "nothing uncommitted", like [`is_gitignored`].
+fn uncommitted_ledger_entries(workspace_root: &Path, ledger_dir: &Path) -> Vec<String> {
+    let Ok(out) = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root)
+        .args(["status", "--porcelain", "-z", "--untracked-files=all", "--"])
+        .arg(ledger_dir)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let mut checks: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|entry| entry.len() > 3 && !entry[..2].contains('D'))
+        .filter_map(|entry| {
+            Path::new(&entry[3..])
+                .file_name()?
+                .to_str()
+                .map(str::to_owned)
+        })
+        .filter(|name| !name.starts_with('.'))
+        .filter_map(|name| crate::state::lock::decode_file_name(&name))
+        .collect();
+    checks.sort();
+    checks
 }
 
 /// Is `path` ignored by git?
@@ -138,7 +200,7 @@ mod tests {
     }
 
     /// The exact shape found in the wild: the repo carefully keeps
-    /// `.musts/extensions/` and ignores the sqlite cache, then ignores
+    /// `.musts/extensions/` and ignores the old sqlite cache, then ignores
     /// the ledger alongside them as if it were another cache.
     #[test]
     fn ledger_ignored_among_legitimate_musts_ignores_is_still_caught() {
@@ -222,5 +284,57 @@ mod tests {
             dir.path(),
             &dir.path().join(".musts/ledger.lock.yaml")
         ));
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    fn uncommitted_warning(dir: &Path) -> Option<String> {
+        workspace_warnings(dir, &dir.join(".musts"), &ledger_with(&[("a", "h")]), false)
+            .into_iter()
+            .map(|w| w.message)
+            .find(|m| m.contains("not committed"))
+    }
+
+    #[test]
+    fn uncommitted_ledger_entries_are_named_until_committed() {
+        let dir = repo_with_gitignore(None);
+        crate::state::lock::record(&dir.path().join(".musts"), "root/fmt", "h1").unwrap();
+        let warning = uncommitted_warning(dir.path()).expect("an untracked entry is reported");
+        assert!(warning.contains("root/fmt"), "{warning}");
+
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-qm", "ledger"]);
+        assert_eq!(uncommitted_warning(dir.path()), None);
+
+        crate::state::lock::record(&dir.path().join(".musts"), "root/fmt", "h2").unwrap();
+        let warning = uncommitted_warning(dir.path()).expect("a changed entry is reported");
+        assert!(warning.contains("root/fmt"), "{warning}");
+    }
+
+    #[test]
+    fn deleted_ledger_entries_are_not_reported_as_uncommitted() {
+        let dir = repo_with_gitignore(None);
+        crate::state::lock::record(&dir.path().join(".musts"), "root/fmt", "h1").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-qm", "ledger"]);
+        std::fs::remove_file(dir.path().join(".musts/ledger/root%2Ffmt")).unwrap();
+        assert_eq!(uncommitted_warning(dir.path()), None);
+    }
+
+    #[test]
+    fn a_long_uncommitted_list_names_a_few_and_counts_the_rest() {
+        let checks: Vec<String> = (0..8).map(|i| format!("c{i}")).collect();
+        assert_eq!(name_some(&checks), "c0, c1, c2, c3, c4 and 3 more");
+        assert_eq!(name_some(&checks[..2]), "c0, c1");
     }
 }
