@@ -25,6 +25,8 @@ Icon?
 # Musts runtime artifacts (anywhere a `.musts/` workspace lives —
 # the repo root, the fixture, future sub-workspaces).
 **/.musts/cache/
+# Written by musts releases before the ledger became the only record.
+**/.musts/state.sqlite*
 **/.musts/evidence/
 **/.musts/bep.json
 **/.musts/.lock
