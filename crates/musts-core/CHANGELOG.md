@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.11.0] - 2026-11-25
+
+### Added
+
+- Remember a failed musts run per file fingerprint and print only the last 6000 characters of a failure ([#131](https://github.com/bitomule/musts/pull/131))
+
 ## [0.10.1] - 2026-11-25
 
 ### Fixed
