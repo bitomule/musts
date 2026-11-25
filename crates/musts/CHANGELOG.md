@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Pre-1.0:** minor versions may include breaking changes. Patch versions are
 > bug-fix only.
 
+## [0.11.1] - 2026-11-25
+
+### Fixed
+
+- Decide validated state only from the committed ledger and drop .musts/state.sqlite ([#128](https://github.com/bitomule/musts/pull/128))
+
 ## [0.11.0] - 2026-11-24
 
 ### Added
