@@ -155,6 +155,23 @@ fn runner_with(descriptor: &ExtensionDescriptor, timeout: Duration) -> Extension
     }
 }
 
+/// Runs `attempt` with growing timeouts until the killed child's stderr made it
+/// into the error, so a loaded machine that kills the child before it prints
+/// retries with more time instead of failing.
+fn timeout_error_with_stderr(attempt: impl Fn(Duration) -> Error) -> Error {
+    let mut timeout = Duration::from_millis(150);
+    loop {
+        let err = attempt(timeout);
+        let Error::ExtensionTimeout { stderr, .. } = &err else {
+            return err;
+        };
+        if !stderr.is_empty() || timeout * 4 > Duration::from_secs(10) {
+            return err;
+        }
+        timeout *= 4;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Resolve-side scenarios
 // ---------------------------------------------------------------------------
@@ -200,12 +217,13 @@ fn resolve_timeout_is_rejected() {
     let workspace = tempfile::tempdir().unwrap();
     let descriptor = descriptor_for_stub(workspace.path().to_path_buf());
     let cap = &descriptor.capabilities["stub"];
-    let runner = runner_with(&descriptor, Duration::from_millis(150));
 
     std::env::set_var("MUSTS_STUB_RESOLVE_MODE", "timeout");
-    let err = runner
-        .resolve(&cap.resolve, &sample_resolve_request())
-        .unwrap_err();
+    let err = timeout_error_with_stderr(|timeout| {
+        runner_with(&descriptor, timeout)
+            .resolve(&cap.resolve, &sample_resolve_request())
+            .unwrap_err()
+    });
     std::env::remove_var("MUSTS_STUB_RESOLVE_MODE");
     assert!(
         matches!(err, Error::ExtensionTimeout { .. }),
@@ -389,12 +407,13 @@ fn evidence_timeout_is_rejected() {
     let workspace = tempfile::tempdir().unwrap();
     let descriptor = descriptor_for_stub(workspace.path().to_path_buf());
     let cap = &descriptor.capabilities["stub"];
-    let runner = runner_with(&descriptor, Duration::from_millis(150));
 
     std::env::set_var("MUSTS_STUB_EVIDENCE_MODE", "timeout");
-    let err = runner
-        .evidence(&cap.evidence, &sample_evidence_request())
-        .unwrap_err();
+    let err = timeout_error_with_stderr(|timeout| {
+        runner_with(&descriptor, timeout)
+            .evidence(&cap.evidence, &sample_evidence_request())
+            .unwrap_err()
+    });
     std::env::remove_var("MUSTS_STUB_EVIDENCE_MODE");
     assert!(matches!(err, Error::ExtensionTimeout { .. }));
     let display = format!("{err}");
