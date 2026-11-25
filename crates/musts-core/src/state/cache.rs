@@ -11,6 +11,9 @@
 //!   warm `validate` does not re-read every file.
 //! - `tasks.json` — the tasks the last `validate` emitted, for `run` and
 //!   `evidence` to look up and to reject evidence for a tree that moved.
+//! - `failures.json` — the last failed `musts run` of each task with the
+//!   fingerprint of the files it ran against, so an unchanged tree is not
+//!   run again.
 //! - `history.jsonl` — one line per evidence submission, accepted or
 //!   rejected, read only by `musts admin stats`.
 //!
@@ -29,6 +32,7 @@ pub const CACHE_DIRNAME: &str = "cache";
 const FINGERPRINTS_FILENAME: &str = "fingerprints.json";
 const TASKS_FILENAME: &str = "tasks.json";
 const HISTORY_FILENAME: &str = "history.jsonl";
+const FAILURES_FILENAME: &str = "failures.json";
 const LEGACY_DB_FILENAMES: [&str; 3] = ["state.sqlite", "state.sqlite-shm", "state.sqlite-wal"];
 
 pub fn dir(musts_dir: &Path) -> PathBuf {
@@ -116,6 +120,26 @@ pub fn store_tasks(musts_dir: &Path, tasks: &Tasks) -> Result<()> {
 /// it, or a later one emitted a different set.
 pub fn fetch_task(musts_dir: &Path, task_id: &str) -> Option<StoredTask> {
     load_tasks(musts_dir).remove(task_id)
+}
+
+/// A `musts run` that exited non-zero, and the files it ran against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedRun {
+    pub fingerprint: String,
+    pub command: String,
+    pub code: Option<i32>,
+    pub log_path: PathBuf,
+}
+
+/// Task id → its last failed run.
+pub type FailedRuns = BTreeMap<String, FailedRun>;
+
+pub fn load_failures(musts_dir: &Path) -> FailedRuns {
+    load(&dir(musts_dir).join(FAILURES_FILENAME))
+}
+
+pub fn store_failures(musts_dir: &Path, failures: &FailedRuns) -> Result<()> {
+    store(musts_dir, FAILURES_FILENAME, failures)
 }
 
 /// One evidence submission for one check.

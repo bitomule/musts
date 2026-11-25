@@ -278,7 +278,7 @@ sequence, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 ```bash
 musts validate                                 # report pending validation tasks
 musts validate --json                          # machine-readable report
-musts run <task-id>                            # execute a deterministic task and record it
+musts run <task-id> [--force]                  # execute a deterministic task and record it; a failure on unchanged files is replayed unless --force
 musts evidence <task-id> --text "..." \        # record evidence for a judgment task
     --asset path/to/log --asset path/to/screen.png
 ```

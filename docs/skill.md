@@ -17,7 +17,7 @@ The single hard rule of musts:
 1. **Run `musts validate`** at the start of every task that touches code and any time you are about to declare work complete.
 2. Treat the returned task list as the validation todo list. `validate` emits **every** dirty task (no batching) and is idempotent — re-running it never invalidates the ids it just issued.
 3. Close each task by kind:
-   - **Deterministic** (`do:` is a plain command — `cargo/*`, `bazel/{build,test}`): run `musts run <task-id>`. musts executes the command, checks the real exit code, and records evidence for you — no re-running to satisfy the loop. A non-zero exit prints the output and records nothing; fix and re-run.
+   - **Deterministic** (`do:` is a plain command — `cargo/*`, `bazel/{build,test}`): run `musts run <task-id>`. musts executes the command, checks the real exit code, and records evidence for you — no re-running to satisfy the loop. A non-zero exit prints the last 6000 characters of the output (with the path of the full log) and records nothing. Re-running on files that have not changed returns that failure without executing anything; `--force` executes anyway. Fix and re-run.
      For a `bazel/test` task, Bazel's own test cache means a second `musts run` after a passing run does not execute the tests again; the output says how many came from the cache.
    - **Judgment** (`agent`, `mav`): perform the validation yourself and record evidence (step 7).
 4. If multiple judgment tasks are independent, use subagents in parallel — but **not** when the underlying tool is single-resource (simulators, local servers, build locks, shared databases). When in doubt, run sequentially.

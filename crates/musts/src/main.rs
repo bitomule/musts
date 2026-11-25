@@ -54,6 +54,9 @@ enum Command {
     Run {
         /// Task id from the validate report.
         task_id: String,
+        /// Execute even if this task already failed on these exact files.
+        #[arg(long)]
+        force: bool,
     },
     /// Kept so `.bazelrc` files written for older musts keep building.
     #[command(hide = true)]
@@ -167,7 +170,7 @@ fn main() -> ExitCode {
 fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     match &cli.command {
         Command::Validate { json } => validate_command(cli.workspace.as_deref(), *json),
-        Command::Run { task_id } => run_command(cli.workspace.as_deref(), task_id),
+        Command::Run { task_id, force } => run_command(cli.workspace.as_deref(), task_id, *force),
         Command::Evidence {
             task_id,
             text,
@@ -360,6 +363,7 @@ fn evidence_command(
 fn run_command(
     explicit_workspace: Option<&std::path::Path>,
     task_id: &str,
+    force: bool,
 ) -> anyhow::Result<ExitCode> {
     let cwd = std::env::current_dir()?;
     let root = match workspace::resolve(explicit_workspace, &cwd) {
@@ -371,7 +375,7 @@ fn run_command(
         Err(err) => return Ok(report_error(err)),
     };
     let runtime_options = RuntimeOptions::from_env(root.clone());
-    match musts_core::run::execute(&mut session, &root, &runtime_options, task_id) {
+    match musts_core::run::execute(&mut session, &root, &runtime_options, task_id, force) {
         Ok(RunOutcome::NotRunnable { reason }) => {
             eprintln!("error: {reason}");
             Ok(ExitCode::from(2))
@@ -381,16 +385,29 @@ fn run_command(
             code,
             output,
             log_path,
+            remembered,
         }) => {
-            // Surface the failing command's output so the agent can act on
-            // it — this is exactly when the tokens are worth spending.
-            print!("{output}");
-            if !output.ends_with('\n') {
+            let (tail, cut) =
+                musts_core::run::tail_chars(&output, musts_core::run::FAILURE_OUTPUT_CHARS);
+            print!("{tail}");
+            if !tail.ends_with('\n') {
                 println!();
             }
             let code_str = code
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "signal".to_string());
+            if remembered {
+                eprintln!(
+                    "Not run: `{command}` already failed (exit {code_str}) on these exact files. \
+                     Change them, or pass `--force` to run it anyway."
+                );
+            }
+            if cut {
+                eprintln!(
+                    "Output cut to the last {} characters.",
+                    musts_core::run::FAILURE_OUTPUT_CHARS
+                );
+            }
             eprintln!(
                 "`{command}` failed (exit {code_str}). Full log: {}. Fix it and re-run `musts run {task_id}`.",
                 log_path.display()

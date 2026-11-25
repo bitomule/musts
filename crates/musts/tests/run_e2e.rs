@@ -323,3 +323,61 @@ fn run_reports_the_bazel_tests_served_from_bazels_cache() {
         "1 test passed, 1 from Bazel's test cache",
     ));
 }
+
+fn validate(root: &Path) {
+    bin()
+        .arg("--workspace")
+        .arg(root)
+        .arg("validate")
+        .assert()
+        .failure()
+        .code(1);
+}
+
+fn run_fmt(root: &Path, force: bool) -> assert_cmd::assert::Assert {
+    let mut cmd = bin();
+    cmd.arg("--workspace").arg(root).arg("run");
+    if force {
+        cmd.arg("--force");
+    }
+    cmd.arg("cargo-fmt-root").assert().failure().code(1)
+}
+
+#[test]
+#[serial]
+fn run_returns_a_remembered_failure_while_the_files_are_unchanged() {
+    let dir = cargo_fmt_workspace();
+    let root = dir.path();
+    write(&root.join("src/main.rs"), "fn main(){println!(\"hi\");}\n");
+    validate(root);
+
+    run_fmt(root, false).stderr(predicate::str::contains("Not run").not());
+    run_fmt(root, false).stderr(predicate::str::contains("Not run"));
+    run_fmt(root, true).stderr(predicate::str::contains("Not run").not());
+
+    write(&root.join("src/main.rs"), "fn main(){println!(\"bye\");}\n");
+    run_fmt(root, false).stderr(predicate::str::contains("Not run").not());
+}
+
+#[test]
+#[serial]
+fn run_prints_only_the_tail_of_a_long_failure() {
+    let dir = cargo_fmt_workspace();
+    let root = dir.path();
+    let body: String = (0..400)
+        .map(|n| format!("println!( \"line {n}\" ) ;\n"))
+        .collect();
+    write(
+        &root.join("src/main.rs"),
+        &format!("fn main(){{\n{body}}}\n"),
+    );
+    validate(root);
+
+    let assert = run_fmt(root, false)
+        .stderr(predicate::str::contains(
+            "Output cut to the last 6000 characters",
+        ))
+        .stderr(predicate::str::contains("Full log:"));
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(stdout.chars().count() <= 6001, "{}", stdout.chars().count());
+}

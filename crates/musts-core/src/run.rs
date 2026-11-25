@@ -27,7 +27,12 @@ use crate::evidence::submit::{submit, SubmissionInputs};
 use crate::evidence::EvidenceSubmissionResult;
 use crate::extension::descriptor::discover_descriptors;
 use crate::extension::runtime::RuntimeOptions;
+use crate::snapshot::hash_bytes;
 use crate::state::cache;
+use crate::validate::compute_current_scope_hashes;
+
+/// How much of a failing log reaches the agent's context.
+pub const FAILURE_OUTPUT_CHARS: usize = 6000;
 
 /// Result of a `musts run`.
 #[derive(Debug)]
@@ -42,6 +47,9 @@ pub enum RunOutcome {
         code: Option<i32>,
         output: String,
         log_path: PathBuf,
+        /// The files are unchanged since this exact failure, so nothing
+        /// was executed and the earlier result is returned.
+        remembered: bool,
     },
     /// The command exited 0 and evidence was accepted and recorded.
     Recorded {
@@ -60,6 +68,7 @@ pub fn execute(
     workspace_root: &Path,
     runtime_options: &RuntimeOptions,
     task_id: &str,
+    force: bool,
 ) -> Result<RunOutcome> {
     let stored =
         cache::fetch_task(&session.musts_dir, task_id).ok_or_else(|| Error::TaskNotFound {
@@ -103,6 +112,31 @@ pub fn execute(
         });
     }
 
+    let command_display = argv.join(" ");
+    let fingerprint = failure_fingerprint(
+        &command_display,
+        &stored.satisfies,
+        &compute_current_scope_hashes(session, workspace_root)?,
+    );
+    if !force {
+        if let Some(failed) = cache::load_failures(&session.musts_dir).remove(task_id) {
+            if failed.fingerprint == fingerprint && failed.log_path.is_file() {
+                let output =
+                    std::fs::read_to_string(&failed.log_path).map_err(|source| Error::Io {
+                        path: failed.log_path.clone(),
+                        source,
+                    })?;
+                return Ok(RunOutcome::Failed {
+                    command: failed.command,
+                    code: failed.code,
+                    output,
+                    log_path: failed.log_path,
+                    remembered: true,
+                });
+            }
+        }
+    }
+
     // Execute argv directly (no shell) from the workspace root.
     //
     // The workspace lock is released for the duration: the check's own
@@ -113,7 +147,6 @@ pub fn execute(
     // `another musts process is running` from its own first one. Writes
     // are still serialised: the evidence submission below happens with
     // the lock back in hand.
-    let command_display = argv.join(" ");
     let log_path = temp_log_path(task_id);
     let (combined, code, spawn_error) = session.unlocked(|| {
         match Command::new(&argv[0])
@@ -155,13 +188,28 @@ pub fn execute(
     let is_bazel_test = stored.capability == "bazel/test";
     let vacuous = is_bazel_test && no_tests_is_vacuous(&argv, code);
     let succeeded = spawn_error.is_none() && (code == Some(0) || vacuous);
+    let mut failures = cache::load_failures(&session.musts_dir);
     if !succeeded {
+        failures.insert(
+            task_id.to_string(),
+            cache::FailedRun {
+                fingerprint,
+                command: command_display.clone(),
+                code,
+                log_path: log_path.clone(),
+            },
+        );
+        cache::store_failures(&session.musts_dir, &failures)?;
         return Ok(RunOutcome::Failed {
             command: command_display,
             code,
             output: log_body,
             log_path,
+            remembered: false,
         });
+    }
+    if failures.remove(task_id).is_some() {
+        cache::store_failures(&session.musts_dir, &failures)?;
     }
 
     // Success: record evidence through the normal pipeline. The capability
@@ -189,6 +237,39 @@ pub fn execute(
     })
 }
 
+/// What a run is a failure *of*: the command and the scope of every check
+/// the task covers. The same fingerprint means the same command over the
+/// same files.
+fn failure_fingerprint(
+    command: &str,
+    satisfies: &[String],
+    current_hashes: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let mut material = format!("{command}\n");
+    let mut checks: Vec<&String> = satisfies.iter().collect();
+    checks.sort();
+    for check in checks {
+        let hash = current_hashes.get(check).map_or("", String::as_str);
+        material.push_str(&format!("{check}={hash}\n"));
+    }
+    hash_bytes(material.as_bytes())
+}
+
+/// The last `max_chars` characters of `output`, and whether anything was
+/// cut. Cuts on a character boundary, at the start of a line when one is
+/// near.
+pub fn tail_chars(output: &str, max_chars: usize) -> (&str, bool) {
+    let total = output.chars().count();
+    if total <= max_chars {
+        return (output, false);
+    }
+    let start = output
+        .char_indices()
+        .nth(total - max_chars)
+        .map_or(0, |(i, _)| i);
+    (&output[start..], true)
+}
+
 /// `12 tests passed, 10 from Bazel's test cache`.
 pub fn describe_tests(tests: &PassedTests) -> String {
     let plural = if tests.total == 1 { "" } else { "s" };
@@ -213,6 +294,26 @@ fn temp_log_path(task_id: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tail_keeps_the_end_and_flags_the_cut() {
+        assert_eq!(tail_chars("abc", 5), ("abc", false));
+        assert_eq!(tail_chars("abcdef", 3), ("def", true));
+        assert_eq!(tail_chars("ñandú", 3), ("ndú", true));
+    }
+
+    #[test]
+    fn fingerprint_changes_with_the_files_or_the_command() {
+        let satisfies = vec!["fmt".to_string()];
+        let at = |hash: &str| [("fmt".to_string(), hash.to_string())].into();
+        let base = failure_fingerprint("cargo fmt", &satisfies, &at("a"));
+        assert_eq!(base, failure_fingerprint("cargo fmt", &satisfies, &at("a")));
+        assert_ne!(base, failure_fingerprint("cargo fmt", &satisfies, &at("b")));
+        assert_ne!(
+            base,
+            failure_fingerprint("cargo test", &satisfies, &at("a"))
+        );
+    }
 
     #[test]
     fn temp_log_path_is_outside_cwd_and_sanitised() {
